@@ -4,6 +4,7 @@
 """
 
 import datetime
+import sqlite3
 from fasthtml.common import *
 from loguru import logger
 
@@ -153,29 +154,32 @@ def _snapshot_positions(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> None:
     today = datetime.date.today()
     if rows is None:
         return
-    db.conn.execute(
-        "delete from positions where portfolio_id = ? and dt = ?",
-        (portfolio_id, today),
-    )
-    for row in rows:
-        symbol = str(_get_value(row, "symbol", "")).strip()
-        if not symbol:
-            continue
-        shares = _as_float(_get_value(row, "shares", 0))
-        if shares <= 0:
-            continue
-        price = _as_float(_get_value(row, "cost", _get_value(row, "price", 0)))
-        position = Position(
-            portfolio_id=portfolio_id,
-            dt=today,
-            asset=symbol,
-            shares=shares,
-            avail=_as_float(_get_value(row, "avail", 0)),
-            price=price,
-            profit=_as_float(_get_value(row, "profit", 0)),
-            mv=_as_float(_get_value(row, "market_value", 0)),
+    try:
+        db.conn.execute(
+            "delete from positions where portfolio_id = ? and dt = ?",
+            (portfolio_id, today),
         )
-        db["positions"].upsert(position.to_dict(), pk=Position.__pk__)
+        for row in rows:
+            symbol = str(_get_value(row, "symbol", "")).strip()
+            if not symbol:
+                continue
+            shares = _as_float(_get_value(row, "shares", 0))
+            if shares <= 0:
+                continue
+            price = _as_float(_get_value(row, "cost", _get_value(row, "price", 0)))
+            position = Position(
+                portfolio_id=portfolio_id,
+                dt=today,
+                asset=symbol,
+                shares=shares,
+                avail=_as_float(_get_value(row, "avail", 0)),
+                price=price,
+                profit=_as_float(_get_value(row, "profit", 0)),
+                mv=_as_float(_get_value(row, "market_value", 0)),
+            )
+            db["positions"].upsert(position.to_dict(), pk=Position.__pk__)
+    except sqlite3.OperationalError as exc:
+        logger.warning(f"持仓快照写入失败，回退到已有缓存数据: {exc}")
 
 
 def get_latest_asset_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
@@ -392,6 +396,8 @@ def register_routes(app):
         trades = trade_service.get_trades()
         return [
             {
+                "tid": _get_value(t, "tid", ""),
+                "qtoid": _get_value(t, "qtoid", ""),
                 "time": _get_value(t, "time", ""),
                 "symbol": _get_value(t, "symbol", ""),
                 "name": _get_value(t, "name", ""),
@@ -404,24 +410,24 @@ def register_routes(app):
         ]
 
     @app.post("/api/trade/buy")
-    def buy_stock(request, symbol: str, price: float, shares: int):
+    def buy_stock(request, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = ""):
         """买入股票"""
         login_required(request)
-        result = trade_service.buy(symbol, price, shares)
+        result = trade_service.buy(symbol, price, shares, qtoid=qtoid, strategy_id=strategy_id)
         return result
 
     @app.post("/api/trade/sell")
-    def sell_stock(request, symbol: str, price: float, shares: int):
+    def sell_stock(request, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = ""):
         """卖出股票"""
         login_required(request)
-        result = trade_service.sell(symbol, price, shares)
+        result = trade_service.sell(symbol, price, shares, qtoid=qtoid, strategy_id=strategy_id)
         return result
 
     @app.post("/api/trade/cancel")
-    def cancel_order(request, order_id: str, view: str = "json"):
+    def cancel_order(request, qtoid: str = "", order_id: str = "", view: str = "json"):
         """撤单"""
         login_required(request)
-        result = trade_service.cancel_order(order_id)
+        result = trade_service.cancel_order(qtoid or order_id)
         if view == "table":
             from qmt_gateway.web.pages.trading import OrdersTable
             return OrdersTable(get_latest_orders_data())

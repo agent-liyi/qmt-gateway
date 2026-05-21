@@ -9,11 +9,32 @@ from monsterui.all import *
 from qmt_gateway.web.theme import AppTheme, PRIMARY_COLOR
 
 
-def Header(user: dict | None = None):
+def _nav_link(label: str, href: str, is_active: bool = False):
+    """渲染顶部导航链接。"""
+    base_cls = (
+        "rounded-lg px-3 py-2 text-sm font-medium transition-colors "
+        "hover:bg-gray-100"
+    )
+    if is_active:
+        return A(
+            label,
+            href=href,
+            cls=f"{base_cls} bg-blue-50 text-blue-600",
+        )
+
+    return A(
+        label,
+        href=href,
+        cls=f"{base_cls} text-gray-600 hover:text-gray-900",
+    )
+
+
+def Header(user: dict | None = None, active_menu: str = ""):
     """顶部导航栏（无 alarm，符合文档要求）
 
     Args:
         user: 当前用户信息
+        active_menu: 当前激活的导航项
     """
     user_menu = Div(
         Div(
@@ -41,8 +62,9 @@ def Header(user: dict | None = None):
                     Span("Gateway", cls="text-xl font-light text-gray-600 ml-1"),
                     cls="flex items-center",
                 ),
-                # 右侧：仅 User（无 alarm）
                 Div(
+                    _nav_link("交易", "/", is_active=active_menu == "trading"),
+                    _nav_link("日志", "/logs", is_active=active_menu == "logs"),
                     user_menu,
                     cls="flex items-center gap-2",
                 ),
@@ -196,10 +218,12 @@ class MainLayout:
         *content,
         page_title: str = "QMT Gateway",
         user: dict | None = None,
+        active_menu: str = "",
     ):
         self.content = content
         self.page_title = page_title
         self.user = user
+        self.active_menu = active_menu
 
     def __ft__(self):
         return Html(
@@ -209,7 +233,7 @@ class MainLayout:
             ),
             Body(
                 # Header
-                Header(self.user),
+                Header(self.user, self.active_menu),
                 # Main Content Area（无 sidebar，最大宽度 1200px 居中）
                 Div(
                     Div(
@@ -231,6 +255,7 @@ def create_main_page(
     *content,
     page_title: str = "QMT Gateway",
     user: dict | None = None,
+    active_menu: str = "",
 ):
     """创建主页面
 
@@ -238,6 +263,7 @@ def create_main_page(
         content: 页面内容
         page_title: 页面标题
         user: 当前用户信息
+        active_menu: 当前激活的导航项
 
     Returns:
         FastHTML 页面
@@ -246,5 +272,6 @@ def create_main_page(
         *content,
         page_title=page_title,
         user=user,
+        active_menu=active_menu,
     )
     return layout

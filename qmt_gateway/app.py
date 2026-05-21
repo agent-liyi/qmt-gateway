@@ -3,13 +3,14 @@
 组装所有路由和中间件。
 """
 
+import asyncio
 import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from fastcore.xml import to_xml
 from fasthtml.common import *
 from loguru import logger
-
 from qmt_gateway.apis import (
     login_required,
     quote_ws,
@@ -27,11 +28,22 @@ from qmt_gateway.runtime import runtime
 from qmt_gateway.services.scheduler import scheduler
 from qmt_gateway.web.pages.data_mgmt import DataMgmtPage
 from qmt_gateway.web.pages.init_wizard import InitWizardForm, InitWizardPage
+from qmt_gateway.web.pages.logs import LogsPage
 from qmt_gateway.web.pages.trading import TradingPage
-
+from starlette.responses import HTMLResponse, StreamingResponse
 
 # 存储向导表单数据的临时缓存
 _wizard_data: dict = {}
+
+
+def _render_page(page) -> HTMLResponse:
+    """显式渲染完整页面，规避 FastHTML 在文档响应上的兼容问题。"""
+    return HTMLResponse(to_xml(page))
+
+
+def _render_fragment(fragment) -> HTMLResponse:
+    """显式渲染 HTMX 片段，规避 FastHTML 片段响应兼容问题。"""
+    return HTMLResponse(to_xml(fragment))
 
 
 def check_init_required():
@@ -95,7 +107,7 @@ def create_app():
             except Exception as e:
                 logger.error(f"重置初始化状态失败: {e}")
 
-        return InitWizardPage(step=1)
+        return _render_page(InitWizardPage(step=1))
 
     @app.post("/init-wizard/step/{step}")
     async def wizard_step(step: int, request):
@@ -115,10 +127,16 @@ def create_app():
             logger.info(f"第2步密码校验: password='{password}', password_confirm='{password_confirm}'")
             if password != password_confirm:
                 # 返回第2步，并显示错误信息
-                return InitWizardForm(step=2, form_data=_wizard_data, error="两次输入的密码不一致，请重新输入")
+                return _render_fragment(
+                    InitWizardForm(
+                        step=2,
+                        form_data=_wizard_data,
+                        error="两次输入的密码不一致，请重新输入",
+                    )
+                )
 
         # 返回表单部分（用于 HTMX 更新）
-        return InitWizardForm(step=step, form_data=_wizard_data)
+        return _render_fragment(InitWizardForm(step=step, form_data=_wizard_data))
 
     @app.post("/init-wizard/complete")
     async def wizard_complete(request):
@@ -283,18 +301,24 @@ def create_app():
             return RedirectResponse("/login", status_code=302)
 
         # 获取交易数据
-        from qmt_gateway.apis.trade import get_latest_asset_data, get_latest_positions_data, trade_service
+        from qmt_gateway.apis.trade import (
+            get_latest_asset_data,
+            get_latest_positions_data,
+            trade_service,
+        )
         asset = get_latest_asset_data()
         positions = get_latest_positions_data()
         orders = trade_service.get_orders()
         trades = trade_service.get_trades()
 
-        return TradingPage(
-            asset=asset,
-            positions=positions,
-            orders=orders,
-            trades=trades,
-            user=user,
+        return _render_page(
+            TradingPage(
+                asset=asset,
+                positions=positions,
+                orders=orders,
+                trades=trades,
+                user=user,
+            )
         )
 
     @app.get("/trading")
@@ -307,18 +331,24 @@ def create_app():
         if not user:
             return RedirectResponse("/login", status_code=302)
 
-        from qmt_gateway.apis.trade import get_latest_asset_data, get_latest_positions_data, trade_service
+        from qmt_gateway.apis.trade import (
+            get_latest_asset_data,
+            get_latest_positions_data,
+            trade_service,
+        )
         asset = get_latest_asset_data()
         positions = get_latest_positions_data()
         orders = trade_service.get_orders()
         trades = trade_service.get_trades()
 
-        return TradingPage(
-            asset=asset,
-            positions=positions,
-            orders=orders,
-            trades=trades,
-            user=user,
+        return _render_page(
+            TradingPage(
+                asset=asset,
+                positions=positions,
+                orders=orders,
+                trades=trades,
+                user=user,
+            )
         )
 
     @app.get("/data")
@@ -331,10 +361,76 @@ def create_app():
         if not user:
             return RedirectResponse("/login", status_code=302)
 
-        return DataMgmtPage(
-            selected_type=sector_type,
-            sectors=[],
-            user=user,
+        return _render_page(
+            DataMgmtPage(
+                selected_type=sector_type,
+                sectors=[],
+                user=user,
+            )
+        )
+
+    @app.get("/logs")
+    def logs_page(request, level: str = "ALL", keyword: str = ""):
+        """运行日志页面。"""
+        if check_init_required():
+            return RedirectResponse("/init-wizard", status_code=302)
+
+        user = request.scope.get("session", {}).get("user")
+        if not user:
+            return RedirectResponse("/login", status_code=302)
+
+        return _render_page(
+            LogsPage(
+                user=user,
+                level=level,
+                keyword=keyword,
+            )
+        )
+
+    @app.get("/logs/stream/{level}/{keyword}")
+    async def logs_stream(request, level: str, keyword: str = ""):
+        """SSE 端点：实时推送日志更新。
+
+        Args:
+            request: HTTP 请求
+            level: 日志级别过滤
+            keyword: 关键词过滤
+        """
+        if check_init_required():
+            return StreamingResponse(iter([]), media_type="text/event-stream")
+
+        user = request.scope.get("session", {}).get("user")
+        if not user:
+            return StreamingResponse(iter([]), media_type="text/event-stream")
+
+        from qmt_gateway.services.log_viewer import LogEventSource
+
+        es = LogEventSource(level=level, keyword=keyword, poll_interval=1.0, maxlen=300)
+        init_result = es.init_from_file()
+
+        async def event_generator():
+            if init_result.lines:
+                for line in init_result.lines:
+                    yield f"event: init\ndata: {line}\n\n".encode("utf-8")
+            while True:
+                await asyncio.sleep(es.poll_interval)
+                new_lines = es.poll_new_lines()
+                for line in new_lines:
+                    yield f"event: new-log\ndata: {line}\n\n".encode("utf-8")
+                total = es.total_matches
+                filter_desc = es.current_filter_desc
+                info_parts = [f"共匹配 {total} 行"]
+                if filter_desc:
+                    info_parts.append(filter_desc)
+                yield f"event: status\ndata: {' | '.join(info_parts)}\n\n".encode("utf-8")
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     # 启动服务

@@ -6,17 +6,16 @@
 3. 底部：持仓/委托列表（可切换）
 """
 
-from fasthtml.common import *
 from fasthtml.common import Option as HtmlOption
 from fasthtml.common import Select as HtmlSelect
+from fasthtml.common import *
 from monsterui.all import *
-
 from qmt_gateway.web.layouts.main import create_main_page
 from qmt_gateway.web.theme import PRIMARY_COLOR
 
 
 def AccountInfo(asset: dict | None = None):
-    """顶部账号资金信息"""
+    """资产信息卡片。"""
     if asset is None:
         asset = {
             "principal": 0,
@@ -41,47 +40,31 @@ def AccountInfo(asset: dict | None = None):
     # 盈亏颜色
     profit_color = "#22c55e" if profit >= 0 else "#ef4444"
 
+    frozen_cash = asset.get("frozen_cash", 0)
+
+    def _metric(title: str, value: str, *, color: str | None = None):
+        return Div(
+            Span(title, cls="text-sm text-gray-500"),
+            Span(
+                value,
+                cls="text-sm font-semibold",
+                style=f"color: {color};" if color else None,
+            ),
+            cls="flex items-center justify-between rounded-lg border border-gray-100 bg-gray-50 px-3 py-2.5",
+        )
+
     return Div(
+        Div("资产信息", cls="mb-4 text-sm font-semibold text-gray-700"),
         Div(
-            # 本金
-            Div(
-                Span("本金 ", cls="text-gray-500"),
-                Span(f"{principal/10000:.2f}万", cls="font-medium"),
-                cls="flex items-center gap-1",
-            ),
-            # 总资产
-            Div(
-                Span("总资产 ", cls="text-gray-500"),
-                Span(f"{total/10000:.1f}万", cls="font-medium"),
-                cls="flex items-center gap-1",
-            ),
-            # 盈亏
-            Div(
-                Span("盈亏 ", cls="text-gray-500"),
-                Span(f"{profit/10000:.1f}万/{profit_ratio:.2f}%", style=f"color: {profit_color};"),
-                cls="flex items-center gap-1",
-            ),
-            # 持仓市值（带占比）
-            Div(
-                Span("持仓市值 ", cls="text-gray-500"),
-                Span(f"{market_value/10000:.1f}万 ({market_value_pct:.1f}%)", cls="font-medium"),
-                cls="flex items-center gap-1",
-            ),
-            # 可用资金（带占比）
-            Div(
-                Span("可用资金 ", cls="text-gray-500"),
-                Span(f"{cash/10000:.1f}万 ({cash_pct:.1f}%)", cls="font-medium"),
-                cls="flex items-center gap-1",
-            ),
-            # 刷新按钮
-            Button(
-                "⟳",
-                cls="btn btn-ghost btn-sm",
-                hx_get="/api/trade/asset",
-                hx_target="#account-info",
-            ),
-            cls="flex justify-between items-center px-6 py-3 bg-white border-b",
+            _metric("本金", f"{principal/10000:.2f}万"),
+            _metric("总资产", f"{total/10000:.1f}万"),
+            _metric("盈亏", f"{profit/10000:.1f}万 / {profit_ratio:.2f}%", color=profit_color),
+            _metric("持仓市值", f"{market_value/10000:.1f}万 ({market_value_pct:.1f}%)"),
+            _metric("可用资金", f"{cash/10000:.1f}万 ({cash_pct:.1f}%)"),
+            _metric("冻结资金", f"{frozen_cash/10000:.1f}万"),
+            cls="flex flex-col gap-2",
         ),
+        cls="h-full rounded-xl bg-white p-4 shadow",
         id="account-info",
     )
 
@@ -232,13 +215,13 @@ def OrderForm(available_cash: float = 0):
             ),
             cls="flex",
         ),
-        cls="p-4 bg-white rounded shadow",
+        cls="h-full rounded-xl bg-white p-4 shadow",
     )
 
 
 def SpeedDialGrid(last_close: float = 0):
     """Speed Dial 价格网格（右侧）
-    
+
     未选中股票时(last_close=0)，只显示涨跌百分比，不显示价格。
     选中股票后，显示各档位对应的价格。
     按钮为方形设计。
@@ -279,7 +262,7 @@ def SpeedDialGrid(last_close: float = 0):
             Button(
                 Span(
                     f"{display_num:+d}%",
-                    cls="speed-dial-pct text-[24px] font-medium italic leading-none",
+                    cls="speed-dial-pct text-[18px] font-medium italic leading-none",
                     style=pct_style,
                 ),
                 Span(
@@ -287,7 +270,7 @@ def SpeedDialGrid(last_close: float = 0):
                     cls=price_cls,
                 ),
                 cls=(
-                    "btn h-32 w-32 min-h-0 rounded-xl p-0 relative bg-white "
+                    "btn h-16 w-16 min-h-0 rounded-xl p-0 relative bg-white "
                     f"flex items-center justify-center border border-gray-200 shadow-sm {clickable_cls}"
                 ),
                 onclick=onclick_action if onclick_action else None,
@@ -578,7 +561,7 @@ def TradingPage(
     user: dict | None = None,
 ):
     """实盘交易页面"""
-    
+
     # JavaScript 函数
     stock_selection_script = Script("""
         window.applySpeedDialPrice = function(price, pct, evt) {
@@ -737,7 +720,7 @@ def TradingPage(
         // 选择股票
         window.selectStock = function(symbol, name, lastClose) {
             console.log('[DEBUG] selectStock called:', symbol, name, lastClose);
-            
+
             try {
                 // 填充隐藏字段
                 document.getElementById('selected-symbol').value = symbol;
@@ -747,37 +730,37 @@ def TradingPage(
                     var lastCloseValue = Number(lastClose || 0);
                     lastCloseInput.value = lastCloseValue > 0 ? lastCloseValue.toFixed(4) : '0';
                 }
-                
+
                 // 在搜索框中显示选中的股票
                 var searchInput = document.getElementById('stock-search');
                 if (searchInput) {
                     searchInput.value = name + ' (' + symbol + ')';
                 }
-                
+
                 // 隐藏下拉列表
                 var suggestions = document.getElementById('stock-suggestions');
                 if (suggestions) suggestions.innerHTML = '';
-                
+
                 // 更新价格输入框 - 填充现价
                 var priceInput = document.getElementById('order-price');
                 if (priceInput && lastClose > 0) {
                     priceInput.value = lastClose.toFixed(2);
                     refreshOrderEstimate();
                 }
-                
+
                 // 更新 Speed Dial 价格
                 if (lastClose > 0) {
                     updateSpeedDial(lastClose);
                 } else if (symbol) {
                     fetchAndRenderSpeedDial(symbol);
                 }
-                
+
                 console.log('[DEBUG] selectStock completed');
             } catch (e) {
                 console.error('[DEBUG] selectStock error:', e);
             }
         };
-        
+
         // 更新 Speed Dial 显示价格
         function updateSpeedDial(lastClose) {
             var levels = [
@@ -787,7 +770,7 @@ def TradingPage(
                 [7, 7], [2, 2], [-4, -4], [-9, -9],
                 [6, 6], [1, 1], [-5, -5], [-10, -10],
             ];
-            
+
             var buttons = document.querySelectorAll('#speed-dial-container button');
             buttons.forEach(function(btn, index) {
                 if (index < levels.length) {
@@ -821,7 +804,7 @@ def TradingPage(
                 }
             });
         }
-        
+
         // 获取当前股价
         function getCurrentPrice() {
             var priceInput = document.getElementById('order-price');
@@ -830,7 +813,7 @@ def TradingPage(
             }
             return 0;
         }
-        
+
         // 金额变化时计算数量
         function getOrderMode() {
             var selected = document.querySelector('input[name="order-mode"]:checked');
@@ -1010,17 +993,19 @@ def TradingPage(
     return create_main_page(
         # JavaScript
         stock_selection_script,
-        # 第1行：顶部账号资金
-        AccountInfo(asset),
-        # 第2行：下单表单 + Speed Dial
+        # 第1行：资产信息 + 下单 + Speed Dial
         Div(
-            Div(OrderForm(asset.get("cash", 0) if asset else 0), cls="w-1/3 pr-4"),
+            AccountInfo(asset),
+            Div(
+                OrderForm(asset.get("cash", 0) if asset else 0),
+                cls="h-full",
+            ),
             Div(
                 SpeedDialGrid(),
                 id="speed-dial-container",
-                cls="w-2/3 pl-4",
+                cls="flex h-full items-center justify-center rounded-xl bg-white p-4 shadow",
             ),
-            cls="flex px-4 py-4",
+            cls="grid grid-cols-1 gap-4 px-4 py-4 items-stretch lg:grid-cols-3",
         ),
         # 第3行：持仓列表
         Div(
@@ -1028,5 +1013,6 @@ def TradingPage(
             cls="px-4 pb-4",
         ),
         page_title="实盘交易 - QMT Gateway",
+        active_menu="trading",
         user=user,
     )
