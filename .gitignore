@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.sesskey
+.coverage
+htmlcov/
+uv.lock
+*.egg-info/
+*.pyc
+*.pyo
+*.pyd
+*.db
+logs/
+data/home/
