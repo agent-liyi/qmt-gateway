@@ -20,6 +20,14 @@ LOG_LEVELS: tuple[str, ...] = (
     "CRITICAL",
 )
 
+LOG_LEVEL_PRIORITY: dict[str, int] = {
+    "DEBUG": 10,
+    "INFO": 20,
+    "WARNING": 30,
+    "ERROR": 40,
+    "CRITICAL": 50,
+}
+
 
 @dataclass(frozen=True)
 class LogTailResult:
@@ -45,8 +53,8 @@ class LogEventSource:
         poll_interval: float = 1.0,
         maxlen: int = 300,
     ):
-        self.level = level
-        self.keyword = keyword
+        self.level = _normalize_level(level)
+        self.keyword = keyword.strip()
         self.poll_interval = poll_interval
         self.maxlen = maxlen
 
@@ -81,6 +89,25 @@ class LogEventSource:
             file_path=self._file_path,
             total_matches=self._total_matches,
         )
+
+    def _read_all_lines(self) -> None:
+        """读取整个日志文件并初始化匹配结果缓存。"""
+        if self._file_path is None or not self._file_path.exists():
+            return
+
+        normalized_keyword = self.keyword.casefold() if self.keyword else ""
+        try:
+            with self._file_path.open("r", encoding="utf-8", errors="replace") as handle:
+                for raw_line in handle:
+                    line = raw_line.rstrip("\r\n")
+                    if not _matches_level(line, self.level):
+                        continue
+                    if normalized_keyword and normalized_keyword not in line.casefold():
+                        continue
+                    self._matched_lines.append(line)
+                    self._total_matches += 1
+        except OSError:
+            return
 
     def poll_new_lines(self) -> list[str]:
         """检查日志文件是否有新增行，返回新增的匹配行列表。
@@ -201,11 +228,14 @@ def _normalize_level(level: str) -> str:
 
 
 def _matches_level(line: str, level: str) -> bool:
-    """判断日志行是否匹配级别。"""
+    """判断日志行是否匹配级别阈值。"""
     if level == "ALL":
         return True
 
-    level_upper = level.upper()
+    threshold = LOG_LEVEL_PRIORITY.get(level.upper())
+    if threshold is None:
+        return True
+
     first_pipe = line.find("|")
     if first_pipe == -1:
         return False
@@ -213,4 +243,8 @@ def _matches_level(line: str, level: str) -> bool:
     if second_pipe == -1:
         return False
     extracted_level = line[first_pipe + 1 : second_pipe].strip()
-    return extracted_level.upper() == level_upper
+    current_priority = LOG_LEVEL_PRIORITY.get(extracted_level.upper())
+    if current_priority is None:
+        return False
+
+    return current_priority >= threshold

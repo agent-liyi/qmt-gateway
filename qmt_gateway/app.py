@@ -370,7 +370,7 @@ def create_app():
         )
 
     @app.get("/logs")
-    def logs_page(request, level: str = "ALL", keyword: str = ""):
+    def logs_page(request, level: str = "INFO", keyword: str = ""):
         """运行日志页面。"""
         if check_init_required():
             return RedirectResponse("/init-wizard", status_code=302)
@@ -387,8 +387,8 @@ def create_app():
             )
         )
 
-    @app.get("/logs/stream/{level}/{keyword}")
-    async def logs_stream(request, level: str, keyword: str = ""):
+    @app.get("/logs/stream")
+    async def logs_stream(request, level: str = "INFO", keyword: str = ""):
         """SSE 端点：实时推送日志更新。
 
         Args:
@@ -408,21 +408,29 @@ def create_app():
         es = LogEventSource(level=level, keyword=keyword, poll_interval=1.0, maxlen=300)
         init_result = es.init_from_file()
 
+        def _encode_sse(event: str, data: str) -> bytes:
+            """编码 SSE 事件，支持多行 data。"""
+            data_lines = data.splitlines() or [""]
+            payload = [f"event: {event}"]
+            payload.extend(f"data: {line}" for line in data_lines)
+            payload.append("")
+            payload.append("")
+            return "\n".join(payload).encode("utf-8")
+
         async def event_generator():
             if init_result.lines:
-                for line in init_result.lines:
-                    yield f"event: init\ndata: {line}\n\n".encode("utf-8")
+                yield _encode_sse("init", "\n".join(init_result.lines))
             while True:
                 await asyncio.sleep(es.poll_interval)
                 new_lines = es.poll_new_lines()
                 for line in new_lines:
-                    yield f"event: new-log\ndata: {line}\n\n".encode("utf-8")
+                    yield _encode_sse("new-log", line)
                 total = es.total_matches
                 filter_desc = es.current_filter_desc
                 info_parts = [f"共匹配 {total} 行"]
                 if filter_desc:
                     info_parts.append(filter_desc)
-                yield f"event: status\ndata: {' | '.join(info_parts)}\n\n".encode("utf-8")
+                yield _encode_sse("status", " | ".join(info_parts))
 
         return StreamingResponse(
             event_generator(),
@@ -432,6 +440,16 @@ def create_app():
                 "X-Accel-Buffering": "no",
             },
         )
+
+    @app.get("/logs/stream/{level}")
+    async def logs_stream_compat(request, level: str):
+        """兼容旧版 SSE 地址。"""
+        return await logs_stream(request, level=level, keyword="")
+
+    @app.get("/logs/stream/{level}/{keyword:path}")
+    async def logs_stream_compat_keyword(request, level: str, keyword: str = ""):
+        """兼容旧版 SSE 地址，支持关键词路径参数。"""
+        return await logs_stream(request, level=level, keyword=keyword)
 
     # 启动服务
     @app.on_event("startup")

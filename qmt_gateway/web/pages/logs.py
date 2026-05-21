@@ -5,16 +5,18 @@
 
 from __future__ import annotations
 
+from fasthtml.common import Option as HtmlOption
+from fasthtml.common import Select as HtmlSelect
 from fasthtml.common import *
 from monsterui.all import *
-from qmt_gateway.services.log_viewer import LOG_LEVELS, read_recent_logs
+from qmt_gateway.services.log_viewer import LOG_LEVELS
 from qmt_gateway.web.layouts.main import create_main_page
 
 
-def LogFilterBar(level: str = "ALL", keyword: str = ""):
+def LogFilterBar(level: str = "INFO", keyword: str = ""):
     """日志过滤栏。"""
     options = [
-        Option(
+        HtmlOption(
             "全部级别" if item == "ALL" else item,
             value=item,
             selected="selected" if item == level else None,
@@ -25,11 +27,11 @@ def LogFilterBar(level: str = "ALL", keyword: str = ""):
         Div(
             Div(
                 Label("级别", _for="log-level", cls="text-sm font-medium text-gray-600"),
-                Select(
+                HtmlSelect(
                     *options,
                     id="log-level",
                     name="level",
-                    cls="select select-bordered w-full bg-white",
+                    cls="uk-select select select-bordered w-full bg-white",
                     onchange="window.applyLogFilter()",
                 ),
                 cls="flex min-w-[180px] flex-col gap-2",
@@ -110,20 +112,14 @@ def LogTerminalContainer():
     )
 
 
-def LogPageScript(level: str = "ALL", keyword: str = ""):
+def LogPageScript(level: str = "INFO", keyword: str = ""):
     """日志页 JavaScript：建立 SSE 连接，处理实时追加和过滤切换。"""
     return Script(
         f"""
         (function() {{
             var es = null;
-            var currentLevel = "{level}";
+                var currentLevel = "{level}";
             var currentKeyword = "{keyword}";
-            var isConnected = false;
-
-            function getLogFilePath() {{
-                var el = document.getElementById("log-file-path");
-                return el ? el.textContent.replace("qmt-gateway: ", "") : "";
-            }}
 
             function scrollToBottom() {{
                 var body = document.getElementById("log-terminal-body");
@@ -155,12 +151,15 @@ def LogPageScript(level: str = "ALL", keyword: str = ""):
                     es.close();
                     es = null;
                 }}
-                var encodedKeyword = encodeURIComponent(currentKeyword);
-                var url = "/logs/stream/" + currentLevel + "/" + encodedKeyword;
+                var params = new URLSearchParams();
+                params.set("level", currentLevel || "INFO");
+                if (currentKeyword) {{
+                    params.set("keyword", currentKeyword);
+                }}
+                var url = "/logs/stream?" + params.toString();
                 es = new EventSource(url);
 
                 es.addEventListener("open", function() {{
-                    isConnected = true;
                     updateStatus("实时推送中...");
                 }});
 
@@ -180,8 +179,7 @@ def LogPageScript(level: str = "ALL", keyword: str = ""):
                     updateStatus("实时推送中 | " + e.data);
                 }});
 
-                es.addEventListener("error", function(e) {{
-                    isConnected = false;
+                es.addEventListener("error", function() {{
                     updateStatus("连接中断，正在重连...");
                     es.close();
                     setTimeout(connectSSE, 3000);
@@ -191,7 +189,7 @@ def LogPageScript(level: str = "ALL", keyword: str = ""):
             window.applyLogFilter = function() {{
                 var levelEl = document.getElementById("log-level");
                 var keywordEl = document.getElementById("log-keyword");
-                var newLevel = levelEl ? levelEl.value : "ALL";
+                var newLevel = levelEl ? levelEl.value : "INFO";
                 var newKeyword = keywordEl ? keywordEl.value.trim() : "";
                 if (newLevel === currentLevel && newKeyword === currentKeyword) {{
                     return;
@@ -205,12 +203,12 @@ def LogPageScript(level: str = "ALL", keyword: str = ""):
             window.clearLogFilter = function() {{
                 var levelEl = document.getElementById("log-level");
                 var keywordEl = document.getElementById("log-keyword");
-                if (levelEl) {{ levelEl.value = "ALL"; }}
+                if (levelEl) {{ levelEl.value = "INFO"; }}
                 if (keywordEl) {{ keywordEl.value = ""; }}
-                currentLevel = "ALL";
+                currentLevel = "INFO";
                 currentKeyword = "";
                 var params = new URLSearchParams();
-                params.set("level", "ALL");
+                params.set("level", "INFO");
                 window.location.search = params.toString();
             }};
 
@@ -221,7 +219,7 @@ def LogPageScript(level: str = "ALL", keyword: str = ""):
                 }}
                 var body = document.getElementById("log-terminal-body");
                 if (body) {{ body.textContent = ""; }}
-                currentLevel = document.getElementById("log-level") ? document.getElementById("log-level").value : "ALL";
+                currentLevel = document.getElementById("log-level") ? document.getElementById("log-level").value : "INFO";
                 currentKeyword = document.getElementById("log-keyword") ? document.getElementById("log-keyword").value.trim() : "";
                 connectSSE();
             }};
@@ -235,22 +233,14 @@ def LogPageScript(level: str = "ALL", keyword: str = ""):
 def LogsPage(
     *,
     user: dict | None = None,
-    level: str = "ALL",
+    level: str = "INFO",
     keyword: str = "",
 ):
     """日志查看页面。"""
-    normalized_level = level.strip().upper() if level else "ALL"
+    normalized_level = level.strip().upper() if level else "INFO"
     if normalized_level not in LOG_LEVELS:
-        normalized_level = "ALL"
+        normalized_level = "INFO"
     normalized_keyword = keyword.strip()
-
-    result = read_recent_logs(
-        level=normalized_level,
-        keyword=normalized_keyword,
-        limit=300,
-    )
-
-    file_path_display = str(result.file_path) if result.file_path.exists() else ""
 
     return create_main_page(
         LogPageScript(level=normalized_level, keyword=normalized_keyword),

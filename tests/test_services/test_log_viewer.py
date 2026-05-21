@@ -4,12 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-from qmt_gateway.services.log_viewer import (
-    LogEventSource,
-    LogTailResult,
-    read_recent_logs,
-)
+from qmt_gateway.services.log_viewer import LogEventSource, read_recent_logs
 
 
 class TestReadRecentLogs:
@@ -34,14 +29,18 @@ class TestReadRecentLogs:
     def test_level_filter(self, tmp_path: Path):
         log_file = tmp_path / "test.log"
         log_file.write_text(
+            "2026-01-01 | DEBUG    | app - debug line\n"
             "2026-01-01 | INFO     | app - info line\n"
             "2026-01-01 | ERROR    | app - error line\n"
             "2026-01-01 | WARNING  | app - warn line\n",
             encoding="utf-8",
         )
-        result = read_recent_logs(log_file=log_file, level="ERROR")
-        assert len(result.lines) == 1
-        assert "error line" in result.lines[0]
+        result = read_recent_logs(log_file=log_file, level="INFO")
+        assert len(result.lines) == 3
+        assert all("debug line" not in line for line in result.lines)
+        assert any("info line" in line for line in result.lines)
+        assert any("warn line" in line for line in result.lines)
+        assert any("error line" in line for line in result.lines)
 
     def test_keyword_filter(self, tmp_path: Path):
         log_file = tmp_path / "test.log"
@@ -57,15 +56,18 @@ class TestReadRecentLogs:
     def test_combined_filters(self, tmp_path: Path):
         log_file = tmp_path / "test.log"
         log_file.write_text(
+            "2026-01-01 | DEBUG | a - debug apple\n"
             "2026-01-01 | ERROR | a - error apple\n"
             "2026-01-01 | INFO  | a - info apple\n"
             "2026-01-01 | ERROR | b - error banana\n"
             "2026-01-01 | INFO  | b - info banana\n",
             encoding="utf-8",
         )
-        result = read_recent_logs(log_file=log_file, level="ERROR", keyword="apple")
-        assert len(result.lines) == 1
-        assert "error apple" in result.lines[0]
+        result = read_recent_logs(log_file=log_file, level="INFO", keyword="apple")
+        assert len(result.lines) == 2
+        assert all("debug apple" not in line for line in result.lines)
+        assert any("error apple" in line for line in result.lines)
+        assert any("info apple" in line for line in result.lines)
 
 
 class TestLogEventSource:
@@ -115,28 +117,45 @@ class TestLogEventSource:
 
     def test_poll_with_level_filter(self, tmp_path: Path):
         content = (
+            "2026-01-01 | DEBUG | debug line\n"
             "2026-01-01 | INFO | info line\n"
             "2026-01-01 | ERROR | error line\n"
             "2026-01-01 | INFO | info line 2\n"
             "2026-01-01 | WARNING | warn line\n"
         )
         es = self._write_and_init(tmp_path, content)
+        es.level = "INFO"
         new_content = content + "2026-01-01 | INFO | new info\n2026-01-01 | ERROR | new error\n"
         log_file = tmp_path / "test.log"
         log_file.write_text(new_content, encoding="utf-8")
         new_lines = es.poll_new_lines()
-        assert len(new_lines) == 1
-        assert "new error" in new_lines[0]
+        assert len(new_lines) == 2
+        assert any("new info" in line for line in new_lines)
+        assert any("new error" in line for line in new_lines)
 
     def test_poll_with_keyword_filter(self, tmp_path: Path):
         content = "2026-01-01 | INFO | apple pie\n2026-01-01 | INFO | banana\n"
         es = self._write_and_init(tmp_path, content)
+        es.keyword = "apple"
         new_content = content + "2026-01-01 | INFO | new apple\n2026-01-01 | INFO | new banana\n"
         log_file = tmp_path / "test.log"
         log_file.write_text(new_content, encoding="utf-8")
         new_lines = es.poll_new_lines()
         assert len(new_lines) == 1
         assert "new apple" in new_lines[0]
+
+    def test_debug_threshold_includes_all_known_levels(self, tmp_path: Path):
+        log_file = tmp_path / "test.log"
+        log_file.write_text(
+            "2026-01-01 | DEBUG    | app - debug line\n"
+            "2026-01-01 | INFO     | app - info line\n"
+            "2026-01-01 | WARNING  | app - warn line\n"
+            "2026-01-01 | ERROR    | app - error line\n"
+            "2026-01-01 | CRITICAL | app - critical line\n",
+            encoding="utf-8",
+        )
+        result = read_recent_logs(log_file=log_file, level="DEBUG")
+        assert len(result.lines) == 5
 
     def test_file_truncated_resets_position(self, tmp_path: Path):
         content = "\n".join([f"line {i}" for i in range(10)])
