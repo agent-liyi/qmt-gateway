@@ -135,6 +135,15 @@ def LogPageScript(level: str = "INFO", keyword: str = ""):
                 }}
             }}
 
+            function updateFilePath(text, muted) {{
+                var el = document.getElementById("log-file-path");
+                if (!el) {{
+                    return;
+                }}
+                el.textContent = text;
+                el.className = muted ? "text-gray-400" : "text-sky-300";
+            }}
+
             function appendLines(text) {{
                 var body = document.getElementById("log-terminal-body");
                 if (!body) return;
@@ -151,6 +160,8 @@ def LogPageScript(level: str = "INFO", keyword: str = ""):
                     es.close();
                     es = null;
                 }}
+                updateStatus("正在连接日志流...");
+                updateFilePath(": 等待连接...", true);
                 var params = new URLSearchParams();
                 params.set("level", currentLevel || "INFO");
                 if (currentKeyword) {{
@@ -161,6 +172,16 @@ def LogPageScript(level: str = "INFO", keyword: str = ""):
 
                 es.addEventListener("open", function() {{
                     updateStatus("实时推送中...");
+                    updateFilePath(": 日志流已连接", false);
+                }});
+
+                es.addEventListener("file-info", function(e) {{
+                    var value = (e && e.data ? e.data : "").trim();
+                    if (!value) {{
+                        updateFilePath(": 日志流已连接", false);
+                        return;
+                    }}
+                    updateFilePath(": " + value, false);
                 }});
 
                 es.addEventListener("init", function(e) {{
@@ -181,6 +202,7 @@ def LogPageScript(level: str = "INFO", keyword: str = ""):
 
                 es.addEventListener("error", function() {{
                     updateStatus("连接中断，正在重连...");
+                    updateFilePath(": 等待重连...", true);
                     es.close();
                     setTimeout(connectSSE, 3000);
                 }});
@@ -219,6 +241,7 @@ def LogPageScript(level: str = "INFO", keyword: str = ""):
                 }}
                 var body = document.getElementById("log-terminal-body");
                 if (body) {{ body.textContent = ""; }}
+                updateFilePath(": 等待连接...", true);
                 currentLevel = document.getElementById("log-level") ? document.getElementById("log-level").value : "INFO";
                 currentKeyword = document.getElementById("log-keyword") ? document.getElementById("log-keyword").value.trim() : "";
                 connectSSE();

@@ -418,6 +418,7 @@ def create_app():
             return "\n".join(payload).encode("utf-8")
 
         async def event_generator():
+            yield _encode_sse("file-info", str(init_result.file_path))
             if init_result.lines:
                 yield _encode_sse("init", "\n".join(init_result.lines))
             while True:
