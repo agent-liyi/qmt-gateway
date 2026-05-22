@@ -5,9 +5,9 @@
 
 import datetime
 import sqlite3
+
 from fasthtml.common import *
 from loguru import logger
-
 from qmt_gateway.config import config
 from qmt_gateway.db.models import Asset, Position
 from qmt_gateway.db.sqlite import db
@@ -132,14 +132,20 @@ def _get_latest_positions(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> list[Posi
 
 
 def _snapshot_asset(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> Asset | None:
+    # region debug-point asset-snapshot-live
     live = trade_service.get_asset()
+    logger.info("debug asset snapshot live: portfolio_id={}, live={}", portfolio_id, live)
+    # endregion debug-point asset-snapshot-live
     if not live:
         return None
     today = datetime.date.today()
+    cached_asset = _get_latest_asset(portfolio_id)
     asset = Asset(
         portfolio_id=portfolio_id,
         dt=today,
-        principal=_as_float(_get_value(live, "total", 0)),
+        principal=_as_float(
+            cached_asset.principal if cached_asset is not None else _get_value(live, "total", 0)
+        ),
         cash=_as_float(_get_value(live, "cash", 0)),
         frozen_cash=_as_float(_get_value(live, "frozen_cash", 0)),
         market_value=_as_float(_get_value(live, "market_value", 0)),
@@ -183,9 +189,17 @@ def _snapshot_positions(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> None:
 
 
 def get_latest_asset_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
+    # region debug-point asset-cache-read
     asset = _get_latest_asset(portfolio_id)
-    if asset is None:
-        asset = _snapshot_asset(portfolio_id)
+    logger.info(
+        "debug asset cache read: portfolio_id={}, cached_asset={}",
+        portfolio_id,
+        asset.to_dict() if asset else None,
+    )
+    # endregion debug-point asset-cache-read
+    live_asset = _snapshot_asset(portfolio_id)
+    if live_asset is not None:
+        asset = live_asset
     if asset is None:
         return {
             "principal": 0,
@@ -194,13 +208,17 @@ def get_latest_asset_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
             "market_value": 0,
             "frozen_cash": 0,
         }
-    return {
+    result = {
         "principal": asset.principal,
         "total": asset.total,
         "cash": asset.cash,
         "market_value": asset.market_value,
         "frozen_cash": asset.frozen_cash,
     }
+    # region debug-point asset-response
+    logger.info("debug asset response: portfolio_id={}, result={}", portfolio_id, result)
+    # endregion debug-point asset-response
+    return result
 
 
 def get_latest_positions_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> list[dict]:

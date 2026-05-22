@@ -50,6 +50,8 @@ class QuoteService:
         self._bars_30m: dict[str, dict] = defaultdict(dict)
         self._bars_1d: dict[str, dict] = defaultdict(dict)
         self._subscribed = False  # 是否已订阅
+        self._stock_subscription_seq: int | None = None
+        self._index_subscription_seq: int | None = None
 
     def _is_trade_time(self) -> bool:
         """检查当前是否为交易时间（包含前后缓冲时间）"""
@@ -124,11 +126,23 @@ class QuoteService:
         try:
             # 1. 订阅个股行情（通过市场代码）
             code_list = ["SH", "SZ", "BJ"]
-            xtdata.subscribe_whole_quote(code_list, self._on_tick)
+            # region debug-point quote-subscribe
+            stock_result = xtdata.subscribe_whole_quote(code_list, self._on_tick)
+            self._stock_subscription_seq = int(stock_result)
+            logger.info(
+                "debug quote subscribe stocks: result={}, available_unsubscribe={}",
+                stock_result,
+                [name for name in dir(xtdata) if "unsubscribe" in name.lower()],
+            )
+            # endregion debug-point quote-subscribe
             logger.info(f"已订阅个股行情，市场: {code_list}")
 
             # 2. 单独订阅指数行情（指数不能通过市场代码订阅，必须单独订阅）
-            xtdata.subscribe_whole_quote(self.INDEX_CODES, self._on_tick)
+            # region debug-point quote-subscribe-index
+            index_result = xtdata.subscribe_whole_quote(self.INDEX_CODES, self._on_tick)
+            self._index_subscription_seq = int(index_result)
+            logger.info("debug quote subscribe indices: result={}", index_result)
+            # endregion debug-point quote-subscribe-index
             logger.info(f"已订阅指数行情: {self.INDEX_CODES}")
 
             self._subscribed = True
@@ -138,15 +152,29 @@ class QuoteService:
     def _unsubscribe(self, xtdata) -> None:
         """取消订阅行情"""
         try:
+            # region debug-point quote-unsubscribe
+            logger.info(
+                "debug quote unsubscribe: available_unsubscribe={}",
+                [name for name in dir(xtdata) if "unsubscribe" in name.lower()],
+            )
+            # endregion debug-point quote-unsubscribe
             # 1. 取消订阅个股行情
             code_list = ["SH", "SZ", "BJ"]
-            xtdata.unsubscribe_whole_quote(code_list)
-            logger.info(f"已取消订阅个股行情，市场: {code_list}")
+            if self._stock_subscription_seq is not None:
+                xtdata.unsubscribe_quote(self._stock_subscription_seq)
+                logger.info(
+                    f"已取消订阅个股行情，市场: {code_list}, seq={self._stock_subscription_seq}"
+                )
 
             # 2. 取消订阅指数行情
-            xtdata.unsubscribe_whole_quote(self.INDEX_CODES)
-            logger.info(f"已取消订阅指数行情: {self.INDEX_CODES}")
+            if self._index_subscription_seq is not None:
+                xtdata.unsubscribe_quote(self._index_subscription_seq)
+                logger.info(
+                    f"已取消订阅指数行情: {self.INDEX_CODES}, seq={self._index_subscription_seq}"
+                )
 
+            self._stock_subscription_seq = None
+            self._index_subscription_seq = None
             self._subscribed = False
         except Exception as e:
             logger.error(f"取消订阅行情失败: {e}")
