@@ -895,10 +895,14 @@ def TradingPage(
             }, 200);
         }
 
-        function showTradeToast(message, kind) {
+        function showTradeToast(message, kind, options) {
             var container = document.getElementById('trade-toast-container');
             if (!container || !message) {
                 return;
+            }
+
+            if (kind === 'error' && options && options.recordUnread && window.recordUnreadAlarm) {
+                window.recordUnreadAlarm(message, 'trade');
             }
 
             var toastId = 'trade-toast-' + String(++tradeToastCounter);
@@ -999,7 +1003,7 @@ def TradingPage(
                     var data = result.data || {};
                     if (!result.ok || !data.success) {
                         var errorMessage = String(data.error || '未知错误');
-                        showTradeToast('撤单失败：' + errorMessage, 'error');
+                        showTradeToast('撤单失败：' + errorMessage, 'error', { recordUnread: true });
                         return;
                     }
 
@@ -1082,7 +1086,7 @@ def TradingPage(
                     var data = result.data || {};
                     if (!result.ok || !data.success) {
                         var errorMessage = String(data.error || '未知错误');
-                        showTradeToast(sideText + '委托失败：' + errorMessage, 'error');
+                        showTradeToast(sideText + '委托失败：' + errorMessage, 'error', { recordUnread: true });
                         return;
                     }
 

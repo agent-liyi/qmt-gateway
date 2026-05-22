@@ -7,6 +7,7 @@ import qmt_gateway.apis.trade as trade_api
 from qmt_gateway.db.models import Asset, Stock
 from qmt_gateway.services.quote_service import QuoteService
 from qmt_gateway.services.stock_service import StockService
+from qmt_gateway.services.trade_service import TradeCallback, TradeService
 
 
 quote_service_module = importlib.import_module("qmt_gateway.services.quote_service")
@@ -28,6 +29,9 @@ class FakeLogger:
 
     def error(self, message, *args):
         self.records.append(("ERROR", message, args))
+
+    def critical(self, message, *args):
+        self.records.append(("CRITICAL", message, args))
 
 
 def _messages(records, level):
@@ -101,3 +105,20 @@ def test_quote_service_debug_logs_use_debug_level(monkeypatch):
     assert any("debug quote subscribe indices" in message for message in debug_messages)
     assert any("debug quote unsubscribe" in message for message in debug_messages)
     assert not any("debug quote" in message for message in _messages(fake_logger.records, "INFO"))
+
+
+def test_trade_disconnect_uses_critical_level(monkeypatch):
+    trade_service_module = importlib.import_module("qmt_gateway.services.trade_service")
+    fake_logger = FakeLogger()
+    monkeypatch.setattr(trade_service_module, "logger", fake_logger)
+
+    service = TradeService()
+    service._set_connection_state(True, "交易接口已连接：demo")
+
+    callback = TradeCallback(service)
+    callback.on_disconnected()
+
+    critical_messages = _messages(fake_logger.records, "CRITICAL")
+    assert any("交易接口连接断开" in message for message in critical_messages)
+    assert service.get_connection_status()["connected"] is False
+    assert not _messages(fake_logger.records, "WARNING")

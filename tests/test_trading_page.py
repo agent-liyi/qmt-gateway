@@ -29,7 +29,18 @@ def test_trading_page_renders_order_submission_hooks():
     assert "submitTradeOrder" in html
     assert "window.cancelOrder = function(orderId" in html
     assert "trade-toast-container" in html
-    assert "showTradeToast(message, kind)" in html
+    assert "showTradeToast(message, kind, options)" in html
+    assert "window.recordUnreadAlarm(message, 'trade')" in html
+    assert "recordUnread: true" in html
+    assert "alarm-unread-count" in html
+    assert "trade-connection-indicator" in html
+    assert "trade-connection-status" in html
+    assert "handleTradeConnectionAction" in html
+    assert "restart-qmt-modal" in html
+    assert "submitRestartQmt" in html
+    assert "/api/trade/restart-qmt" in html
+    assert "强行终止其进程" in html
+    assert "notification-center-modal" in html
     assert "buy-button" in html
     assert "sell-button" in html
     assert "fetch('/api/trade/' + orderSide, {" in html
@@ -81,6 +92,91 @@ def test_cancel_endpoint_logs_submission(monkeypatch):
     info_messages = [message for level, message, _ in fake_logger.records if level == "INFO"]
     assert any("收到撤单请求" in message for message in info_messages)
     assert any("撤单请求已提交" in message for message in info_messages)
+
+
+def test_restart_qmt_endpoint_logs_submission(monkeypatch):
+    fake_logger = FakeLogger()
+    monkeypatch.setattr(trade_api, "logger", fake_logger)
+    monkeypatch.setattr(trade_api, "login_required", lambda request: {"username": "tester"})
+    monkeypatch.setattr(
+        trade_api.trade_service,
+        "restart_qmt",
+        lambda password: {"success": True, "message": "QMT 已重启并重新连接交易接口"},
+    )
+
+    response = client.post("/api/trade/restart-qmt", data={"password": "trade-secret"})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    info_messages = [message for level, message, _ in fake_logger.records if level == "INFO"]
+    assert any("收到 QMT 重启请求" in message for message in info_messages)
+    assert any("QMT 重启完成并已发起重连" in message for message in info_messages)
+
+
+def test_restart_qmt_password_endpoint_consumes_token(monkeypatch):
+    monkeypatch.setattr(trade_api, "_require_local_request", lambda request: None)
+    monkeypatch.setattr(
+        trade_api.trade_service,
+        "consume_restart_password_token",
+        lambda token: "trade-secret" if token == "token-1" else None,
+    )
+
+    response = client.get("/api/trade/restart-qmt/password?token=token-1")
+
+    assert response.status_code == 200
+    assert response.json() == {"password": "trade-secret"}
+
+
+def test_restart_qmt_helper_status_endpoint_logs_warning(monkeypatch):
+    fake_logger = FakeLogger()
+    recorded = {}
+    monkeypatch.setattr(trade_api, "logger", fake_logger)
+    monkeypatch.setattr(trade_api, "_require_local_request", lambda request: None)
+    monkeypatch.setattr(
+        trade_api.trade_service,
+        "record_restart_helper_status",
+        lambda token, status: recorded.update({"token": token, "status": status}),
+    )
+
+    response = client.post(
+        "/api/trade/restart-qmt/helper-status",
+        data={"token": "token-1", "status": "自动填入 QMT 密码失败：未找到登录窗口"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"success": True}
+    assert recorded == {
+        "token": "token-1",
+        "status": "自动填入 QMT 密码失败：未找到登录窗口",
+    }
+    warning_messages = [message for level, message, _ in fake_logger.records if level == "WARNING"]
+    assert any("QMT helper 状态" in message for message in warning_messages)
+
+
+def test_restart_qmt_helper_status_endpoint_logs_info_for_progress(monkeypatch):
+    fake_logger = FakeLogger()
+    recorded = {}
+    monkeypatch.setattr(trade_api, "logger", fake_logger)
+    monkeypatch.setattr(trade_api, "_require_local_request", lambda request: None)
+    monkeypatch.setattr(
+        trade_api.trade_service,
+        "record_restart_helper_status",
+        lambda token, status: recorded.update({"token": token, "status": status}),
+    )
+
+    response = client.post(
+        "/api/trade/restart-qmt/helper-status",
+        data={"token": "token-1", "status": "INFO: 已通过布局坐标填入并提交 QMT 登录"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"success": True}
+    assert recorded == {
+        "token": "token-1",
+        "status": "INFO: 已通过布局坐标填入并提交 QMT 登录",
+    }
+    info_messages = [message for level, message, _ in fake_logger.records if level == "INFO"]
+    assert any("QMT helper 状态" in message for message in info_messages)
 
 
 def test_orders_table_hides_cancel_action_for_canceling_status():

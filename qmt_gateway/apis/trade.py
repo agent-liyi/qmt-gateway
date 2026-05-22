@@ -37,6 +37,13 @@ def _get_value(item, key: str, default=None):
     return getattr(item, key, default)
 
 
+def _require_local_request(request) -> None:
+    client = getattr(request, "client", None)
+    host = str(getattr(client, "host", "") or "")
+    if host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
+        raise HTTPException(status_code=403, detail="仅允许本机访问")
+
+
 def _fetch_one_dict(sql: str, params: tuple = ()) -> dict | None:
     cursor = db.conn.execute(sql, params)
     row = cursor.fetchone()
@@ -367,9 +374,9 @@ def register_routes(app):
                     qmt_path=str(config.qmt_path),
                 )
                 if success:
-                    logger.info("交易接口已连接")
+                    logger.info("已连接到 QMT")
                 else:
-                    logger.warning("交易接口连接失败")
+                    logger.warning("已和 QMT 断开")
         except Exception as e:
             logger.error(f"启动时连接交易接口失败: {e}")
 
@@ -383,6 +390,45 @@ def register_routes(app):
         """获取账户资金"""
         login_required(request)
         return get_latest_asset_data()
+
+    @app.get("/api/trade/connection-status")
+    def get_connection_status(request):
+        """获取交易接口连接状态"""
+        login_required(request)
+        return trade_service.get_connection_status()
+
+    @app.post("/api/trade/restart-qmt")
+    def restart_qmt(request, password: str = ""):
+        """重启 QMT 客户端并自动填入交易密码"""
+        login_required(request)
+        logger.info("收到 QMT 重启请求")
+        result = trade_service.restart_qmt(password)
+        if result.get("success"):
+            logger.info("QMT 重启完成并已发起重连")
+        else:
+            logger.warning("QMT 重启失败: {}", result.get("error", "未知错误"))
+        return result
+
+    @app.get("/api/trade/restart-qmt/password")
+    def get_restart_qmt_password(request, token: str = ""):
+        """供交互会话 helper 一次性获取重启密码"""
+        _require_local_request(request)
+        password = trade_service.consume_restart_password_token(token)
+        if not password:
+            raise HTTPException(status_code=404, detail="重启密码令牌无效或已过期")
+        return {"password": password}
+
+    @app.post("/api/trade/restart-qmt/helper-status")
+    def record_restart_qmt_helper_status(request, token: str = "", status: str = ""):
+        """记录交互会话 helper 的错误状态"""
+        _require_local_request(request)
+        trade_service.record_restart_helper_status(token, status)
+        if status:
+            if str(status).startswith("INFO:"):
+                logger.info("QMT helper 状态: {}", status)
+            else:
+                logger.warning("QMT helper 状态: {}", status)
+        return {"success": True}
 
     @app.get("/api/trade/positions")
     def get_positions(request, view: str = "json"):

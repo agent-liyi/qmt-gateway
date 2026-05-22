@@ -4,7 +4,14 @@
 """
 
 import datetime
+import io
+import locale
+import os
+import subprocess
+import sys
 import time
+from ctypes import byref, c_uint, windll
+from csv import reader as csv_reader
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -16,11 +23,24 @@ from qmt_gateway.core import add_xtquant_path
 from qmt_gateway.core.enums import BidType, OrderSide, OrderStatus
 from qmt_gateway.db.models import Order, Trade
 from qmt_gateway.db.sqlite import db
+from qmt_gateway.qmt_login_automation import (
+    describe_window,
+    is_probable_login_window,
+    iter_login_windows,
+    locate_password_input,
+    populate_password_input,
+    populate_password_via_layout,
+    populate_password_via_tab,
+    submit_login_via_layout,
+    submit_login_window,
+)
 
 
 # xtquant 模块（延迟导入）
 _xtquant_modules: dict[str, Any] = {}
 DEFAULT_PORTFOLIO_ID = "default"
+QMT_CLIENT_EXECUTABLE = "XtItClient.exe"
+QMT_PROCESS_NOT_FOUND_MARKERS = ("not found", "找不到", "没有运行的实例", "没有找到")
 
 
 def _get_xtquant(name: str):
@@ -56,7 +76,8 @@ class TradeCallback:
 
     def on_disconnected(self):
         """连接断开"""
-        logger.warning("交易接口连接断开")
+        message = self._service.mark_disconnected("交易接口连接断开")
+        logger.critical(message)
 
     def on_stock_order(self, order):
         """委托回报推送"""
@@ -100,6 +121,93 @@ class TradeService:
         self._qmt_path = None
         self._recent_cancel_errors: dict[str, tuple[float, str]] = {}
         self._cancel_error_wait_timeout_sec = 1.2
+        self._connection_message = "交易接口未连接"
+        self._connection_updated_at = datetime.datetime.now().isoformat(timespec="seconds")
+        self._qmt_restart_timeout_sec = 120.0
+        self._qmt_login_timeout_sec = 40.0
+        self._qmt_launch_probe_timeout_sec = 15.0
+        self._restart_password_token_ttl_sec = 120.0
+        self._restart_password_tokens: dict[str, dict[str, object]] = {}
+
+    def _set_connection_state(self, connected: bool, message: str) -> str:
+        self._connected = connected
+        self._connection_message = str(message or ("交易接口已连接" if connected else "交易接口未连接"))
+        self._connection_updated_at = datetime.datetime.now().isoformat(timespec="seconds")
+        return self._connection_message
+
+    def _build_session_id(self) -> int:
+        session_id = int(time.time_ns() % 2147483647)
+        return session_id if session_id > 0 else 1
+
+    def _cleanup_trader(self) -> None:
+        trader = self._trader
+        self._trader = None
+        if trader is None:
+            return
+
+        stop = getattr(trader, "stop", None)
+        if callable(stop):
+            stop()
+
+    def mark_disconnected(self, message: str = "交易接口连接断开") -> str:
+        return self._set_connection_state(False, message)
+
+    def get_connection_status(self) -> dict:
+        return {
+            "connected": bool(self._connected and self._trader is not None and self._account is not None),
+            "message": self._connection_message,
+            "updated_at": self._connection_updated_at,
+        }
+
+    def _prune_restart_password_tokens(self) -> None:
+        now = time.monotonic()
+        for token, entry in list(self._restart_password_tokens.items()):
+            created_at = float(entry.get("created_at", 0.0) or 0.0)
+            if now - created_at > self._restart_password_token_ttl_sec:
+                self._restart_password_tokens.pop(token, None)
+
+    def issue_restart_password_token(self, password: str) -> str:
+        self._prune_restart_password_tokens()
+        token = uuid4().hex
+        self._restart_password_tokens[token] = {
+            "created_at": time.monotonic(),
+            "password": str(password or ""),
+            "status": "",
+        }
+        return token
+
+    def consume_restart_password_token(self, token: str) -> str | None:
+        self._prune_restart_password_tokens()
+        entry = self._restart_password_tokens.get(str(token or ""))
+        if entry is None:
+            return None
+
+        password = str(entry.get("password", "") or "")
+        entry["password"] = ""
+        return password or None
+
+    def record_restart_helper_status(self, token: str, status: str) -> None:
+        self._prune_restart_password_tokens()
+        entry = self._restart_password_tokens.get(str(token or ""))
+        if entry is None:
+            return
+        entry["status"] = str(status or "")
+
+    def get_restart_helper_status(self, token: str | None) -> str | None:
+        if not token:
+            return None
+        self._prune_restart_password_tokens()
+        entry = self._restart_password_tokens.get(str(token or ""))
+        if entry is None:
+            return None
+        status = str(entry.get("status", "") or "").strip()
+        if status.startswith("INFO:"):
+            return None
+        return status or None
+
+    def discard_restart_password_token(self, token: str | None) -> None:
+        if token:
+            self._restart_password_tokens.pop(str(token), None)
 
     def _normalize_cancel_error_keys(self, *keys: object) -> list[str]:
         normalized = []
@@ -221,7 +329,7 @@ class TradeService:
             self._account = StockAccount(account_id, "stock")
 
             # 创建交易对象
-            session_id = int(account_id) if account_id.isdigit() else 1
+            session_id = self._build_session_id()
             self._trader = XtQuantTrader(qmt_path, session_id)
 
             # 注册回调
@@ -235,38 +343,422 @@ class TradeService:
             connect_result = self._trader.connect()
             if connect_result != 0:
                 logger.error(f"连接交易接口失败，错误码: {connect_result}")
-                self._trader.stop()
-                self._trader = None
+                self._cleanup_trader()
+                self._set_connection_state(False, f"已和 QMT 断开连接，错误码: {connect_result}")
                 return False
 
             # 订阅账户
             subscribe_result = self._trader.subscribe(self._account)
             if subscribe_result != 0:
                 logger.error(f"订阅账户失败，错误码: {subscribe_result}")
-                self._trader.stop()
-                self._trader = None
+                self._cleanup_trader()
+                self._set_connection_state(False, f"交易接口订阅失败，错误码: {subscribe_result}")
                 return False
 
-            self._connected = True
+            self._set_connection_state(True, f"交易接口已连接：{account_id}")
             logger.info(f"交易接口连接成功，账号: {account_id}")
             return True
 
         except Exception as e:
             logger.error(f"连接交易接口失败: {e}")
-            self._connected = False
+            self._set_connection_state(False, f"已和 QMT 断开连接: {e}")
             return False
+
+    def _qmt_executable_exists(self, path: Path) -> bool:
+        return path.is_file()
+
+    def _resolve_qmt_client_path(self, qmt_path: str | Path | None = None) -> Path:
+        configured_path = Path(str(qmt_path or self._qmt_path or config.qmt_path or "")).expanduser()
+        if not str(configured_path).strip():
+            raise ValueError("未配置 QMT 路径")
+
+        base_dir = configured_path
+        if configured_path.name.lower() == "userdata_mini":
+            base_dir = configured_path.parent
+
+        executable = base_dir / "bin.x64" / QMT_CLIENT_EXECUTABLE
+        if not self._qmt_executable_exists(executable):
+            raise FileNotFoundError(f"未找到 QMT 客户端: {executable}")
+        return executable
+
+    def _decode_subprocess_output(self, value: bytes | str | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+
+        candidate_encodings = []
+        locale_encoding = locale.getencoding()
+        if locale_encoding:
+            candidate_encodings.append(locale_encoding)
+        candidate_encodings.extend(["mbcs", "gbk", "utf-8"])
+
+        for encoding in dict.fromkeys(candidate_encodings):
+            try:
+                return value.decode(encoding)
+            except (LookupError, UnicodeDecodeError):
+                continue
+        return value.decode("utf-8", errors="ignore")
+
+    def _list_process_ids(self, executable_name: str) -> list[int]:
+        result = subprocess.run(
+            ["tasklist", "/FO", "CSV", "/NH", "/FI", f"IMAGENAME eq {executable_name}"],
+            capture_output=True,
+            text=False,
+            timeout=15,
+            check=False,
+        )
+        stdout = self._decode_subprocess_output(result.stdout)
+        stderr = self._decode_subprocess_output(result.stderr)
+        combined = f"{stdout}\n{stderr}".lower()
+        if result.returncode != 0 and not any(marker in combined for marker in QMT_PROCESS_NOT_FOUND_MARKERS):
+            raise RuntimeError(combined.strip() or f"查询 QMT 进程失败，退出码: {result.returncode}")
+
+        process_ids: list[int] = []
+        for row in csv_reader(io.StringIO(stdout)):
+            if len(row) < 2:
+                continue
+            image_name = str(row[0] or "").strip().lower()
+            if image_name != executable_name.lower():
+                continue
+            try:
+                process_ids.append(int(str(row[1]).replace(",", "").strip()))
+            except ValueError:
+                continue
+        return process_ids
+
+    def _get_current_session_id(self) -> int | None:
+        session_id = c_uint()
+        try:
+            success = windll.kernel32.ProcessIdToSessionId(os.getpid(), byref(session_id))
+        except Exception:
+            return None
+        return int(session_id.value) if success else None
+
+    def _get_active_interactive_user(self) -> tuple[str, int] | None:
+        result = subprocess.run(
+            ["quser"],
+            capture_output=True,
+            text=False,
+            timeout=15,
+            check=False,
+        )
+        output = self._decode_subprocess_output(result.stdout)
+        fallback: tuple[str, int] | None = None
+
+        for raw_line in output.splitlines()[1:]:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                line = line[1:].strip()
+
+            tokens = line.split()
+            if len(tokens) < 2:
+                continue
+
+            username = tokens[0]
+            session_id = None
+            state = ""
+            for idx in range(1, len(tokens)):
+                if tokens[idx].isdigit():
+                    session_id = int(tokens[idx])
+                    state = tokens[idx + 1] if idx + 1 < len(tokens) else ""
+                    break
+
+            if session_id is None:
+                continue
+
+            candidate = (username, session_id)
+            normalized_state = state.lower()
+            if "active" in normalized_state or "运行" in state or "活动" in state:
+                return candidate
+            if fallback is None:
+                fallback = candidate
+
+        return fallback
+
+    def _get_helper_python_executable(self) -> Path:
+        project_root = Path(__file__).resolve().parents[2]
+        venv_python = project_root / ".venv" / "Scripts" / "python.exe"
+        if venv_python.is_file():
+            return venv_python
+        return Path(sys.executable)
+
+    def _build_restart_helper_base_url(self) -> str:
+        port = int(config.server_port or 8130)
+        return f"http://127.0.0.1:{port}"
+
+    def _collect_qmt_process_ids(self, initial_process_id: int | None, executable_name: str) -> list[int]:
+        process_ids: list[int] = []
+        if initial_process_id and int(initial_process_id) > 0:
+            process_ids.append(int(initial_process_id))
+        for process_id in self._list_process_ids(executable_name):
+            if process_id not in process_ids:
+                process_ids.append(process_id)
+        return process_ids
+
+    def _kill_qmt_process(self, executable_name: str) -> str:
+
+        result = subprocess.run(
+            ["taskkill", "/F", "/T", "/IM", executable_name],
+            capture_output=True,
+            text=False,
+            timeout=15,
+            check=False,
+        )
+        stdout = self._decode_subprocess_output(result.stdout)
+        stderr = self._decode_subprocess_output(result.stderr)
+        combined = f"{stdout}\n{stderr}".lower()
+        if result.returncode == 0:
+            return "terminated"
+        if any(marker in combined for marker in QMT_PROCESS_NOT_FOUND_MARKERS):
+            return "not-running"
+        raise RuntimeError(combined.strip() or f"终止 QMT 进程失败，退出码: {result.returncode}")
+
+    def _wait_for_new_process(self, executable_name: str, before_pids: set[int]):
+        deadline = time.monotonic() + max(float(self._qmt_launch_probe_timeout_sec), 1.0)
+        last_seen_pids: list[int] = []
+        while time.monotonic() < deadline:
+            current_pids = self._list_process_ids(executable_name)
+            last_seen_pids = current_pids
+            new_pids = [pid for pid in current_pids if pid not in before_pids]
+            if new_pids:
+                launch_pid = new_pids[0]
+                logger.info("QMT 启动命令已发出: pid={}, active_pids={}", launch_pid, current_pids)
+                return type("LaunchedProcess", (), {"pid": launch_pid})()
+            time.sleep(0.5)
+
+        logger.warning("未在预期时间内观测到新的 QMT 进程: image={}, active_pids={}", executable_name, last_seen_pids)
+        return type("LaunchedProcess", (), {"pid": 0})()
+
+    def _launch_qmt_process_locally(self, executable: Path, before_pids: set[int]):
+        logger.info("启动 QMT 客户端: path={}, cwd={}, mode=shell-open", executable, executable.parent)
+
+        try:
+            os.startfile(str(executable), cwd=str(executable.parent))
+        except TypeError:
+            os.startfile(str(executable))
+
+        return self._wait_for_new_process(executable.name, before_pids)
+
+    def _launch_qmt_process_in_interactive_session(self, executable: Path, before_pids: set[int], password_token: str):
+        active_user = self._get_active_interactive_user()
+        if active_user is None:
+            raise RuntimeError("当前网关运行在 Session 0，且未检测到活动桌面会话，无法启动 QMT 图形界面")
+
+        username, session_id = active_user
+        logger.info("当前进程位于 Session 0，改用交互会话启动 QMT: user={}, session_id={}", username, session_id)
+
+        task_name = f"QmtGatewayLaunch-{uuid4().hex[:8]}"
+        python_executable = self._get_helper_python_executable()
+        python_literal = str(python_executable).replace("'", "''")
+        username_literal = username.replace("'", "''")
+        argument_string = subprocess.list2cmdline(
+            [
+                "-m",
+                "qmt_gateway.qmt_restart_helper",
+                "--base-url",
+                self._build_restart_helper_base_url(),
+                "--token",
+                password_token,
+                "--exe",
+                str(executable),
+                "--launch-timeout",
+                str(self._qmt_launch_probe_timeout_sec),
+                "--login-timeout",
+                str(self._qmt_login_timeout_sec),
+            ]
+        )
+        argument_literal = argument_string.replace("'", "''")
+        cwd_literal = str(executable.parent).replace("'", "''")
+        command = (
+            f"$taskName='{task_name}'; "
+            f"$action=New-ScheduledTaskAction -Execute '{python_literal}' -Argument '{argument_literal}' -WorkingDirectory '{cwd_literal}'; "
+            f"$principal=New-ScheduledTaskPrincipal -UserId '{username_literal}' -LogonType Interactive; "
+            "$task=New-ScheduledTask -Action $action -Principal $principal; "
+            "Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null; "
+            "Start-ScheduledTask -TaskName $taskName; "
+            "Start-Sleep -Seconds 1; "
+            "Unregister-ScheduledTask -TaskName $taskName -Confirm:$false"
+        )
+
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=False,
+            timeout=30,
+            check=False,
+        )
+        stdout = self._decode_subprocess_output(result.stdout)
+        stderr = self._decode_subprocess_output(result.stderr)
+        if result.returncode != 0:
+            combined = (stdout + "\n" + stderr).strip()
+            raise RuntimeError(combined or f"通过交互会话启动 QMT 失败，退出码: {result.returncode}")
+
+        logger.info("已通过交互会话触发 QMT 启动: user={}, session_id={}", username, session_id)
+        return self._wait_for_new_process(executable.name, before_pids)
+
+    def _launch_qmt_process(self, executable: Path, password_token: str | None = None):
+        before_pids = set(self._list_process_ids(executable.name))
+        current_session_id = self._get_current_session_id()
+        if current_session_id == 0:
+            if not password_token:
+                raise RuntimeError("缺少 QMT 重启密码令牌，无法在交互会话中自动填入密码")
+            return self._launch_qmt_process_in_interactive_session(executable, before_pids, password_token)
+        return self._launch_qmt_process_locally(executable, before_pids)
+
+    def _load_pywinauto(self):
+        try:
+            from pywinauto import Application, Desktop
+        except ImportError as exc:
+            raise RuntimeError("缺少 pywinauto 依赖，请先安装后再重试") from exc
+        return Application, Desktop
+
+    def _iter_login_windows(self, desktop, process_ids: list[int] | set[int]):
+        return iter_login_windows(desktop, process_ids)
+
+    def _locate_password_edit(self, window):
+        return locate_password_input(window)
+
+    def _submit_login_window(self, window):
+        submit_login_window(window)
+
+    def _fill_qmt_login_password(self, process_id: int, password: str) -> None:
+        _Application, Desktop = self._load_pywinauto()
+        last_error: Exception | None = None
+        logger.info("开始自动填入 QMT 密码: launcher_pid={}, image={}", process_id, QMT_CLIENT_EXECUTABLE)
+
+        for backend in ("uia", "win32"):
+            try:
+                desktop = Desktop(backend=backend)
+            except Exception as exc:
+                last_error = exc
+                continue
+
+            deadline = time.monotonic() + self._qmt_login_timeout_sec
+            while time.monotonic() < deadline:
+                process_ids = self._collect_qmt_process_ids(process_id, QMT_CLIENT_EXECUTABLE)
+                if not process_ids:
+                    last_error = RuntimeError(f"未检测到 {QMT_CLIENT_EXECUTABLE} 运行进程")
+                    time.sleep(0.5)
+                    continue
+                windows = self._iter_login_windows(desktop, process_ids)
+                for window in windows:
+                    try:
+                        password_edit = self._locate_password_edit(window)
+                        populate_password_input(password_edit, password)
+                        logger.info("已定位 QMT 登录窗口并填入密码: backend={}, process_ids={}", backend, process_ids)
+                        self._submit_login_window(window)
+                        return
+                    except Exception as exc:
+                        try:
+                            populate_password_via_tab(window, password)
+                            logger.info("已通过 Tab 导航填入 QMT 密码: backend={}, process_ids={}", backend, process_ids)
+                            self._submit_login_window(window)
+                            return
+                        except Exception as fallback_exc:
+                            if not is_probable_login_window(window):
+                                last_error = RuntimeError(f"候选窗口仍像启动页，等待登录页出现: {describe_window(window)}")
+                                continue
+                            try:
+                                populate_password_via_layout(window, password)
+                                logger.info("已通过窗口布局坐标填入 QMT 密码: backend={}, process_ids={}", backend, process_ids)
+                                submit_login_via_layout(window)
+                                return
+                            except Exception as layout_exc:
+                                last_error = RuntimeError(
+                                    f"{exc}; fallback={fallback_exc}; layout={layout_exc}; window={describe_window(window)}"
+                                )
+                time.sleep(0.5)
+
+        active_process_ids = self._collect_qmt_process_ids(process_id, QMT_CLIENT_EXECUTABLE)
+        logger.warning(
+            "自动填入 QMT 密码失败，未找到登录窗口: launcher_pid={}, active_pids={}",
+            process_id,
+            active_process_ids,
+        )
+        if last_error is not None:
+            raise RuntimeError(f"自动填入 QMT 密码失败: {last_error}") from last_error
+        raise RuntimeError("自动填入 QMT 密码失败：未找到登录窗口")
+
+    def _connect_with_retry(self, account_id: str, qmt_path: str) -> bool:
+        deadline = time.monotonic() + max(float(self._qmt_restart_timeout_sec), 1.0)
+        while time.monotonic() < deadline:
+            if self.connect(account_id=account_id, qmt_path=qmt_path):
+                return True
+            time.sleep(2)
+        return False
+
+    def _connect_with_helper_status(self, account_id: str, qmt_path: str, password_token: str | None = None) -> dict:
+        deadline = time.monotonic() + max(float(self._qmt_restart_timeout_sec), 1.0)
+        last_message = self.get_connection_status().get("message", "交易接口重连失败")
+
+        while time.monotonic() < deadline:
+            helper_status = self.get_restart_helper_status(password_token)
+            if helper_status:
+                return {"success": False, "error": helper_status}
+
+            if self.connect(account_id=account_id, qmt_path=qmt_path):
+                return {"success": True, "message": "QMT 已重启并重新连接交易接口"}
+
+            last_message = self.get_connection_status().get("message", last_message)
+            time.sleep(2)
+
+        helper_status = self.get_restart_helper_status(password_token)
+        if helper_status:
+            return {"success": False, "error": helper_status}
+        return {"success": False, "error": last_message}
+
+    def restart_qmt(self, password: str) -> dict:
+        resolved_password = str(password or "")
+        if not resolved_password.strip():
+            return {"success": False, "error": "请输入交易密码"}
+
+        account_id = str(self._account_id or config.qmt_account_id or "").strip()
+        qmt_path = str(self._qmt_path or config.qmt_path or "").strip()
+        if not account_id or not qmt_path:
+            return {"success": False, "error": "QMT 账号或路径未配置"}
+
+        password_token: str | None = None
+        try:
+            executable = self._resolve_qmt_client_path(qmt_path)
+            logger.info("准备重启 QMT: qmt_path={}, executable={}", qmt_path, executable)
+            self.disconnect()
+            self._set_connection_state(False, "交易接口连接断开，正在重启 QMT")
+            kill_result = self._kill_qmt_process(executable.name)
+            if kill_result == "terminated":
+                logger.info("已终止现有 QMT 进程: image={}", executable.name)
+            else:
+                logger.info("未发现正在运行的 QMT 进程: image={}", executable.name)
+            if self._get_current_session_id() == 0:
+                password_token = self.issue_restart_password_token(resolved_password)
+            process = self._launch_qmt_process(executable, password_token=password_token)
+            if password_token is None:
+                self._fill_qmt_login_password(process.pid, resolved_password)
+
+            result = self._connect_with_helper_status(account_id, qmt_path, password_token=password_token)
+            if result.get("success"):
+                return result
+            return {"success": False, "error": result.get("error", "交易接口重连失败")}
+        except Exception as exc:
+            logger.error(f"重启 QMT 失败: {exc}")
+            self._set_connection_state(False, f"重启 QMT 失败: {exc}")
+            return {"success": False, "error": str(exc)}
+        finally:
+            self.discard_restart_password_token(password_token)
 
     def disconnect(self):
         """断开交易接口连接"""
         if self._trader is not None:
             try:
-                self._trader.stop()
+                self._cleanup_trader()
                 logger.info("交易接口已断开")
             except Exception as e:
                 logger.error(f"断开交易接口失败: {e}")
             finally:
-                self._trader = None
-                self._connected = False
+                self._account = None
+                self._set_connection_state(False, "交易接口已断开")
 
     def buy(self, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = "") -> dict:
         """买入股票
