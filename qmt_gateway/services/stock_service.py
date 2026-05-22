@@ -113,10 +113,10 @@ class StockService:
         Returns:
             匹配的股票列表
         """
-        logger.info(f"[DEBUG] search_stocks: query='{query}', stocks_count={len(self._stocks)}")
+        logger.debug(f"[DEBUG] search_stocks: query='{query}', stocks_count={len(self._stocks)}")
         
         if not query:
-            logger.info("[DEBUG] search_stocks: empty query")
+            logger.debug("[DEBUG] search_stocks: empty query")
             return []
         
         query = query.lower()
@@ -125,28 +125,28 @@ class StockService:
         # 只检查前5个股票作为示例
         sample_stocks = list(self._stocks.values())[:5]
         for stock in sample_stocks:
-            logger.info(f"[DEBUG] Sample stock: {stock.symbol}, name='{stock.name}', pinyin='{stock.pinyin}'")
+            logger.debug(f"[DEBUG] Sample stock: {stock.symbol}, name='{stock.name}', pinyin='{stock.pinyin}'")
         
         for stock in self._stocks.values():
             # 按代码搜索
             if query in stock.symbol.lower():
-                logger.info(f"[DEBUG] Matched by symbol: {stock.symbol}")
+                logger.debug(f"[DEBUG] Matched by symbol: {stock.symbol}")
                 results.append(stock)
                 continue
             
             # 按名称搜索
             if query in stock.name.lower():
-                logger.info(f"[DEBUG] Matched by name: {stock.name}")
+                logger.debug(f"[DEBUG] Matched by name: {stock.name}")
                 results.append(stock)
                 continue
             
             # 按拼音搜索
             if stock.pinyin and query in stock.pinyin.lower():
-                logger.info(f"[DEBUG] Matched by pinyin: {stock.pinyin}")
+                logger.debug(f"[DEBUG] Matched by pinyin: {stock.pinyin}")
                 results.append(stock)
                 continue
         
-        logger.info(f"[DEBUG] search_stocks: found {len(results)} results")
+        logger.debug(f"[DEBUG] search_stocks: found {len(results)} results")
         # 限制返回数量
         return results[:20]
 

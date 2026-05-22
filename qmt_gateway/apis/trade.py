@@ -6,8 +6,10 @@
 import datetime
 import sqlite3
 
+from fastcore.xml import to_xml
 from fasthtml.common import *
 from loguru import logger
+from starlette.responses import HTMLResponse
 from qmt_gateway.config import config
 from qmt_gateway.db.models import Asset, Position
 from qmt_gateway.db.sqlite import db
@@ -16,6 +18,10 @@ from qmt_gateway.services.stock_service import stock_service
 from qmt_gateway.services.trade_service import trade_service
 
 DEFAULT_PORTFOLIO_ID = "default"
+
+
+def _render_fragment(fragment) -> HTMLResponse:
+    return HTMLResponse(to_xml(fragment))
 
 
 def _as_float(value, default: float = 0.0) -> float:
@@ -134,7 +140,7 @@ def _get_latest_positions(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> list[Posi
 def _snapshot_asset(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> Asset | None:
     # region debug-point asset-snapshot-live
     live = trade_service.get_asset()
-    logger.info("debug asset snapshot live: portfolio_id={}, live={}", portfolio_id, live)
+    logger.debug("debug asset snapshot live: portfolio_id={}, live={}", portfolio_id, live)
     # endregion debug-point asset-snapshot-live
     if not live:
         return None
@@ -191,7 +197,7 @@ def _snapshot_positions(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> None:
 def get_latest_asset_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
     # region debug-point asset-cache-read
     asset = _get_latest_asset(portfolio_id)
-    logger.info(
+    logger.debug(
         "debug asset cache read: portfolio_id={}, cached_asset={}",
         portfolio_id,
         asset.to_dict() if asset else None,
@@ -216,7 +222,7 @@ def get_latest_asset_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
         "frozen_cash": asset.frozen_cash,
     }
     # region debug-point asset-response
-    logger.info("debug asset response: portfolio_id={}, result={}", portfolio_id, result)
+    logger.debug("debug asset response: portfolio_id={}, result={}", portfolio_id, result)
     # endregion debug-point asset-response
     return result
 
@@ -386,7 +392,7 @@ def register_routes(app):
 
         if view == "table":
             from qmt_gateway.web.pages.trading import PositionTable
-            return PositionTable(positions_data)
+            return _render_fragment(PositionTable(positions_data))
 
         return positions_data
 
@@ -403,7 +409,7 @@ def register_routes(app):
 
         if view == "table":
             from qmt_gateway.web.pages.trading import OrdersTable
-            return OrdersTable(orders_data)
+            return _render_fragment(OrdersTable(orders_data))
 
         return orders_data
 
@@ -448,7 +454,7 @@ def register_routes(app):
         result = trade_service.cancel_order(qtoid or order_id)
         if view == "table":
             from qmt_gateway.web.pages.trading import OrdersTable
-            return OrdersTable(get_latest_orders_data())
+            return _render_fragment(OrdersTable(get_latest_orders_data()))
         return result
 
     @app.post("/api/asset/principal")

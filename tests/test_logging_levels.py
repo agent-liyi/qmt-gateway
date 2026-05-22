@@ -1,0 +1,103 @@
+"""Regression tests for debug log levels."""
+
+import datetime
+import importlib
+
+import qmt_gateway.apis.trade as trade_api
+from qmt_gateway.db.models import Asset, Stock
+from qmt_gateway.services.quote_service import QuoteService
+from qmt_gateway.services.stock_service import StockService
+
+
+quote_service_module = importlib.import_module("qmt_gateway.services.quote_service")
+stock_service_module = importlib.import_module("qmt_gateway.services.stock_service")
+
+
+class FakeLogger:
+    def __init__(self):
+        self.records = []
+
+    def debug(self, message, *args):
+        self.records.append(("DEBUG", message, args))
+
+    def info(self, message, *args):
+        self.records.append(("INFO", message, args))
+
+    def warning(self, message, *args):
+        self.records.append(("WARNING", message, args))
+
+    def error(self, message, *args):
+        self.records.append(("ERROR", message, args))
+
+
+def _messages(records, level):
+    return [message for record_level, message, _ in records if record_level == level]
+
+
+def test_stock_service_search_uses_debug_level(monkeypatch):
+    fake_logger = FakeLogger()
+    monkeypatch.setattr(stock_service_module, "logger", fake_logger)
+
+    service = StockService()
+    service._stocks = {
+        "600000.SH": Stock(symbol="600000.SH", name="浦发银行", pinyin="pfyh", last_close=10.0),
+        "000001.SZ": Stock(symbol="000001.SZ", name="平安银行", pinyin="payh", last_close=11.0),
+    }
+
+    results = service.search_stocks("p")
+
+    assert [item.symbol for item in results] == ["600000.SH", "000001.SZ"]
+    debug_messages = _messages(fake_logger.records, "DEBUG")
+    assert any("[DEBUG] search_stocks: query='p'" in message for message in debug_messages)
+    assert any("[DEBUG] Matched by pinyin" in message for message in debug_messages)
+    assert not any("[DEBUG]" in message for message in _messages(fake_logger.records, "INFO"))
+
+
+def test_trade_asset_debug_logs_use_debug_level(monkeypatch):
+    fake_logger = FakeLogger()
+    monkeypatch.setattr(trade_api, "logger", fake_logger)
+
+    asset = Asset(
+        portfolio_id="default",
+        dt=datetime.date.today(),
+        principal=20000.0,
+        cash=18567.67,
+        frozen_cash=0.0,
+        market_value=0.0,
+        total=18567.67,
+    )
+    monkeypatch.setattr(trade_api, "_get_latest_asset", lambda portfolio_id: asset)
+    monkeypatch.setattr(trade_api, "_snapshot_asset", lambda portfolio_id: None)
+
+    result = trade_api.get_latest_asset_data()
+
+    assert result["total"] == 18567.67
+    debug_messages = _messages(fake_logger.records, "DEBUG")
+    assert any("debug asset cache read" in message for message in debug_messages)
+    assert any("debug asset response" in message for message in debug_messages)
+    assert not any("debug asset" in message for message in _messages(fake_logger.records, "INFO"))
+
+
+def test_quote_service_debug_logs_use_debug_level(monkeypatch):
+    fake_logger = FakeLogger()
+    monkeypatch.setattr(quote_service_module, "logger", fake_logger)
+
+    service = QuoteService()
+
+    class FakeXtdata:
+        def subscribe_whole_quote(self, codes, callback):
+            return 2 if codes == service.INDEX_CODES else 1
+
+        def unsubscribe_quote(self, seq):
+            return None
+
+    xtdata = FakeXtdata()
+
+    service._subscribe(xtdata)
+    service._unsubscribe(xtdata)
+
+    debug_messages = _messages(fake_logger.records, "DEBUG")
+    assert any("debug quote subscribe stocks" in message for message in debug_messages)
+    assert any("debug quote subscribe indices" in message for message in debug_messages)
+    assert any("debug quote unsubscribe" in message for message in debug_messages)
+    assert not any("debug quote" in message for message in _messages(fake_logger.records, "INFO"))

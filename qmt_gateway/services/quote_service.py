@@ -129,7 +129,7 @@ class QuoteService:
             # region debug-point quote-subscribe
             stock_result = xtdata.subscribe_whole_quote(code_list, self._on_tick)
             self._stock_subscription_seq = int(stock_result)
-            logger.info(
+            logger.debug(
                 "debug quote subscribe stocks: result={}, available_unsubscribe={}",
                 stock_result,
                 [name for name in dir(xtdata) if "unsubscribe" in name.lower()],
@@ -141,7 +141,7 @@ class QuoteService:
             # region debug-point quote-subscribe-index
             index_result = xtdata.subscribe_whole_quote(self.INDEX_CODES, self._on_tick)
             self._index_subscription_seq = int(index_result)
-            logger.info("debug quote subscribe indices: result={}", index_result)
+            logger.debug("debug quote subscribe indices: result={}", index_result)
             # endregion debug-point quote-subscribe-index
             logger.info(f"已订阅指数行情: {self.INDEX_CODES}")
 
@@ -153,7 +153,7 @@ class QuoteService:
         """取消订阅行情"""
         try:
             # region debug-point quote-unsubscribe
-            logger.info(
+            logger.debug(
                 "debug quote unsubscribe: available_unsubscribe={}",
                 [name for name in dir(xtdata) if "unsubscribe" in name.lower()],
             )

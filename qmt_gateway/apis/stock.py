@@ -3,10 +3,16 @@
 提供股票查询、搜索等功能。
 """
 
+from fastcore.xml import to_xml
 from fasthtml.common import *
 from loguru import logger
+from starlette.responses import HTMLResponse
 
 from qmt_gateway.services.stock_service import stock_service
+
+
+def _render_fragment(fragment) -> HTMLResponse:
+    return HTMLResponse(to_xml(fragment))
 
 
 def _to_float(value) -> float:
@@ -62,27 +68,27 @@ def register_routes(app):
             HTML 格式的下拉列表
         """
         q = stock_search
-        logger.info(f"[DEBUG] search_stocks called with q='{q}'")
+        logger.debug(f"[DEBUG] search_stocks called with q='{q}'")
         
         if not q or len(q) < 1:
-            logger.info("[DEBUG] Empty query, returning empty")
+            logger.debug("[DEBUG] Empty query, returning empty")
             return ""
 
         # 检查股票列表是否已加载
         all_stocks = stock_service.get_all_stocks()
-        logger.info(f"[DEBUG] Total stocks in memory: {len(all_stocks)}")
+        logger.debug(f"[DEBUG] Total stocks in memory: {len(all_stocks)}")
         
         stocks = stock_service.search_stocks(q)
-        logger.info(f"[DEBUG] Found {len(stocks)} stocks for query '{q}'")
+        logger.debug(f"[DEBUG] Found {len(stocks)} stocks for query '{q}'")
         
         if not stocks:
-            return Div("无匹配结果", cls="p-2 text-gray-500 text-sm")
+            return _render_fragment(Div("无匹配结果", cls="p-2 text-gray-500 text-sm"))
         
         # 如果只有一个结果，自动填充
         if len(stocks) == 1:
             stock = stocks[0]
             safe_name = stock.name.replace("'", "\\'")
-            return Div(
+            return _render_fragment(Div(
                 # 下拉列表显示
                 Div(
                     Div(
@@ -103,7 +109,7 @@ def register_routes(app):
                         }}
                     }}, 100);
                 """),
-            )
+            ))
 
         # 多个结果，显示下拉列表
         items = []
@@ -122,7 +128,7 @@ def register_routes(app):
                 )
             )
         
-        return Div(*items)
+        return _render_fragment(Div(*items))
 
     @app.get("/api/stock/info")
     def get_stock_info(request, symbol: str = ""):
@@ -137,20 +143,20 @@ def register_routes(app):
         from qmt_gateway.web.pages.trading import SpeedDialGrid
 
         if not symbol:
-            return SpeedDialGrid(0)
+            return _render_fragment(SpeedDialGrid(0))
 
         stock = stock_service.get_stock(symbol)
         if stock and stock.last_close > 0:
-            return SpeedDialGrid(stock.last_close)
+            return _render_fragment(SpeedDialGrid(stock.last_close))
 
         try:
             from qmt_gateway.core.xtwrapper import require_xtdata
             xtdata = require_xtdata()
             last_close = _get_last_close_from_xtdata(xtdata, symbol)
-            return SpeedDialGrid(last_close)
+            return _render_fragment(SpeedDialGrid(last_close))
         except Exception as e:
             logger.warning(f"获取股票 {symbol} 信息失败: {e}")
-            return SpeedDialGrid(0)
+            return _render_fragment(SpeedDialGrid(0))
 
     @app.get("/api/stock/resolve")
     def resolve_stock(request, q: str = ""):
@@ -168,12 +174,25 @@ def register_routes(app):
         stocks = stock_service.search_stocks(keyword)
         if not stocks:
             return {"ok": False}
+        normalized_keyword = keyword.upper()
         preferred = None
+        exact_code_matches = []
         for item in stocks:
-            if item.name == keyword or item.symbol.upper() == keyword.upper():
+            symbol = (item.symbol or "").upper()
+            code = symbol.split(".")[0]
+            if item.name == keyword or symbol == normalized_keyword:
                 preferred = item
                 break
-        target = preferred or stocks[0]
+            if code == normalized_keyword:
+                exact_code_matches.append(item)
+        if preferred is not None:
+            target = preferred
+        elif len(exact_code_matches) == 1:
+            target = exact_code_matches[0]
+        elif len(stocks) == 1:
+            target = stocks[0]
+        else:
+            return {"ok": False, "ambiguous": True, "count": len(stocks)}
         last_close = float(target.last_close or 0)
         if last_close <= 0:
             try:
