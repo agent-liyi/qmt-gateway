@@ -713,6 +713,14 @@ def TradingPage(
                     resetSpeedDial();
                     return;
                 }
+                // skip auto-resolve when HTMX dropdown already has results
+                var suggestions = document.getElementById('stock-suggestions');
+                if (suggestions && suggestions.children.length > 0) {
+                    var stext = (suggestions.textContent || '').trim();
+                    if (stext && stext !== '无匹配结果') {
+                        return;
+                    }
+                }
                 syncStockByInput();
             }, 250);
         };
@@ -977,6 +985,14 @@ def TradingPage(
             searchInput.addEventListener('blur', syncStockByInput);
             searchInput.addEventListener('keyup', function(e) {
                 if (e && e.key === 'Enter') {
+                    var suggestions = document.getElementById('stock-suggestions');
+                    if (suggestions && suggestions.children.length > 0) {
+                        var stext = (suggestions.textContent || '').trim();
+                        if (stext && stext !== '无匹配结果') {
+                            var firstItem = suggestions.querySelector('[onclick]');
+                            if (firstItem) { firstItem.click(); return; }
+                        }
+                    }
                     syncStockByInput();
                 }
             });
