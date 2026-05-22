@@ -104,8 +104,6 @@ def _is_order_cancellable(status: str) -> bool:
         "unreported",
         "pending",
         "reported",
-        "canceling",
-        "partial_canceling",
         "partial",
     }
 
@@ -210,13 +208,19 @@ def get_latest_asset_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
         return {
             "principal": 0,
             "total": 0,
+            "profit": 0,
+            "profit_ratio": 0,
             "cash": 0,
             "market_value": 0,
             "frozen_cash": 0,
         }
+    profit = asset.total - asset.principal
+    profit_ratio = (profit / asset.principal * 100) if asset.principal > 0 else 0
     result = {
         "principal": asset.principal,
         "total": asset.total,
+        "profit": profit,
+        "profit_ratio": profit_ratio,
         "cash": asset.cash,
         "market_value": asset.market_value,
         "frozen_cash": asset.frozen_cash,
@@ -487,7 +491,13 @@ def register_routes(app):
     def cancel_order(request, qtoid: str = "", order_id: str = "", view: str = "json"):
         """撤单"""
         login_required(request)
-        result = trade_service.cancel_order(qtoid or order_id)
+        target_order_id = qtoid or order_id
+        logger.info("收到撤单请求: order_id={}", target_order_id)
+        result = trade_service.cancel_order(target_order_id)
+        if result.get("success"):
+            logger.info("撤单请求已提交: order_id={}, qtoid={}", target_order_id, result.get("qtoid", ""))
+        else:
+            logger.warning("撤单请求失败: order_id={}, error={}", target_order_id, result.get("error", "未知错误"))
         if view == "table":
             from qmt_gateway.web.pages.trading import OrdersTable
             return _render_fragment(OrdersTable(get_latest_orders_data()))

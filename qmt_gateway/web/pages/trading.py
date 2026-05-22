@@ -222,7 +222,6 @@ def OrderForm(available_cash: float = 0):
             ),
             cls="flex",
         ),
-        Div(id="order-submit-status", cls="mt-3 hidden rounded-md px-3 py-2 text-sm"),
         cls="h-full rounded-xl bg-white p-4 shadow",
     )
 
@@ -502,6 +501,7 @@ def OrdersTable(orders: list[dict] | None = None):
                     Td(
                         Button(
                             "撤单",
+                            type="button",
                             cls="text-blue-600 hover:underline",
                             onclick=(
                                 f"window.cancelOrder('{order_id}', true, '{symbol}', '{safe_name}', "
@@ -533,30 +533,6 @@ def OrdersTable(orders: list[dict] | None = None):
             ),
             cls="overflow-x-auto",
         ),
-        Script("""
-            window.cancelOrder = function(orderId, needConfirm, symbol, name, side, price, shares) {
-                if (!orderId) {
-                    return;
-                }
-                if (needConfirm) {
-                    var detailLines = [
-                        '股票代码：' + String(symbol || '--'),
-                        '股票名称：' + String(name || '--'),
-                        '委托方向：' + String(side || '--'),
-                        '委托价格：' + String(price || '--'),
-                        '委托数量：' + String(shares || '--'),
-                    ];
-                    var message = detailLines.join('\n') + '\n\n确定要撤单吗？';
-                    if (!window.confirm(message)) {
-                        return;
-                    }
-                }
-                htmx.ajax('POST', '/api/trade/cancel?view=table&order_id=' + encodeURIComponent(orderId), {
-                    target: '#positions-orders-container',
-                    swap: 'outerHTML'
-                });
-            };
-        """),
         id="positions-orders-container",
     )
 
@@ -903,22 +879,58 @@ def TradingPage(
             refreshOrderEstimate();
         };
 
-        function setOrderSubmitStatus(message, kind) {
-            var statusEl = document.getElementById('order-submit-status');
-            if (!statusEl) {
+        var tradeToastCounter = 0;
+
+        function dismissTradeToast(toastId) {
+            var toast = document.getElementById(toastId);
+            if (!toast || toast.dataset.closing === '1') {
                 return;
             }
-            var baseCls = 'mt-3 rounded-md px-3 py-2 text-sm';
-            if (!message) {
-                statusEl.textContent = '';
-                statusEl.className = baseCls + ' hidden';
+            toast.dataset.closing = '1';
+            toast.classList.add('opacity-0', '-translate-y-2');
+            window.setTimeout(function() {
+                if (toast && toast.parentNode) {
+                    toast.parentNode.removeChild(toast);
+                }
+            }, 200);
+        }
+
+        function showTradeToast(message, kind) {
+            var container = document.getElementById('trade-toast-container');
+            if (!container || !message) {
                 return;
             }
+
+            var toastId = 'trade-toast-' + String(++tradeToastCounter);
+            var toast = document.createElement('div');
+            toast.id = toastId;
+            toast.className = 'pointer-events-auto flex items-start justify-between gap-3 rounded-xl border bg-white/95 px-4 py-3 shadow-lg transition-all duration-200';
+
             var toneCls = kind === 'error'
-                ? ' border border-red-200 bg-red-50 text-red-700'
-                : ' border border-green-200 bg-green-50 text-green-700';
-            statusEl.textContent = message;
-            statusEl.className = baseCls + toneCls;
+                ? 'border-red-200 text-red-700'
+                : 'border-green-200 text-green-700';
+            toast.className += ' ' + toneCls;
+
+            var content = document.createElement('div');
+            content.className = 'min-w-0 flex-1 text-sm font-medium leading-6';
+            content.textContent = String(message);
+
+            var closeButton = document.createElement('button');
+            closeButton.type = 'button';
+            closeButton.className = 'ml-2 inline-flex h-7 w-7 items-center justify-center rounded-full border border-current/15 text-lg leading-none opacity-70 transition hover:opacity-100';
+            closeButton.setAttribute('aria-label', '关闭提示');
+            closeButton.textContent = '×';
+            closeButton.addEventListener('click', function() {
+                dismissTradeToast(toastId);
+            });
+
+            toast.appendChild(content);
+            toast.appendChild(closeButton);
+            container.appendChild(toast);
+
+            window.setTimeout(function() {
+                dismissTradeToast(toastId);
+            }, 7000);
         }
 
         function setTradeButtonsDisabled(disabled) {
@@ -944,6 +956,62 @@ def TradingPage(
             });
         }
 
+        window.cancelOrder = function(orderId, needConfirm, symbol, name, side, price, shares) {
+            if (!orderId) {
+                showTradeToast('无效委托编号，无法撤单', 'error');
+                return;
+            }
+
+            if (needConfirm) {
+                var detailLines = [
+                    '股票代码：' + String(symbol || '--'),
+                    '股票名称：' + String(name || '--'),
+                    '委托方向：' + String(side || '--'),
+                    '委托价格：' + String(price || '--'),
+                    '委托数量：' + String(shares || '--'),
+                ];
+                var message = detailLines.join('\\n') + '\\n\\n确定要撤单吗？';
+                if (!window.confirm(message)) {
+                    return;
+                }
+            }
+
+            var body = new URLSearchParams();
+            body.set('order_id', String(orderId));
+
+            fetch('/api/trade/cancel', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                },
+                body: body.toString(),
+            })
+                .then(function(resp) {
+                    return resp.json()
+                        .then(function(data) {
+                            return { ok: resp.ok, data: data || {} };
+                        })
+                        .catch(function() {
+                            return { ok: resp.ok, data: {} };
+                        });
+                })
+                .then(function(result) {
+                    var data = result.data || {};
+                    if (!result.ok || !data.success) {
+                        var errorMessage = String(data.error || '未知错误');
+                        showTradeToast('撤单失败：' + errorMessage, 'error');
+                        return;
+                    }
+
+                    showTradeToast('撤单已提交：' + String(symbol || orderId), 'success');
+                    refreshOrdersTable();
+                })
+                .catch(function(error) {
+                    var errorMessage = error && error.message ? error.message : '网络错误';
+                    showTradeToast('撤单失败：' + errorMessage, 'error');
+                });
+        };
+
         window.submitTradeOrder = function(side) {
             var orderSide = side === 'sell' ? 'sell' : 'buy';
             var sideText = orderSide === 'buy' ? '买入' : '卖出';
@@ -957,20 +1025,20 @@ def TradingPage(
             var priceInput = document.getElementById('order-price');
             var sharesInput = document.getElementById('est-shares');
             if (!symbolInput || !orderTypeInput || !priceInput || !sharesInput) {
-                setOrderSubmitStatus('下单控件未就绪，请刷新页面后重试', 'error');
+                showTradeToast('下单控件未就绪，请刷新页面后重试', 'error');
                 return;
             }
 
             var symbol = String(symbolInput.value || '').trim();
             if (!symbol) {
-                setOrderSubmitStatus('请先选择股票', 'error');
+                showTradeToast('请先选择股票', 'error');
                 return;
             }
 
             var shares = parseInt(sharesInput.value || '0', 10);
             if (!(shares > 0)) {
                 var mode = getOrderMode();
-                setOrderSubmitStatus(
+                showTradeToast(
                     mode === 'amount' ? '下单金额不足以生成有效股数' : '请输入有效下单数量',
                     'error'
                 );
@@ -980,7 +1048,7 @@ def TradingPage(
             var orderType = String(orderTypeInput.value || 'limit');
             var price = Number(priceInput.value || '0');
             if (orderType === 'limit' && !(price > 0)) {
-                setOrderSubmitStatus('请输入有效委托价格', 'error');
+                showTradeToast('请输入有效委托价格', 'error');
                 return;
             }
             if (orderType !== 'limit') {
@@ -988,7 +1056,6 @@ def TradingPage(
             }
 
             setTradeButtonsDisabled(true);
-            setOrderSubmitStatus(sideText + '委托提交中...', 'success');
 
             var body = new URLSearchParams();
             body.set('symbol', symbol);
@@ -1015,12 +1082,12 @@ def TradingPage(
                     var data = result.data || {};
                     if (!result.ok || !data.success) {
                         var errorMessage = String(data.error || '未知错误');
-                        setOrderSubmitStatus(sideText + '委托失败：' + errorMessage, 'error');
+                        showTradeToast(sideText + '委托失败：' + errorMessage, 'error');
                         return;
                     }
 
                     var stockName = nameInput && nameInput.value ? String(nameInput.value) : symbol;
-                    setOrderSubmitStatus(
+                    showTradeToast(
                         sideText + '委托已提交：' + stockName + ' ' + String(shares) + '股',
                         'success'
                     );
@@ -1028,7 +1095,7 @@ def TradingPage(
                 })
                 .catch(function(error) {
                     var errorMessage = error && error.message ? error.message : '网络错误';
-                    setOrderSubmitStatus(sideText + '委托失败：' + errorMessage, 'error');
+                    showTradeToast(sideText + '委托失败：' + errorMessage, 'error');
                 })
                 .finally(function() {
                     setTradeButtonsDisabled(false);
@@ -1151,6 +1218,10 @@ def TradingPage(
     return create_main_page(
         # JavaScript
         stock_selection_script,
+        Div(
+            id="trade-toast-container",
+            cls="pointer-events-none fixed left-1/2 top-4 z-[100] flex w-full max-w-xl -translate-x-1/2 flex-col gap-2 px-4",
+        ),
         # 第1行：资产信息 + 下单 + Speed Dial
         Div(
             AccountInfo(asset),

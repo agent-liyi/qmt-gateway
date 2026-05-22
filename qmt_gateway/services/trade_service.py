@@ -4,6 +4,7 @@
 """
 
 import datetime
+import time
 from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
@@ -81,7 +82,8 @@ class TradeCallback:
 
     def on_cancel_error(self, cancel_error):
         """撤单失败推送"""
-        logger.error(f"撤单失败: {cancel_error}")
+        message = self._service.record_cancel_error(cancel_error)
+        logger.error(f"撤单失败: {message}")
 
 
 class TradeService:
@@ -96,6 +98,85 @@ class TradeService:
         self._connected = False
         self._account_id = None
         self._qmt_path = None
+        self._recent_cancel_errors: dict[str, tuple[float, str]] = {}
+        self._cancel_error_wait_timeout_sec = 1.2
+
+    def _normalize_cancel_error_keys(self, *keys: object) -> list[str]:
+        normalized = []
+        for key in keys:
+            value = str(key or "").strip()
+            if value:
+                normalized.append(value)
+        return list(dict.fromkeys(normalized))
+
+    def _format_cancel_error(self, cancel_error) -> str:
+        error_message = str(
+            getattr(cancel_error, "error_msg", "")
+            or getattr(cancel_error, "error_message", "")
+            or getattr(cancel_error, "msg", "")
+            or ""
+        ).strip()
+        error_code = str(
+            getattr(cancel_error, "error_id", "")
+            or getattr(cancel_error, "error_code", "")
+            or ""
+        ).strip()
+
+        if error_message and error_code and error_code not in error_message:
+            return f"{error_message} (错误码: {error_code})"
+        if error_message:
+            return error_message
+        if error_code:
+            return f"撤单失败，错误码: {error_code}"
+        return str(cancel_error)
+
+    def record_cancel_error(self, cancel_error) -> str:
+        message = self._format_cancel_error(cancel_error)
+        keys = self._normalize_cancel_error_keys(
+            getattr(cancel_error, "order_id", ""),
+            getattr(cancel_error, "order_sysid", ""),
+            getattr(cancel_error, "foid", ""),
+            getattr(cancel_error, "qtoid", ""),
+            getattr(cancel_error, "order_remark", ""),
+            "__latest__",
+        )
+        now = time.monotonic()
+        for key in keys:
+            self._recent_cancel_errors[key] = (now, message)
+        return message
+
+    def _clear_recent_cancel_errors(self, *keys: object) -> None:
+        for key in self._normalize_cancel_error_keys(*keys, "__latest__"):
+            self._recent_cancel_errors.pop(key, None)
+
+    def _consume_recent_cancel_error(self, *keys: object) -> str | None:
+        now = time.monotonic()
+        for key in self._normalize_cancel_error_keys(*keys, "__latest__"):
+            item = self._recent_cancel_errors.get(key)
+            if item is None:
+                continue
+            ts, message = item
+            self._recent_cancel_errors.pop(key, None)
+            if now - ts <= 5:
+                return message
+        return None
+
+    def _wait_for_cancel_error(self, *keys: object) -> str | None:
+        immediate = self._consume_recent_cancel_error(*keys)
+        if immediate:
+            return immediate
+
+        timeout_sec = max(float(self._cancel_error_wait_timeout_sec), 0.0)
+        if timeout_sec <= 0:
+            return None
+
+        deadline = time.monotonic() + timeout_sec
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+            message = self._consume_recent_cancel_error(*keys)
+            if message:
+                return message
+        return None
 
     def _prepare_xtquant_env(self, qmt_path: str) -> None:
         """在连接交易接口前准备 xtquant 运行环境。"""
@@ -322,8 +403,13 @@ class TradeService:
         try:
             db_order = db.get_order(order_id) or db.get_order_by_foid(order_id)
             foid = str(db_order.foid if db_order and db_order.foid else order_id)
+            qtoid = str(db_order.qtoid if db_order and db_order.qtoid else order_id)
+            self._clear_recent_cancel_errors(order_id, foid, qtoid)
             result = self._trader.cancel_order_stock(self._account, int(foid))
             if result == 0:
+                cancel_error = self._wait_for_cancel_error(order_id, foid, qtoid)
+                if cancel_error:
+                    return {"success": False, "error": cancel_error}
                 if db_order is not None:
                     db.update_order(db_order.qtoid, status=OrderStatus.CANCELED)
                 return {"success": True, "qtoid": db_order.qtoid if db_order else order_id}
