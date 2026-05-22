@@ -138,6 +138,7 @@ def OrderForm(available_cash: float = 0):
                 id="order-price",
                 placeholder="委托价格",
                 cls="uk-input input input-bordered flex-1 ml-2 text-right min-w-[130px]",
+                oninput="refreshOrderEstimate()",
             ),
             cls="flex mb-4 items-center w-full",
         ),
@@ -205,16 +206,23 @@ def OrderForm(available_cash: float = 0):
         Div(
             Button(
                 "买入",
+                id="buy-button",
+                type="button",
                 cls="btn btn-error flex-1 text-white",
                 style="background-color: #dc2626;",
+                onclick="window.submitTradeOrder('buy')",
             ),
             Button(
                 "卖出",
+                id="sell-button",
+                type="button",
                 cls="btn btn-success flex-1 text-white ml-2",
                 style="background-color: #16a34a;",
+                onclick="window.submitTradeOrder('sell')",
             ),
             cls="flex",
         ),
+        Div(id="order-submit-status", cls="mt-3 hidden rounded-md px-3 py-2 text-sm"),
         cls="h-full rounded-xl bg-white p-4 shadow",
     )
 
@@ -657,6 +665,32 @@ def TradingPage(
                 .catch(function() {});
         }
 
+        function clearSelectedStock() {
+            var symbolInput = document.getElementById('selected-symbol');
+            var nameInput = document.getElementById('selected-stock-name');
+            var lastCloseInput = document.getElementById('selected-last-close');
+            if (symbolInput) {
+                symbolInput.value = '';
+            }
+            if (nameInput) {
+                nameInput.value = '';
+            }
+            if (lastCloseInput) {
+                lastCloseInput.value = '0';
+            }
+            resetSpeedDial();
+        }
+
+        function isSelectedStockValue(raw) {
+            var symbolInput = document.getElementById('selected-symbol');
+            var nameInput = document.getElementById('selected-stock-name');
+            if (!symbolInput || !nameInput || !symbolInput.value) {
+                return false;
+            }
+            var expectedValue = (nameInput.value || symbolInput.value) + ' (' + symbolInput.value + ')';
+            return String(raw || '').trim() === expectedValue;
+        }
+
         function syncStockByInput() {
             var searchInput = document.getElementById('stock-search');
             var symbolInput = document.getElementById('selected-symbol');
@@ -666,13 +700,7 @@ def TradingPage(
             }
             var raw = searchInput.value || '';
             if (!String(raw).trim()) {
-                symbolInput.value = '';
-                nameInput.value = '';
-                var lastCloseInput = document.getElementById('selected-last-close');
-                if (lastCloseInput) {
-                    lastCloseInput.value = '0';
-                }
-                resetSpeedDial();
+                clearSelectedStock();
                 return;
             }
             var symbol = parseSymbolFromInputValue(raw);
@@ -698,30 +726,12 @@ def TradingPage(
             stockInputTimer = setTimeout(function() {
                 var value = String(raw || '').trim();
                 if (value.length < 2) {
-                    var symbolInput = document.getElementById('selected-symbol');
-                    var nameInput = document.getElementById('selected-stock-name');
-                    if (symbolInput) {
-                        symbolInput.value = '';
-                    }
-                    if (nameInput) {
-                        nameInput.value = '';
-                    }
-                    var lastCloseInput = document.getElementById('selected-last-close');
-                    if (lastCloseInput) {
-                        lastCloseInput.value = '0';
-                    }
-                    resetSpeedDial();
+                    clearSelectedStock();
                     return;
                 }
-                // skip auto-resolve when HTMX dropdown already has results
-                var suggestions = document.getElementById('stock-suggestions');
-                if (suggestions && suggestions.children.length > 0) {
-                    var stext = (suggestions.textContent || '').trim();
-                    if (stext && stext !== '无匹配结果') {
-                        return;
-                    }
+                if (!isSelectedStockValue(value)) {
+                    clearSelectedStock();
                 }
-                syncStockByInput();
             }, 250);
         };
 
@@ -891,6 +901,138 @@ def TradingPage(
         };
         window.onSharesChange = function() {
             refreshOrderEstimate();
+        };
+
+        function setOrderSubmitStatus(message, kind) {
+            var statusEl = document.getElementById('order-submit-status');
+            if (!statusEl) {
+                return;
+            }
+            var baseCls = 'mt-3 rounded-md px-3 py-2 text-sm';
+            if (!message) {
+                statusEl.textContent = '';
+                statusEl.className = baseCls + ' hidden';
+                return;
+            }
+            var toneCls = kind === 'error'
+                ? ' border border-red-200 bg-red-50 text-red-700'
+                : ' border border-green-200 bg-green-50 text-green-700';
+            statusEl.textContent = message;
+            statusEl.className = baseCls + toneCls;
+        }
+
+        function setTradeButtonsDisabled(disabled) {
+            ['buy-button', 'sell-button'].forEach(function(id) {
+                var button = document.getElementById(id);
+                if (button) {
+                    button.disabled = !!disabled;
+                }
+            });
+        }
+
+        function refreshOrdersTable() {
+            if (!window.htmx) {
+                return;
+            }
+            var container = document.getElementById('positions-orders-container');
+            if (!container) {
+                return;
+            }
+            htmx.ajax('GET', '/api/trade/orders?view=table', {
+                target: '#positions-orders-container',
+                swap: 'outerHTML',
+            });
+        }
+
+        window.submitTradeOrder = function(side) {
+            var orderSide = side === 'sell' ? 'sell' : 'buy';
+            var sideText = orderSide === 'buy' ? '买入' : '卖出';
+            if (window.refreshOrderEstimate) {
+                window.refreshOrderEstimate();
+            }
+
+            var symbolInput = document.getElementById('selected-symbol');
+            var nameInput = document.getElementById('selected-stock-name');
+            var orderTypeInput = document.getElementById('order-type');
+            var priceInput = document.getElementById('order-price');
+            var sharesInput = document.getElementById('est-shares');
+            if (!symbolInput || !orderTypeInput || !priceInput || !sharesInput) {
+                setOrderSubmitStatus('下单控件未就绪，请刷新页面后重试', 'error');
+                return;
+            }
+
+            var symbol = String(symbolInput.value || '').trim();
+            if (!symbol) {
+                setOrderSubmitStatus('请先选择股票', 'error');
+                return;
+            }
+
+            var shares = parseInt(sharesInput.value || '0', 10);
+            if (!(shares > 0)) {
+                var mode = getOrderMode();
+                setOrderSubmitStatus(
+                    mode === 'amount' ? '下单金额不足以生成有效股数' : '请输入有效下单数量',
+                    'error'
+                );
+                return;
+            }
+
+            var orderType = String(orderTypeInput.value || 'limit');
+            var price = Number(priceInput.value || '0');
+            if (orderType === 'limit' && !(price > 0)) {
+                setOrderSubmitStatus('请输入有效委托价格', 'error');
+                return;
+            }
+            if (orderType !== 'limit') {
+                price = 0;
+            }
+
+            setTradeButtonsDisabled(true);
+            setOrderSubmitStatus(sideText + '委托提交中...', 'success');
+
+            var body = new URLSearchParams();
+            body.set('symbol', symbol);
+            body.set('price', orderType === 'limit' ? price.toFixed(2) : '0');
+            body.set('shares', String(shares));
+
+            fetch('/api/trade/' + orderSide, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                },
+                body: body.toString(),
+            })
+                .then(function(resp) {
+                    return resp.json()
+                        .then(function(data) {
+                            return { ok: resp.ok, data: data || {} };
+                        })
+                        .catch(function() {
+                            return { ok: resp.ok, data: {} };
+                        });
+                })
+                .then(function(result) {
+                    var data = result.data || {};
+                    if (!result.ok || !data.success) {
+                        var errorMessage = String(data.error || '未知错误');
+                        setOrderSubmitStatus(sideText + '委托失败：' + errorMessage, 'error');
+                        return;
+                    }
+
+                    var stockName = nameInput && nameInput.value ? String(nameInput.value) : symbol;
+                    setOrderSubmitStatus(
+                        sideText + '委托已提交：' + stockName + ' ' + String(shares) + '股',
+                        'success'
+                    );
+                    refreshOrdersTable();
+                })
+                .catch(function(error) {
+                    var errorMessage = error && error.message ? error.message : '网络错误';
+                    setOrderSubmitStatus(sideText + '委托失败：' + errorMessage, 'error');
+                })
+                .finally(function() {
+                    setTradeButtonsDisabled(false);
+                });
         };
 
         window.onOrderModeChange = function() {

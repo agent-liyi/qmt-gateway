@@ -437,14 +437,50 @@ def register_routes(app):
     def buy_stock(request, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = ""):
         """买入股票"""
         login_required(request)
+        logger.info("收到买入委托请求: symbol={}, price={}, shares={}", symbol, price, shares)
         result = trade_service.buy(symbol, price, shares, qtoid=qtoid, strategy_id=strategy_id)
+        if result.get("success"):
+            logger.info(
+                "买入委托已提交: symbol={}, shares={}, price={}, qtoid={}, order_id={}",
+                symbol,
+                shares,
+                price,
+                result.get("qtoid", ""),
+                result.get("order_id", ""),
+            )
+        else:
+            logger.warning(
+                "买入委托失败: symbol={}, shares={}, price={}, error={}",
+                symbol,
+                shares,
+                price,
+                result.get("error", "未知错误"),
+            )
         return result
 
     @app.post("/api/trade/sell")
     def sell_stock(request, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = ""):
         """卖出股票"""
         login_required(request)
+        logger.info("收到卖出委托请求: symbol={}, price={}, shares={}", symbol, price, shares)
         result = trade_service.sell(symbol, price, shares, qtoid=qtoid, strategy_id=strategy_id)
+        if result.get("success"):
+            logger.info(
+                "卖出委托已提交: symbol={}, shares={}, price={}, qtoid={}, order_id={}",
+                symbol,
+                shares,
+                price,
+                result.get("qtoid", ""),
+                result.get("order_id", ""),
+            )
+        else:
+            logger.warning(
+                "卖出委托失败: symbol={}, shares={}, price={}, error={}",
+                symbol,
+                shares,
+                price,
+                result.get("error", "未知错误"),
+            )
         return result
 
     @app.post("/api/trade/cancel")
