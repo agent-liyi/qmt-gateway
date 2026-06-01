@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 from pywinauto import Desktop
 from qmt_gateway.qmt_login_automation import (
     describe_window,
+    ensure_independent_trading_checked,
     is_probable_login_window,
     iter_login_windows,
     locate_password_input,
@@ -107,8 +108,9 @@ def _get_probable_login_windows(desktop, process_ids: list[int] | set[int]):
 
 def _submit_login_attempt(window, password: str) -> str:
     try:
+        ensure_independent_trading_checked(window)
         password_edit = locate_password_input(window)
-        populate_password_input(password_edit, password)
+        populate_password_input(window, password_edit, password)
         submit_login_window(window)
         return "控件树"
     except Exception as exc:
@@ -151,7 +153,14 @@ def _wait_for_login_completion(desktop, process_ids: list[int] | set[int], submi
     return False
 
 
-def restart_qmt_in_interactive_session(base_url: str, token: str, executable: Path, launch_timeout: float, login_timeout: float) -> None:
+def restart_qmt_in_interactive_session(
+    base_url: str,
+    token: str,
+    executable: Path,
+    launch_timeout: float,
+    login_timeout: float,
+    retry_delay: float = 3.0,
+) -> None:
     password = _fetch_password(base_url, token)
     before_pids = set(_list_process_ids(executable.name))
 
@@ -162,12 +171,15 @@ def restart_qmt_in_interactive_session(base_url: str, token: str, executable: Pa
 
     current_pids = _wait_for_new_process(executable.name, before_pids, launch_timeout)
 
+    max_attempts = 2
+    attempt = 0
     for backend in ("uia", "win32"):
+        if attempt >= max_attempts:
+            break
         desktop = Desktop(backend=backend)
         deadline = time.monotonic() + max(float(login_timeout), 1.0)
         last_error: Exception | None = None
-        retries_remaining = 1
-        while time.monotonic() < deadline:
+        while time.monotonic() < deadline and attempt < max_attempts:
             windows = _get_probable_login_windows(desktop, current_pids)
             if not windows:
                 current_pids = _list_process_ids(executable.name) or current_pids
@@ -175,10 +187,18 @@ def restart_qmt_in_interactive_session(base_url: str, token: str, executable: Pa
                 continue
 
             for window in windows:
+                if attempt >= max_attempts:
+                    break
+                attempt += 1
                 try:
                     strategy = _submit_login_attempt(window, password)
                 except Exception as exc:
                     last_error = exc
+                    _report_status(
+                        base_url,
+                        token,
+                        f"WARN: 第 {attempt}/{max_attempts} 次自动登录失败: {exc}; window={describe_window(window)}",
+                    )
                     continue
 
                 window_description = describe_window(window)
@@ -188,15 +208,20 @@ def restart_qmt_in_interactive_session(base_url: str, token: str, executable: Pa
                     return
 
                 last_error = RuntimeError(f"已通过{strategy}填入并提交 QMT 登录，但登录窗口仍然可见: {window_description}")
-                if retries_remaining > 0:
-                    retries_remaining -= 1
-                    _report_status(base_url, token, f"INFO: 登录窗口在提交后仍然可见，准备重试一次: {window_description}")
-                    break
+                _report_status(
+                    base_url,
+                    token,
+                    f"INFO: 登录窗口在提交后仍然可见，准备重试一次（等待 {retry_delay:.1f} 秒以避开干扰）: {window_description}",
+                )
+                break
 
-                raise last_error
-
-            current_pids = _list_process_ids(executable.name) or current_pids
-            time.sleep(0.5)
+            if last_error is not None and attempt < max_attempts and time.monotonic() < deadline:
+                _report_status(
+                    base_url,
+                    token,
+                    f"INFO: 等待 {retry_delay:.1f} 秒后进行第 {attempt + 1}/{max_attempts} 次重试",
+                )
+                time.sleep(max(float(retry_delay), 0.0))
         if last_error is not None:
             raise RuntimeError(f"自动填入 QMT 密码失败: {last_error}") from last_error
 
@@ -210,6 +235,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--exe", required=True)
     parser.add_argument("--launch-timeout", type=float, default=15.0)
     parser.add_argument("--login-timeout", type=float, default=40.0)
+    parser.add_argument("--retry-delay", type=float, default=3.0)
     return parser.parse_args(argv)
 
 
@@ -223,6 +249,7 @@ def main(argv: list[str] | None = None) -> int:
             executable=executable,
             launch_timeout=args.launch_timeout,
             login_timeout=args.login_timeout,
+            retry_delay=args.retry_delay,
         )
         return 0
     except Exception as exc:

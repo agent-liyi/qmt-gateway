@@ -33,6 +33,7 @@ from qmt_gateway.qmt_login_automation import (
     populate_password_via_tab,
     submit_login_via_layout,
     submit_login_window,
+    ensure_independent_trading_checked,
 )
 
 
@@ -126,6 +127,7 @@ class TradeService:
         self._qmt_restart_timeout_sec = 120.0
         self._qmt_login_timeout_sec = 40.0
         self._qmt_launch_probe_timeout_sec = 15.0
+        self._qmt_login_retry_delay_sec = 3.0
         self._restart_password_token_ttl_sec = 120.0
         self._restart_password_tokens: dict[str, dict[str, object]] = {}
 
@@ -568,6 +570,8 @@ class TradeService:
                 str(self._qmt_launch_probe_timeout_sec),
                 "--login-timeout",
                 str(self._qmt_login_timeout_sec),
+                "--retry-delay",
+                str(self._qmt_login_retry_delay_sec),
             ]
         )
         argument_literal = argument_string.replace("'", "''")
@@ -646,8 +650,9 @@ class TradeService:
                 windows = self._iter_login_windows(desktop, process_ids)
                 for window in windows:
                     try:
+                        ensure_independent_trading_checked(window)
                         password_edit = self._locate_password_edit(window)
-                        populate_password_input(password_edit, password)
+                        populate_password_input(window, password_edit, password)
                         logger.info("已定位 QMT 登录窗口并填入密码: backend={}, process_ids={}", backend, process_ids)
                         self._submit_login_window(window)
                         return

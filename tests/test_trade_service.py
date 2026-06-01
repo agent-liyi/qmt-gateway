@@ -223,6 +223,7 @@ def test_fill_qmt_login_password_uses_active_process_ids(monkeypatch):
     seen_process_ids = []
     filled_passwords = []
     submitted = []
+    calls = []
     fake_window = object()
 
     class FakeEdit:
@@ -230,6 +231,7 @@ def test_fill_qmt_login_password_uses_active_process_ids(monkeypatch):
             return None
 
         def set_edit_text(self, password):
+            calls.append(("fill", password))
             filled_passwords.append(password)
 
     monkeypatch.setattr(service, "_load_pywinauto", lambda: (object(), lambda backend=None: object()))
@@ -239,14 +241,21 @@ def test_fill_qmt_login_password_uses_active_process_ids(monkeypatch):
         "_iter_login_windows",
         lambda desktop, process_ids: seen_process_ids.append(tuple(process_ids)) or [fake_window],
     )
-    monkeypatch.setattr(service, "_locate_password_edit", lambda window: FakeEdit())
-    monkeypatch.setattr(service, "_submit_login_window", lambda window: submitted.append(window))
+    monkeypatch.setattr(trade_service_module, "ensure_independent_trading_checked", lambda window: calls.append(("check", window)) or True)
+    monkeypatch.setattr(service, "_locate_password_edit", lambda window: calls.append(("locate", window)) or FakeEdit())
+    monkeypatch.setattr(service, "_submit_login_window", lambda window: calls.append(("submit", window)) or submitted.append(window))
 
     service._fill_qmt_login_password(4321, "trade-secret")
 
     assert seen_process_ids == [(9876,)]
     assert filled_passwords == ["trade-secret"]
     assert submitted == [fake_window]
+    assert calls == [
+        ("check", fake_window),
+        ("locate", fake_window),
+        ("fill", "trade-secret"),
+        ("submit", fake_window),
+    ]
 
 
 def test_launch_qmt_process_uses_shell_open_and_detects_new_pid(monkeypatch):

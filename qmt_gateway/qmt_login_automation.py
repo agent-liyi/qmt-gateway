@@ -5,6 +5,7 @@ from __future__ import annotations
 QMT_LOGIN_BUTTON_TEXTS = ("登录", "登 录", "确定", "确认", "进入")
 QMT_PASSWORD_HINT_TOKENS = ("交易密码", "密码", "password", "passwd", "pwd")
 QMT_ACCOUNT_HINT_TOKENS = ("账号", "账户", "account", "user", "客户号", "资金账号")
+QMT_INDEPENDENT_TRADING_HINT_TOKENS = ("独立交易", "独立 交易", "independent trade", "独立下单", "独立委托", "独立登录")
 QMT_LOGIN_WINDOW_TITLE_TOKENS = ("qmt", "国金", "交易端", "交易终端", "sinolink")
 QMT_SPLASH_WINDOW_TITLES = ("xtitclient",)
 QMT_PASSWORD_FIELD_CENTER = (0.50, 0.70)
@@ -106,6 +107,51 @@ def _control_text(control) -> str:
         return ""
 
 
+def _control_position(control) -> tuple[int, int]:
+    try:
+        rect = control.rectangle()
+    except Exception:
+        return (0, 0)
+    try:
+        top = int(getattr(rect, "top", 0))
+        left = int(getattr(rect, "left", 0))
+    except (TypeError, ValueError):
+        return (0, 0)
+    return (top, left)
+
+
+def _visible_input_fields(window):
+    """Return visible, enabled, interactive input controls in the window,
+    ordered top-to-bottom (and left-to-right as a tie-breaker).
+
+    The QMT login window contains a small, fixed set of inputs that sit
+    above the "独立交易" checkbox and the login button. We rely on this
+    invariant: the *first* input with a non-empty value is the account
+    field, and the *next* input is the password field.
+    """
+
+    inputs: list[tuple[object, tuple[int, int]]] = []
+    for control in _descendants(window):
+        if not _is_visible(control) or not _is_enabled(control):
+            continue
+        descriptor = _control_descriptor(control)
+        if not _is_interactive_input(control, descriptor):
+            continue
+        inputs.append((control, _control_position(control)))
+
+    inputs.sort(key=lambda item: (item[1][0], item[1][1]))
+    return [control for control, _ in inputs]
+
+
+def _control_index(controls, target) -> int:
+    if target is None:
+        return -1
+    for index, control in enumerate(controls):
+        if control is target:
+            return index
+    return -1
+
+
 def _iter_control_context(control):
     current = control
     for _ in range(3):
@@ -116,6 +162,46 @@ def _iter_control_context(control):
         if current is None:
             break
         yield current
+
+
+def _locate_following_input(controls, start_index: int, *, exclude_control=None, prefer_edit_like: bool = False):
+    first_interactive = None
+
+    for control in controls[start_index + 1 :]:
+        if control is exclude_control or not _is_visible(control) or not _is_enabled(control):
+            continue
+        descriptor = _control_descriptor(control)
+        if _is_account_descriptor(descriptor):
+            continue
+        if not _is_interactive_input(control, descriptor):
+            continue
+        if prefer_edit_like and _is_edit_like(control, descriptor):
+            return control
+        if first_interactive is None:
+            first_interactive = control
+            if not prefer_edit_like:
+                return control
+
+    return first_interactive
+
+
+def _locate_nearby_toggle(controls, anchor_index: int):
+    if anchor_index < 0:
+        return None
+
+    max_distance = min(4, len(controls))
+    for distance in range(1, max_distance):
+        for candidate_index in (anchor_index - distance, anchor_index + distance):
+            if candidate_index < 0 or candidate_index >= len(controls):
+                continue
+            candidate = controls[candidate_index]
+            if not _is_visible(candidate) or not _is_enabled(candidate):
+                continue
+            descriptor = _control_descriptor(candidate)
+            if _is_checkbox_descriptor(descriptor) or _is_toggle_control(candidate):
+                return candidate
+
+    return None
 
 
 def _window_relative_coords(window, x_ratio: float, y_ratio: float) -> tuple[int, int]:
@@ -142,6 +228,64 @@ def _click_window_relative(window, x_ratio: float, y_ratio: float) -> tuple[int,
     except Exception as exc:
         raise RuntimeError(f"点击 QMT 登录窗口失败: coords={coords}, error={exc}") from exc
     return coords
+
+
+def _window_handle(window) -> int | None:
+    handle = getattr(window, "handle", None)
+    if handle:
+        try:
+            return int(handle)
+        except (TypeError, ValueError):
+            return None
+    element = getattr(window, "element_info", None)
+    if element is None:
+        return None
+    element_handle = getattr(element, "handle", None)
+    try:
+        return int(element_handle) if element_handle else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_window_minimized(window) -> bool:
+    try:
+        return bool(window.is_minimized())
+    except Exception:
+        return False
+
+
+def _activate_window(window) -> None:
+    """Bring ``window`` to the foreground so that subsequent keystrokes
+    and clicks reach it instead of whatever window the user is currently
+    looking at.
+
+    The helper is best-effort and never raises. It performs three steps:
+
+    1. Restore the window if it is currently minimised.
+    2. Call the Win32 ``BringWindowToTop`` / ``SetForegroundWindow`` APIs
+       directly so the activation succeeds even when pywinauto's
+       ``set_focus`` is denied by Windows' foreground lock.
+    3. Ask pywinauto to set the keyboard focus as a final fallback.
+    """
+
+    handle = _window_handle(window)
+    if handle:
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32
+            if _is_window_minimized(window):
+                user32.ShowWindow(handle, 9)
+            user32.ShowWindow(handle, 5)
+            user32.BringWindowToTop(handle)
+            user32.SetForegroundWindow(handle)
+        except Exception:
+            pass
+
+    try:
+        window.set_focus()
+    except Exception:
+        pass
 
 
 def _window_dimensions(window) -> tuple[int, int]:
@@ -198,84 +342,76 @@ def iter_login_windows(desktop, process_ids: list[int] | set[int]):
 
 
 def locate_password_input(window):
-    visible_controls = [control for control in _descendants(window) if _is_visible(control)]
-    semantic_inputs = []
-    semantic_anchors = []
-    edit_candidates = []
-    generic_inputs = []
+    """Locate the QMT password input.
 
-    for control in visible_controls:
-        if not _is_enabled(control):
-            continue
+    Strategy (in order):
+    1. The input that advertises a password descriptor (e.g. contains
+       "交易密码" or "密码") -- usually the placeholder text of an
+       empty password field.
+    2. The input that sits *immediately below* the account field. This
+       is the structural invariant of the QMT login window: account
+       field, then password field, then the 独立交易 checkbox, then
+       the login button.
+    3. The first input whose value is empty -- QMT never pre-fills
+       passwords, so an empty input below the account is the password
+       field.
+    4. The last input as a final fallback.
+    """
+
+    inputs = _visible_input_fields(window)
+    if not inputs:
+        raise RuntimeError("未找到 QMT 登录密码输入框")
+
+    for control in inputs:
         descriptor = _control_descriptor(control)
-        if not descriptor:
-            descriptor = type(control).__name__.lower()
-
         if _is_password_descriptor(descriptor):
-            if _is_interactive_input(control, descriptor):
-                semantic_inputs.append(control)
-            else:
-                semantic_anchors.append(control)
+            return control
 
-        if _is_edit_like(control, descriptor) and not _is_account_descriptor(descriptor):
-            edit_candidates.append(control)
+    try:
+        account_input = locate_account_input(window)
+    except Exception:
+        account_input = None
 
-        if _is_interactive_input(control, descriptor) and not _is_account_descriptor(descriptor):
-            generic_inputs.append(control)
+    if account_input is not None:
+        for index, control in enumerate(inputs):
+            if control is account_input and index + 1 < len(inputs):
+                return inputs[index + 1]
 
-    if semantic_inputs:
-        return semantic_inputs[-1]
+    for control in inputs:
+        if not _control_text(control).replace(" ", ""):
+            return control
 
-    for anchor in reversed(semantic_anchors):
-        for container in _iter_control_context(anchor):
-            contextual_controls = [container, *_descendants(container)]
-            contextual_inputs = []
-            for control in contextual_controls:
-                if not _is_visible(control) or not _is_enabled(control):
-                    continue
-                descriptor = _control_descriptor(control)
-                if _is_account_descriptor(descriptor):
-                    continue
-                if _is_interactive_input(control, descriptor):
-                    contextual_inputs.append(control)
-            if contextual_inputs:
-                return contextual_inputs[-1]
-
-    if edit_candidates:
-        return edit_candidates[-1]
-
-    if generic_inputs:
-        return generic_inputs[-1]
-
-    raise RuntimeError("未找到 QMT 登录密码输入框")
+    if len(inputs) >= 2:
+        return inputs[1]
+    return inputs[-1]
 
 
 def locate_account_input(window):
-    semantic_candidates = []
-    edit_candidates = []
+    """Locate the QMT account input.
 
-    for control in _descendants(window):
-        if not _is_visible(control) or not _is_enabled(control):
-            continue
-        descriptor = _control_descriptor(control)
-        if not _is_interactive_input(control, descriptor):
-            continue
+    The account field is the top-most input that already has a value
+    (the saved broker number). If no field has a value yet, the top-most
+    input is the account field by convention.
+    """
 
-        text = _control_text(control).replace(" ", "")
-        if _is_account_descriptor(descriptor) or (text.isdigit() and len(text) >= 6):
-            semantic_candidates.append(control)
-        if _is_edit_like(control, descriptor):
-            edit_candidates.append(control)
+    inputs = _visible_input_fields(window)
+    if not inputs:
+        raise RuntimeError("未找到 QMT 登录账号输入框")
 
-    if semantic_candidates:
-        return semantic_candidates[-1]
-    if edit_candidates:
-        return edit_candidates[0]
-    raise RuntimeError("未找到 QMT 登录账号输入框")
+    for control in inputs:
+        if _control_text(control).replace(" ", ""):
+            return control
+
+    return inputs[0]
 
 
-def populate_password_input(control, password: str) -> None:
+def populate_password_input(window, control, password: str) -> None:
     last_error: Exception | None = None
+
+    try:
+        _activate_window(window)
+    except Exception as exc:
+        last_error = exc
 
     try:
         control.set_focus()
@@ -310,32 +446,58 @@ def populate_password_input(control, password: str) -> None:
 
 
 def populate_password_via_tab(window, password: str) -> None:
+    _activate_window(window)
+    ensure_independent_trading_checked(window)
     account_input = locate_account_input(window)
-    last_error: Exception | None = None
 
-    for action in (
-        lambda: account_input.set_focus(),
-        lambda: account_input.click_input(),
-        lambda: account_input.type_keys("{TAB}", set_foreground=True),
-        lambda: account_input.type_keys(password, with_spaces=True, set_foreground=True, vk_packet=True),
-    ):
-        try:
-            action()
-        except Exception as exc:
-            last_error = exc
-            raise RuntimeError(f"通过 Tab 导航输入 QMT 密码失败: {exc}") from exc
+    try:
+        account_input.set_focus()
+    except Exception as exc:
+        raise RuntimeError(f"通过 Tab 导航输入 QMT 密码失败: {exc}") from exc
 
-    if last_error is not None:
-        raise RuntimeError(f"通过 Tab 导航输入 QMT 密码失败: {last_error}") from last_error
+    try:
+        account_input.click_input()
+    except Exception as exc:
+        raise RuntimeError(f"通过 Tab 导航输入 QMT 密码失败: {exc}") from exc
+
+    try:
+        window.type_keys("{TAB}", set_foreground=True)
+    except Exception as exc:
+        raise RuntimeError(f"通过 Tab 导航输入 QMT 密码失败: {exc}") from exc
+
+    try:
+        password_input = locate_password_input(window)
+        if password_input is account_input:
+            raise RuntimeError("Tab 导航后仍然命中账号输入框")
+        account_text = _control_text(account_input).replace(" ", "")
+        password_text = _control_text(password_input).replace(" ", "")
+        if account_text and password_text == account_text:
+            raise RuntimeError("Tab 导航后命中账号文本（值与账号相同）")
+        if account_text and not password_text:
+            inputs = _visible_input_fields(window)
+            try:
+                account_index = inputs.index(account_input)
+            except ValueError:
+                account_index = -1
+            if account_index >= 0 and account_index + 1 < len(inputs):
+                fallback = inputs[account_index + 1]
+                if fallback is not account_input:
+                    password_input = fallback
+        populate_password_input(window, password_input, password)
+        return
+    except Exception:
+        pass
+
+    try:
+        window.type_keys(password, with_spaces=True, set_foreground=True, vk_packet=True)
+    except Exception as exc:
+        raise RuntimeError(f"通过 Tab 导航输入 QMT 密码失败: {exc}") from exc
 
 
 def populate_password_via_layout(window, password: str) -> None:
+    _activate_window(window)
+    ensure_independent_trading_checked(window)
     last_error: Exception | None = None
-
-    try:
-        window.set_focus()
-    except Exception as exc:
-        last_error = exc
 
     _click_window_relative(window, *QMT_PASSWORD_FIELD_CENTER)
 
@@ -356,7 +518,108 @@ def populate_password_via_layout(window, password: str) -> None:
 
 
 def submit_login_via_layout(window) -> None:
+    _activate_window(window)
     _click_window_relative(window, *QMT_LOGIN_BUTTON_CENTER)
+
+
+def _is_independent_trading_descriptor(descriptor: str) -> bool:
+    normalized = descriptor.replace(" ", "")
+    return any(token.replace(" ", "") in normalized for token in QMT_INDEPENDENT_TRADING_HINT_TOKENS)
+
+
+def _is_checkbox_descriptor(descriptor: str) -> bool:
+    return "checkbox" in descriptor or "check box" in descriptor
+
+
+def _is_toggle_control(control) -> bool:
+    if hasattr(control, "toggle"):
+        return True
+    if hasattr(control, "get_toggle_state"):
+        return True
+    if hasattr(control, "is_checked"):
+        return True
+    if hasattr(control, "check") and hasattr(control, "uncheck"):
+        return True
+    return False
+
+
+def _is_checkbox_checked(control) -> bool | None:
+    for probe in (
+        lambda: int(control.get_toggle_state()) == 1,
+        lambda: bool(control.is_checked()),
+    ):
+        try:
+            return bool(probe())
+        except Exception:
+            continue
+    return None
+
+
+def _locate_independent_trading_toggle(window):
+    visible_controls = [control for control in _descendants(window) if _is_visible(control)]
+
+    for control in visible_controls:
+        if not _is_enabled(control):
+            continue
+
+        descriptor = _control_descriptor(control)
+        if not _is_independent_trading_descriptor(descriptor):
+            continue
+
+        if _is_checkbox_descriptor(descriptor) or _is_toggle_control(control):
+            return control
+
+        candidate = _locate_nearby_toggle(visible_controls, _control_index(visible_controls, control))
+        if candidate is not None:
+            return candidate
+
+        for container in _iter_control_context(control):
+            contextual_controls = [container, *_descendants(container)]
+            candidate = _locate_nearby_toggle(
+                contextual_controls,
+                _control_index(contextual_controls, control),
+            )
+            if candidate is not None:
+                return candidate
+
+    return None
+
+
+def _check_control(control) -> None:
+    for action in (
+        lambda: control.check(),
+        lambda: control.check_by_click(),
+        lambda: control.toggle(),
+        lambda: control.click_input(),
+    ):
+        try:
+            action()
+            return
+        except Exception:
+            continue
+    raise RuntimeError("切换 QMT 复选框失败：所有切换方式均不可用")
+
+
+def ensure_independent_trading_checked(window) -> bool:
+    """Locate the 独立交易 checkbox in the login window and ensure it is checked.
+
+    Returns ``True`` when a matching checkbox was found and toggled (or was
+    already selected), ``False`` when no matching checkbox exists in the
+    window. Raises if a matching checkbox is found but cannot be toggled.
+    """
+
+    control = _locate_independent_trading_toggle(window)
+    if control is None:
+        return False
+
+    try:
+        checked = _is_checkbox_checked(control)
+    except Exception:
+        checked = None
+
+    if checked is False:
+        _check_control(control)
+    return True
 
 
 def describe_window(window, max_controls: int = 12) -> str:
