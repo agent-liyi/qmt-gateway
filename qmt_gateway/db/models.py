@@ -500,6 +500,54 @@ class SyncLog(Entity):
 
 
 @dataclass
+class ApiKey(Entity):
+    """API key 模型。
+
+    只存储 hash 与可见前缀，原始明文仅在生成时返回给用户一次。
+    通过 ``apis/api_keys.py`` 颁发的程序化访问令牌使用。
+    """
+
+    __table_name__ = "api_keys"
+    __pk__ = "id"
+    __indexes__ = (["key_hash"], True)
+
+    name: str
+    key_hash: str
+    key_prefix: str
+    created_at: datetime.datetime = field(default_factory=datetime.datetime.now)
+    last_used_at: datetime.datetime | None = None
+    revoked_at: datetime.datetime | None = None
+    id: str = field(default_factory=new_uuid_id)
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "key_hash": self.key_hash,
+            "key_prefix": self.key_prefix,
+            "created_at": self.created_at.isoformat(),
+            "last_used_at": self.last_used_at.isoformat() if self.last_used_at else None,
+            "revoked_at": self.revoked_at.isoformat() if self.revoked_at else None,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ApiKey":
+        return cls(
+            id=data.get("id", new_uuid_id()),
+            name=data.get("name", ""),
+            key_hash=data.get("key_hash", ""),
+            key_prefix=data.get("key_prefix", ""),
+            created_at=datetime.datetime.fromisoformat(data["created_at"]) if isinstance(data.get("created_at"), str) else data.get("created_at", datetime.datetime.now()),
+            last_used_at=datetime.datetime.fromisoformat(data["last_used_at"]) if isinstance(data.get("last_used_at"), str) and data.get("last_used_at") else None,
+            revoked_at=datetime.datetime.fromisoformat(data["revoked_at"]) if isinstance(data.get("revoked_at"), str) and data.get("revoked_at") else None,
+        )
+
+    @property
+    def is_revoked(self) -> bool:
+        return self.revoked_at is not None
+
+
+@dataclass
 class HistoryMinuteJob(Entity):
     """历史分钟线下载任务."""
 

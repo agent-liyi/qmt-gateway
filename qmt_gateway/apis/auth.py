@@ -126,8 +126,16 @@ def handle_logout(request):
     return RedirectResponse("/login", status_code=302)
 
 
-def handle_change_password(request, old_password: str, new_password: str):
-    """处理修改密码请求"""
+def handle_change_password(
+    request,
+    old_password: str,
+    new_password: str,
+    new_password_confirm: str = "",
+):
+    """处理修改密码请求
+
+    修改成功后立即使当前会话失效，强制用户重新登录。
+    """
     user_info = request.scope.get("session", {}).get("user")
     if not user_info:
         return {"success": False, "message": "未登录"}
@@ -136,14 +144,25 @@ def handle_change_password(request, old_password: str, new_password: str):
     if not user:
         return {"success": False, "message": "用户不存在"}
 
+    if not old_password or not new_password:
+        return {"success": False, "message": "请填写完整"}
+
     if not verify_password(old_password, user.password_hash):
         return {"success": False, "message": "原密码错误"}
+
+    if new_password != new_password_confirm:
+        return {"success": False, "message": "两次输入的新密码不一致"}
+
+    if new_password == old_password:
+        return {"success": False, "message": "新密码不能与原密码相同"}
 
     # 更新密码
     user.password_hash = hash_password(new_password)
     db.save_user(user)
 
-    logger.info(f"用户修改密码成功: {user.username}")
+    # 强制重新登录
+    request.scope["session"].clear()
+    logger.info(f"用户修改密码成功并已注销会话: {user.username}")
     return {"success": True, "message": "密码修改成功"}
 
 
@@ -163,5 +182,15 @@ def register_routes(app):
         return handle_logout(request)
 
     @app.post("/auth/password")
-    def post_change_password(request, old_password: str, new_password: str):
-        return handle_change_password(request, old_password, new_password)
+    def post_change_password(
+        request,
+        old_password: str,
+        new_password: str,
+        new_password_confirm: str = "",
+    ):
+        return handle_change_password(
+            request,
+            old_password,
+            new_password,
+            new_password_confirm=new_password_confirm,
+        )

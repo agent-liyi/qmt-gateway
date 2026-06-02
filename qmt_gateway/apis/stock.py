@@ -8,6 +8,7 @@ from fasthtml.common import *
 from loguru import logger
 from starlette.responses import HTMLResponse
 
+from qmt_gateway.apis.api_keys import require_api_key_or_session
 from qmt_gateway.services.stock_service import stock_service
 
 
@@ -61,12 +62,11 @@ def register_routes(app):
     def search_stocks(request, stock_search: str = ""):
         """搜索股票（带自动补全）
 
-        Args:
-            stock_search: 搜索关键词（支持代码、名称、拼音）
-
-        Returns:
-            HTML 格式的下拉列表
+        该端点会被搜索下拉控件在浏览器中频繁调用，因此保留
+        session 鉴权即可，外部脚本无法拿到 cookie。
         """
+        require_api_key_or_session(request)
+
         q = stock_search
         logger.debug(f"[DEBUG] search_stocks called with q='{q}'")
         
@@ -140,6 +140,7 @@ def register_routes(app):
         Returns:
             Speed Dial HTML
         """
+        require_api_key_or_session(request)
         from qmt_gateway.web.pages.trading import SpeedDialGrid
 
         if not symbol:
@@ -168,6 +169,7 @@ def register_routes(app):
         Returns:
             股票解析结果
         """
+        require_api_key_or_session(request)
         keyword = (q or "").strip()
         if not keyword:
             return {"ok": False}
@@ -211,5 +213,6 @@ def register_routes(app):
     @app.get("/api/stocks")
     def get_all_stocks(request):
         """获取所有股票列表"""
+        require_api_key_or_session(request)
         stocks = stock_service.get_all_stocks()
         return [s.to_dict() for s in stocks]

@@ -10,6 +10,7 @@ from fastcore.xml import to_xml
 from fasthtml.common import *
 from loguru import logger
 from starlette.responses import HTMLResponse
+from qmt_gateway.apis.api_keys import require_api_key_or_session
 from qmt_gateway.config import config
 from qmt_gateway.db.models import Asset, Position
 from qmt_gateway.db.sqlite import db
@@ -388,19 +389,19 @@ def register_routes(app):
     @app.get("/api/trade/asset")
     def get_asset(request):
         """获取账户资金"""
-        login_required(request)
+        require_api_key_or_session(request)
         return get_latest_asset_data()
 
     @app.get("/api/trade/connection-status")
     def get_connection_status(request):
         """获取交易接口连接状态"""
-        login_required(request)
+        require_api_key_or_session(request)
         return trade_service.get_connection_status()
 
     @app.post("/api/trade/restart-qmt")
     def restart_qmt(request, password: str = ""):
         """重启 QMT 客户端并自动填入交易密码"""
-        login_required(request)
+        require_api_key_or_session(request)
         logger.info("收到 QMT 重启请求")
         result = trade_service.restart_qmt(password)
         if result.get("success"):
@@ -437,7 +438,7 @@ def register_routes(app):
         Args:
             view: 返回格式，json 或 table
         """
-        login_required(request)
+        require_api_key_or_session(request)
         positions_data = get_latest_positions_data()
 
         if view == "table":
@@ -454,7 +455,7 @@ def register_routes(app):
             status: 订单状态过滤
             view: 返回格式，json 或 table
         """
-        login_required(request)
+        require_api_key_or_session(request)
         orders_data = get_latest_orders_data(status)
 
         if view == "table":
@@ -466,7 +467,7 @@ def register_routes(app):
     @app.get("/api/trade/trades")
     def get_trades(request):
         """获取成交列表"""
-        login_required(request)
+        require_api_key_or_session(request)
         trades = trade_service.get_trades()
         return [
             {
@@ -486,7 +487,7 @@ def register_routes(app):
     @app.post("/api/trade/buy")
     def buy_stock(request, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = ""):
         """买入股票"""
-        login_required(request)
+        require_api_key_or_session(request)
         logger.info("收到买入委托请求: symbol={}, price={}, shares={}", symbol, price, shares)
         result = trade_service.buy(symbol, price, shares, qtoid=qtoid, strategy_id=strategy_id)
         if result.get("success"):
@@ -511,7 +512,7 @@ def register_routes(app):
     @app.post("/api/trade/sell")
     def sell_stock(request, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = ""):
         """卖出股票"""
-        login_required(request)
+        require_api_key_or_session(request)
         logger.info("收到卖出委托请求: symbol={}, price={}, shares={}", symbol, price, shares)
         result = trade_service.sell(symbol, price, shares, qtoid=qtoid, strategy_id=strategy_id)
         if result.get("success"):
@@ -536,7 +537,7 @@ def register_routes(app):
     @app.post("/api/trade/cancel")
     def cancel_order(request, qtoid: str = "", order_id: str = "", view: str = "json"):
         """撤单"""
-        login_required(request)
+        require_api_key_or_session(request)
         target_order_id = qtoid or order_id
         logger.info("收到撤单请求: order_id={}", target_order_id)
         result = trade_service.cancel_order(target_order_id)
@@ -562,7 +563,7 @@ def register_routes(app):
         Returns:
             JSONResponse: 操作结果
         """
-        user = login_required(request)
+        user = require_api_key_or_session(request)
 
         if principal <= 0:
             return JSONResponse(

@@ -53,6 +53,7 @@ def test_buy_endpoint_logs_submission(monkeypatch):
     fake_logger = FakeLogger()
     monkeypatch.setattr(trade_api, "logger", fake_logger)
     monkeypatch.setattr(trade_api, "login_required", lambda request: {"username": "tester"})
+    monkeypatch.setattr(trade_api, "require_api_key_or_session", lambda request: {"username": "tester"})
     monkeypatch.setattr(
         trade_api.trade_service,
         "buy",
@@ -79,6 +80,7 @@ def test_cancel_endpoint_logs_submission(monkeypatch):
     fake_logger = FakeLogger()
     monkeypatch.setattr(trade_api, "logger", fake_logger)
     monkeypatch.setattr(trade_api, "login_required", lambda request: {"username": "tester"})
+    monkeypatch.setattr(trade_api, "require_api_key_or_session", lambda request: {"username": "tester"})
     monkeypatch.setattr(
         trade_api.trade_service,
         "cancel_order",
@@ -98,6 +100,7 @@ def test_restart_qmt_endpoint_logs_submission(monkeypatch):
     fake_logger = FakeLogger()
     monkeypatch.setattr(trade_api, "logger", fake_logger)
     monkeypatch.setattr(trade_api, "login_required", lambda request: {"username": "tester"})
+    monkeypatch.setattr(trade_api, "require_api_key_or_session", lambda request: {"username": "tester"})
     monkeypatch.setattr(
         trade_api.trade_service,
         "restart_qmt",

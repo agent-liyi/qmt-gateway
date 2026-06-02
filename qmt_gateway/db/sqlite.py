@@ -3,6 +3,7 @@
 提供线程安全的 SQLite 数据库访问，支持 WAL 模式和多线程并发读写。
 """
 
+import datetime
 import sqlite3
 import threading
 from pathlib import Path
@@ -12,6 +13,7 @@ import sqlite_utils as su
 from loguru import logger
 
 from qmt_gateway.db.models import (
+    ApiKey,
     Asset,
     HistoryMinuteJob,
     Order,
@@ -110,6 +112,7 @@ class SQLiteDB:
             Trade,
             Position,
             Asset,
+            ApiKey,
             HistoryMinuteJob,
         ]
 
@@ -323,6 +326,58 @@ class SQLiteDB:
             return HistoryMinuteJob.from_dict(dict(row))
         except Exception:
             return None
+
+    def insert_api_key(self, api_key: ApiKey) -> None:
+        """插入新的 API key 记录。"""
+        self["api_keys"].insert(api_key.to_dict(), pk=ApiKey.__pk__, ignore=True)
+
+    def get_api_key_by_hash(self, key_hash: str) -> ApiKey | None:
+        """根据 hash 获取未吊销的 API key 记录。"""
+        rows = list(
+            self["api_keys"].rows_where(
+                "key_hash = ? and revoked_at is null",
+                (key_hash,),
+            )
+        )
+        if not rows:
+            return None
+        return ApiKey.from_dict(dict(rows[0]))
+
+    def list_api_keys(self) -> list[ApiKey]:
+        """列出全部 API key 记录（包含已吊销），按创建时间倒序。"""
+        rows = self["api_keys"].rows_where(
+            "1=1", (), order_by="created_at desc"
+        )
+        return [ApiKey.from_dict(dict(row)) for row in rows]
+
+    def revoke_api_key(self, key_id: str) -> bool:
+        """吊销指定 API key。返回是否找到并吊销了记录。"""
+        try:
+            row = self["api_keys"].get(key_id)
+        except Exception:
+            return False
+        if row is None:
+            return False
+        record = ApiKey.from_dict(dict(row))
+        if record.revoked_at is not None:
+            return True
+        record.revoked_at = datetime.datetime.now()
+        self["api_keys"].upsert(record.to_dict(), pk=ApiKey.__pk__)
+        return True
+
+    def touch_api_key_last_used(self, key_id: str) -> None:
+        """更新 API key 的最近使用时间。失败不应影响主流程。"""
+        try:
+            self["api_keys"].update(key_id, {"last_used_at": datetime.datetime.now().isoformat()})
+        except Exception:
+            pass
+
+    def has_active_api_keys(self) -> bool:
+        """判断是否存在未吊销的 API key。"""
+        rows = list(
+            self["api_keys"].rows_where("revoked_at is null", (), limit=1)
+        )
+        return bool(rows)
 
 
 # 全局数据库实例

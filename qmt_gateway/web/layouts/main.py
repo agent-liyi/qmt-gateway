@@ -62,8 +62,13 @@ def Header(user: dict | None = None, active_menu: str = ""):
         ),
         Ul(
             Li(A("修改本金", href="#", onclick="showPrincipalModal(); return false;")),
+            Li(A("修改密码", href="#", onclick="showChangePasswordModal(); return false;")),
+            Li(A("管理 API key", href="#", onclick="showApiKeyModal(); return false;")),
             Li(A("退出登录", href="/auth/logout")),
-            cls="dropdown-content menu p-2 shadow bg-base-100 rounded-box w-52 mt-4 z-50",
+            cls=(
+                "dropdown-content menu p-2 shadow bg-base-100 "
+                "rounded-box w-52 mt-4 z-50"
+            ),
         ),
         cls="dropdown dropdown-end",
     ) if user else Div()
@@ -344,6 +349,412 @@ def PrincipalModalScript():
             var modal = document.getElementById('principal-modal');
             if (modal && e.target === modal) {
                 closePrincipalModal();
+            }
+        });
+    """)
+
+
+def ChangePasswordModal():
+    return Div(
+        Div(
+            Div(
+                H3("修改密码", cls="text-lg font-bold"),
+                Button(
+                    "✕",
+                    type="button",
+                    cls="btn btn-sm btn-circle btn-ghost",
+                    onclick="closeChangePasswordModal()",
+                ),
+                cls="mb-4 flex items-center justify-between",
+            ),
+            P(
+                "修改密码后，当前会话将立即失效，需要重新登录。",
+                cls="mb-4 text-sm text-gray-600",
+            ),
+            Div(
+                Label("原密码", cls="label"),
+                Input(
+                    type="password",
+                    id="change-password-old",
+                    placeholder="请输入当前密码",
+                    cls="input input-bordered w-full",
+                    autocomplete="current-password",
+                ),
+                cls="mb-3",
+            ),
+            Div(
+                Label("新密码", cls="label"),
+                Input(
+                    type="password",
+                    id="change-password-new",
+                    placeholder="请输入新密码",
+                    cls="input input-bordered w-full",
+                    autocomplete="new-password",
+                ),
+                cls="mb-3",
+            ),
+            Div(
+                Label("再次输入新密码", cls="label"),
+                Input(
+                    type="password",
+                    id="change-password-confirm",
+                    placeholder="请再次输入新密码",
+                    cls="input input-bordered w-full",
+                    autocomplete="new-password",
+                ),
+                cls="mb-3",
+            ),
+            Div(id="change-password-message", cls="hidden text-sm mb-4"),
+            Div(
+                Button(
+                    "取消",
+                    type="button",
+                    cls="btn btn-ghost",
+                    onclick="closeChangePasswordModal()",
+                ),
+                Button(
+                    "保存",
+                    type="button",
+                    id="change-password-submit",
+                    cls="btn btn-primary",
+                    onclick="submitChangePassword()",
+                ),
+                cls="flex justify-end gap-2",
+            ),
+            cls="modal-box",
+        ),
+        id="change-password-modal",
+        cls="modal",
+    )
+
+
+def ChangePasswordModalScript():
+    return Script("""
+        function showChangePasswordModal() {
+            var modal = document.getElementById('change-password-modal');
+            if (!modal) return;
+            ['change-password-old', 'change-password-new', 'change-password-confirm'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.value = '';
+            });
+            var message = document.getElementById('change-password-message');
+            if (message) {
+                message.className = 'hidden text-sm mb-4';
+                message.textContent = '';
+            }
+            var submit = document.getElementById('change-password-submit');
+            if (submit) {
+                submit.disabled = false;
+                submit.textContent = '保存';
+            }
+            modal.classList.add('modal-open');
+        }
+
+        function closeChangePasswordModal() {
+            var modal = document.getElementById('change-password-modal');
+            if (modal) modal.classList.remove('modal-open');
+        }
+
+        function showChangePasswordMessage(text, ok) {
+            var message = document.getElementById('change-password-message');
+            if (!message) return;
+            message.textContent = String(text || '');
+            message.className = ok
+                ? 'mb-4 rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700'
+                : 'mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700';
+        }
+
+        async function submitChangePassword() {
+            var oldEl = document.getElementById('change-password-old');
+            var newEl = document.getElementById('change-password-new');
+            var confirmEl = document.getElementById('change-password-confirm');
+            var submit = document.getElementById('change-password-submit');
+            var oldPassword = oldEl ? oldEl.value : '';
+            var newPassword = newEl ? newEl.value : '';
+            var confirmPassword = confirmEl ? confirmEl.value : '';
+
+            if (!oldPassword || !newPassword || !confirmPassword) {
+                showChangePasswordMessage('请完整填写原密码、新密码和确认密码', false);
+                return;
+            }
+            if (newPassword !== confirmPassword) {
+                showChangePasswordMessage('两次输入的新密码不一致', false);
+                return;
+            }
+            if (submit) {
+                submit.disabled = true;
+                submit.textContent = '保存中...';
+            }
+            try {
+                var response = await fetch('/auth/password', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    },
+                    body: new URLSearchParams({
+                        old_password: oldPassword,
+                        new_password: newPassword,
+                        new_password_confirm: confirmPassword,
+                    }).toString(),
+                });
+                var result = await response.json().catch(function() { return {}; });
+                if (response.ok && result.success) {
+                    showChangePasswordMessage('密码已修改，正在跳转登录页...', true);
+                    window.setTimeout(function() {
+                        window.location.href = '/login';
+                    }, 800);
+                    return;
+                }
+                showChangePasswordMessage(result.message || '修改失败', false);
+                if (submit) {
+                    submit.disabled = false;
+                    submit.textContent = '保存';
+                }
+            } catch (e) {
+                showChangePasswordMessage('修改失败: ' + e.message, false);
+                if (submit) {
+                    submit.disabled = false;
+                    submit.textContent = '保存';
+                }
+            }
+        }
+
+        document.addEventListener('click', function(e) {
+            var modal = document.getElementById('change-password-modal');
+            if (modal && e.target === modal) {
+                closeChangePasswordModal();
+            }
+        });
+    """)
+
+
+def ApiKeyModal():
+    return Div(
+        Div(
+            Div(
+                H3("API key 管理", cls="text-lg font-bold"),
+                Button(
+                    "✕",
+                    type="button",
+                    cls="btn btn-sm btn-circle btn-ghost",
+                    onclick="closeApiKeyModal()",
+                ),
+                cls="mb-4 flex items-center justify-between",
+            ),
+            P(
+                "生成新的 API key 用于程序化访问。",
+                cls="mb-3 text-sm text-gray-600",
+            ),
+            Div(
+                Button(
+                    "生成新的 API key",
+                    type="button",
+                    id="api-key-generate",
+                    cls="btn btn-primary btn-sm",
+                    onclick="generateApiKey()",
+                ),
+                cls="mb-3",
+            ),
+            Div(
+                Label("新生成的 key（仅显示一次，请立即复制并妥善保存）", cls="label"),
+                Div(
+                    Input(
+                        type="text",
+                        id="api-key-plaintext",
+                        readonly="readonly",
+                        placeholder="点击上方按钮生成",
+                        cls="input input-bordered w-full font-mono text-sm",
+                    ),
+                    Button(
+                        "复制并关闭",
+                        type="button",
+                        id="api-key-copy-close",
+                        cls="btn btn-sm btn-primary",
+                        onclick="copyAndCloseApiKey()",
+                    ),
+                    cls="flex gap-2",
+                ),
+                cls="mb-3",
+            ),
+            Div(id="api-key-message", cls="hidden text-sm mb-4"),
+            Div(
+                H4("已有的 key", cls="text-sm font-semibold mb-2 text-gray-700"),
+                Div(id="api-key-list", cls="flex flex-col gap-2"),
+                cls="mt-4",
+            ),
+            cls="modal-box max-w-2xl",
+        ),
+        id="api-key-modal",
+        cls="modal",
+    )
+
+
+def ApiKeyModalScript():
+    return Script("""
+        function showApiKeyModal() {
+            var modal = document.getElementById('api-key-modal');
+            if (!modal) return;
+            var plaintext = document.getElementById('api-key-plaintext');
+            if (plaintext) plaintext.value = '';
+            var message = document.getElementById('api-key-message');
+            if (message) {
+                message.className = 'hidden text-sm mb-4';
+                message.textContent = '';
+            }
+            var submit = document.getElementById('api-key-generate');
+            if (submit) {
+                submit.disabled = false;
+                submit.textContent = '生成新的 API key';
+            }
+            modal.classList.add('modal-open');
+            refreshApiKeyList();
+        }
+
+        function closeApiKeyModal() {
+            var modal = document.getElementById('api-key-modal');
+            if (modal) modal.classList.remove('modal-open');
+        }
+
+        function showApiKeyMessage(text, ok) {
+            var message = document.getElementById('api-key-message');
+            if (!message) return;
+            message.textContent = String(text || '');
+            message.className = ok
+                ? 'mb-4 rounded-xl border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700'
+                : 'mb-4 rounded-xl border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700';
+        }
+
+        async function refreshApiKeyList() {
+            var list = document.getElementById('api-key-list');
+            if (!list) return;
+            list.innerHTML = '<div class="text-sm text-gray-400">加载中...</div>';
+            try {
+                var response = await fetch('/api/api-keys', {
+                    headers: { 'Accept': 'application/json' },
+                });
+                var result = await response.json().catch(function() { return {}; });
+                list.innerHTML = '';
+                var data = Array.isArray(result.data) ? result.data : [];
+                if (!data.length) {
+                    list.innerHTML = '<div class="text-sm text-gray-400">尚未生成任何 API key</div>';
+                    return;
+                }
+                data.forEach(function(item) {
+                    var row = document.createElement('div');
+                    row.className = 'flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2';
+                    var left = document.createElement('div');
+                    left.className = 'flex flex-col';
+                    var name = document.createElement('span');
+                    name.className = 'text-sm font-medium text-gray-800';
+                    name.textContent = String(item.name || '(未命名)');
+                    var meta = document.createElement('span');
+                    meta.className = 'text-xs text-gray-500 font-mono';
+                    var prefix = item.key_prefix || '';
+                    var status = item.revoked ? '已吊销' : '有效';
+                    var created = item.created_at || '';
+                    meta.textContent = prefix + ' · ' + status + ' · ' + created;
+                    left.appendChild(name);
+                    left.appendChild(meta);
+                    row.appendChild(left);
+                    if (!item.revoked) {
+                        var btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'btn btn-xs btn-ghost text-red-600';
+                        btn.textContent = '吊销';
+                        btn.addEventListener('click', function() {
+                            revokeApiKey(item.id);
+                        });
+                        row.appendChild(btn);
+                    }
+                    list.appendChild(row);
+                });
+            } catch (e) {
+                list.innerHTML = '<div class="text-sm text-red-600">加载失败: ' + e.message + '</div>';
+            }
+        }
+
+        async function generateApiKey() {
+            var submit = document.getElementById('api-key-generate');
+            if (submit) {
+                submit.disabled = true;
+                submit.textContent = '生成中...';
+            }
+            try {
+                var response = await fetch('/api/api-keys', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    },
+                    body: '',
+                });
+                var result = await response.json().catch(function() { return {}; });
+                if (response.ok && result.code === 0) {
+                    var plaintext = document.getElementById('api-key-plaintext');
+                    if (plaintext && result.data && result.data.plaintext) {
+                        plaintext.value = String(result.data.plaintext);
+                        plaintext.focus();
+                        plaintext.select();
+                    }
+                    showApiKeyMessage('已生成新的 API key，请立即复制并妥善保存。它不会再次显示。', true);
+                    refreshApiKeyList();
+                } else {
+                    showApiKeyMessage((result && result.message) || '生成失败', false);
+                }
+            } catch (e) {
+                showApiKeyMessage('生成失败: ' + e.message, false);
+            } finally {
+                if (submit) {
+                    submit.disabled = false;
+                    submit.textContent = '生成新的 API key';
+                }
+            }
+        }
+
+        async function revokeApiKey(keyId) {
+            if (!keyId) return;
+            if (!window.confirm('确定要吊销该 API key 吗？吊销后无法恢复。')) {
+                return;
+            }
+            try {
+                var response = await fetch('/api/api-keys/' + encodeURIComponent(keyId), {
+                    method: 'DELETE',
+                    headers: { 'Accept': 'application/json' },
+                });
+                var result = await response.json().catch(function() { return {}; });
+                if (response.ok && result.code === 0) {
+                    showApiKeyMessage('已吊销', true);
+                    refreshApiKeyList();
+                } else {
+                    showApiKeyMessage((result && result.message) || '吊销失败', false);
+                }
+            } catch (e) {
+                showApiKeyMessage('吊销失败: ' + e.message, false);
+            }
+        }
+
+        async function copyAndCloseApiKey() {
+            var plaintext = document.getElementById('api-key-plaintext');
+            if (plaintext && plaintext.value) {
+                try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        await navigator.clipboard.writeText(plaintext.value);
+                    } else {
+                        plaintext.select();
+                        document.execCommand('copy');
+                    }
+                } catch (e) {
+                    console.warn('复制失败:', e);
+                }
+            }
+            closeApiKeyModal();
+        }
+
+        document.addEventListener('click', function(e) {
+            var modal = document.getElementById('api-key-modal');
+            if (modal && e.target === modal) {
+                closeApiKeyModal();
             }
         });
     """)
@@ -755,10 +1166,14 @@ class MainLayout:
                 ),
                 # 修改本金 Modal
                 PrincipalModal(),
+                ChangePasswordModal(),
+                ApiKeyModal(),
                 NotificationCenterModal(),
                 RestartQmtModal(),
                 # Modal JavaScript
                 PrincipalModalScript(),
+                ChangePasswordModalScript(),
+                ApiKeyModalScript(),
                 HeaderStatusScript(),
                 cls="min-h-screen flex flex-col",
             ),

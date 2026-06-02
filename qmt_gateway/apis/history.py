@@ -1,18 +1,10 @@
 """历史分钟线下载 API."""
 
 from loguru import logger
-from starlette.exceptions import HTTPException
 from starlette.responses import FileResponse, JSONResponse
 
+from qmt_gateway.apis.api_keys import require_api_key_or_session
 from qmt_gateway.services.history_download_service import history_download_service
-
-
-def _login_required(request) -> dict:
-    """检查用户登录状态."""
-    user = request.scope.get("session", {}).get("user")
-    if not user:
-        raise HTTPException(status_code=401, detail="未登录")
-    return user
 
 
 def register_routes(app):
@@ -25,7 +17,7 @@ def register_routes(app):
         period: str = "1m",
         universe: str = "ashare",
     ):
-        _login_required(request)
+        require_api_key_or_session(request)
         try:
             job = history_download_service.create_job(
                 trade_date=trade_date,
@@ -41,7 +33,7 @@ def register_routes(app):
 
     @app.get("/api/history/minutes/jobs/{job_id}")
     def get_minutes_job(request, job_id: str):
-        _login_required(request)
+        require_api_key_or_session(request)
         try:
             job = history_download_service.get_job(job_id)
             return JSONResponse({"code": 0, "message": "ok", "data": job})
@@ -53,7 +45,7 @@ def register_routes(app):
 
     @app.get("/api/history/minutes/jobs/{job_id}/file")
     def download_minutes_file(request, job_id: str):
-        _login_required(request)
+        require_api_key_or_session(request)
         try:
             job = history_download_service.get_job(job_id)
             file_path = history_download_service.get_download_path(job_id)
