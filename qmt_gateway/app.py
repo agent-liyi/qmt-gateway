@@ -41,6 +41,9 @@ from starlette.responses import HTMLResponse, StreamingResponse
 # 存储向导表单数据的临时缓存
 _wizard_data: dict = {}
 
+# 后台 QMT 重启任务状态：None=未启动, {}=运行中, {"success":...}=已完成
+_restart_status: dict | None = None
+
 
 def _render_page(page) -> HTMLResponse:
     """显式渲染完整页面，规避 FastHTML 在文档响应上的兼容问题。"""
@@ -53,6 +56,19 @@ def _render_fragment(*fragments) -> HTMLResponse:
     支持多个片段同时输出（用于 OOB 交换）。
     """
     return HTMLResponse(to_xml(fragments if len(fragments) > 1 else fragments[0]))
+
+
+def _redirect_after_hx(request, location: str = "/"):
+    """Prefer HTMX-native redirects so wizard completion jumps immediately.
+
+    Plain ``302`` responses work for full-page requests, but HTMX may follow
+    them as an AJAX request and only swap the resulting HTML later. Returning
+    ``HX-Redirect`` makes the browser navigate as soon as the response arrives.
+    """
+
+    if str(request.headers.get("HX-Request", "")).lower() == "true":
+        return HTMLResponse("", headers={"HX-Redirect": location})
+    return RedirectResponse(location, status_code=302)
 
 
 def _seed_wizard_data_from_current_settings() -> dict:
@@ -381,9 +397,10 @@ def create_app():
 
         1. 把最后一步的表单数据合并进 ``_wizard_data``；
         2. **快照**当前 settings / user / asset，以便回滚；
-        3. **先用新值（未落库）测试 xtquant 连接**——失败则原样回滚、返回错误；
-        4. 测试通过后再**一次性**把 user / settings / asset 写回 DB；
-        5. 标记 ``init_completed=True``、刷新内存配置并跳转首页。
+        3. **先检查 QMT 进程是否在运行**——若不在运行，跳过连接测试直接走 auto-retry；
+        4. 若 QMT 已运行，用新值测试 xtquant 连接——失败则校验路径后重启 QMT；
+        5. 测试通过后再**一次性**把 user / settings / asset 写回 DB；
+        6. 标记 ``init_completed=True``、刷新内存配置并跳转首页。
         """
         global _wizard_data
         snapshot: dict = {}
@@ -407,61 +424,78 @@ def create_app():
             new_settings = _build_settings_from_wizard_data(_wizard_data)
             qmt_password = _wizard_data.get("qmt_password", "")
 
-            # 4. 用新值先做连接测试——失败则尝试自动启动 QMT
-            test_result = test_xtquant_connection(
-                xtquant_path=new_settings.xtquant_path or None,
-                qmt_path=new_settings.qmt_path or None,
-            )
-            if not test_result["success"]:
-                path_probe = probe_qmt_path(new_settings.qmt_path)
-                if not path_probe["valid"]:
-                    # 路径不合法 → 提示用户修正
-                    _rollback_wizard_state(snapshot)
-                    logger.warning(f"QMT 路径不合法: {path_probe.get('reason')}")
-                    return _render_fragment(
-                        _build_wizard_failure_fragment(
-                            original_error=test_result.get("error", "未知错误"),
-                            recovery_reason=path_probe.get("reason"),
-                            recovery_hint="请检查 QMT 路径是否正确。",
-                        )
-                    )
+            # 4. 无 QMT 密码时跳过连接检查和自动启动，直接落库
+            if not qmt_password or not qmt_password.strip():
+                logger.info("未提供 QMT 交易密码，跳过连接检查和自动启动，直接完成初始化")
+                _commit_wizard_settings(_wizard_data, new_settings)
+                logger.info("初始化完成（无密码模式，跳过连接检查）")
+                return _redirect_after_hx(request)
 
-                # 路径合法但连不上 → 使用 trade_service.restart_qmt 启动/重启 QMT
-                logger.info("QMT 路径合法但连接失败，尝试通过 trade_service.restart_qmt 自动启动")
-                restart_result = _wizard_restart_qmt(
-                    qmt_path=new_settings.qmt_path,
-                    account_id=new_settings.qmt_account_id,
-                    qmt_password=qmt_password,
+            # 5. 有密码时，先尝试连接测试；若 QMT 未运行则尝试自动启动
+            from qmt_gateway.qmt_init_helpers import is_qmt_process_running
+            force_restart = False
+            if is_qmt_process_running():
+                # QMT 已在运行，直接测试 xtquant 连接
+                logger.info("QMT 进程已存在，测试 xtquant 连接...")
+                test_result = test_xtquant_connection(
+                    xtquant_path=new_settings.xtquant_path or None,
+                    qmt_path=new_settings.qmt_path or None,
                 )
-                if not restart_result.get("success"):
-                    _rollback_wizard_state(snapshot)
-                    return _render_fragment(
-                        _build_wizard_wait_dialog(
-                            message="正在重试连接...",
-                            error=restart_result.get("error", "连接失败"),
-                            auto_retry=True,
-                        )
-                    )
+                if test_result["success"]:
+                    # 连接成功，直接落库
+                    _commit_wizard_settings(_wizard_data, new_settings)
+                    logger.info("初始化完成（QMT 已运行且连接成功）")
+                    return _redirect_after_hx(request)
+                logger.warning("QMT 进程仍在运行但未完成登录，准备强制重启后重试")
+                force_restart = True
 
-                # restart_qmt 成功仅代表交易接口已连接，需再次验证 xtdata
+            # QMT 未运行或连接失败，尝试自动启动 QMT
+            logger.info("QMT 未运行或连接失败，尝试自动启动 QMT...")
+            restart_result = _wizard_restart_qmt(
+                qmt_path=new_settings.qmt_path,
+                account_id=new_settings.qmt_account_id,
+                qmt_password=qmt_password,
+                kill_first=force_restart,
+            )
+            if restart_result.get("success"):
+                # 启动成功后验证 xtdata 连接
                 retest = test_xtquant_connection(
                     xtquant_path=new_settings.xtquant_path or None,
                     qmt_path=new_settings.qmt_path or None,
                 )
-                if not retest["success"]:
-                    _rollback_wizard_state(snapshot)
-                    return _render_fragment(
-                        _build_wizard_wait_dialog(
-                            message="QMT 已启动，正在等待 xtdata 连接就绪...",
-                            error=retest.get("error", "xtdata 连接失败"),
-                            auto_retry=True,
-                        )
+                if retest["success"]:
+                    _commit_wizard_settings(_wizard_data, new_settings)
+                    logger.info("初始化完成（自动启动 QMT 后连接成功）")
+                    return _redirect_after_hx(request)
+                # xtdata 还没就绪，展示等待对话框让 auto-retry 继续验证
+                return _render_fragment(
+                    _build_wizard_wait_dialog(
+                        message="QMT 已启动，正在等待 xtdata 连接就绪...",
+                        error=retest.get("error", "xtdata 连接失败"),
+                        auto_retry=True,
                     )
+                )
 
-            # 5. 测试通过：原子落库
-            _commit_wizard_settings(_wizard_data, new_settings)
-            logger.info("初始化完成（原子提交成功）")
-            return RedirectResponse("/", status_code=302)
+            # 启动失败（路径不合法等），展示等待对话框让用户重试
+            path_probe = probe_qmt_path(new_settings.qmt_path)
+            if not path_probe["valid"]:
+                _rollback_wizard_state(snapshot)
+                logger.warning(f"QMT 路径不合法: {path_probe.get('reason')}")
+                return _render_fragment(
+                    _build_wizard_failure_fragment(
+                        original_error=restart_result.get("error", "未知错误"),
+                        recovery_reason=path_probe.get("reason"),
+                        recovery_hint="请检查 QMT 路径是否正确。",
+                    )
+                )
+
+            return _render_fragment(
+                _build_wizard_wait_dialog(
+                    message="正在重试连接...",
+                    error=restart_result.get("error", "QMT 启动失败"),
+                    auto_retry=True,
+                )
+            )
 
         except Exception as e:
             logger.error(f"完成初始化失败: {e}")
@@ -473,59 +507,101 @@ def create_app():
 
     @app.post("/init-wizard/retry-startup")
     async def wizard_retry_startup():
-        """重试：杀旧进程 → 重启 QMT → 自动登录 → 验证 xtdata。
+        """重试：杀旧进程 → 后台重启 QMT → 异步等待连接 → 验证 xtdata。
 
-        只负责 QMT 重启与连接验证，不做 settings 提交。
-        成功后通过 auto-retry 触发 /init-wizard/complete 完成初始化。
+        注意（非阻塞设计）：
+        - 杀掉残留 QMT 进程（快速同步）后，启动后台线程执行完整重启流程
+        - **立即返回**等待对话框，不阻塞事件循环
+        - auto-retry 会反复调用本端点，直到后台任务完成
+        - 后台任务完成后检查结果：成功则验证 xtdata → 触发 complete；
+          失败则继续展示 auto_retry 对话框
         """
-        global _wizard_data
+        global _wizard_data, _restart_status
 
         qmt_password = _wizard_data.get("qmt_password", "")
         logger.info("[retry-startup] 收到重试请求, password={}", '***' if qmt_password else '(empty)')
 
         try:
             new_settings = _build_settings_from_wizard_data(_wizard_data)
-            logger.info("[retry-startup] qmt_path={}, account_id={}", new_settings.qmt_path, new_settings.qmt_account_id)
+            logger.info("[retry-startup] qmt_path={}, account_id={}",
+                        new_settings.qmt_path, new_settings.qmt_account_id)
 
-            # 直接重启 QMT（杀旧进程 → 启动 → 自动登录）
-            logger.info("[retry-startup] 调用 _wizard_restart_qmt...")
-            restart_result = _wizard_restart_qmt(
-                qmt_path=new_settings.qmt_path,
-                account_id=new_settings.qmt_account_id,
-                qmt_password=qmt_password,
-            )
-            logger.info("[retry-startup] restart_result={}", restart_result)
-            if not restart_result.get("success"):
+            # 先立即杀掉可能残留的 QMT 进程（这一小段很快，同步执行）
+            from qmt_gateway.services.trade_service import trade_service
+            try:
+                executable = trade_service._resolve_qmt_client_path(new_settings.qmt_path)
+                trade_service._kill_qmt_process(executable.name)
+                logger.info("[retry-startup] 已主动终止 QMT 进程")
+            except Exception:
+                logger.info("[retry-startup] 未发现残留 QMT 进程，跳过终止")
+
+            # =================================================================
+            # 异步重启：根据 _restart_status 决定下一步动作
+            #   None        → 尚未启动后台任务（首次或已消费完成）
+            #   {}          → 后台任务正在执行中
+            #   {"success"} → 后台任务已完成
+            # =================================================================
+
+            # 情况 A：后台任务还在执行
+            if _restart_status is not None and not _restart_status:
+                logger.info("[retry-startup] 后台重启仍在进行中，继续等待")
+                return _render_fragment(
+                    _build_wizard_wait_dialog(
+                        message="QMT 正在重启中，请稍候...",
+                        auto_retry=True,
+                    )
+                )
+
+            # 情况 B：后台任务已完成，处理结果
+            if _restart_status is not None and _restart_status:
+                result = dict(_restart_status)
+                _restart_status = None
+                logger.info("[retry-startup] 后台重启已完成: {}", result)
+
+                if result.get("success"):
+                    logger.info("[retry-startup] restart_qmt 成功，直接完成初始化")
+                    return _render_fragment(
+                        _build_wizard_wait_dialog(
+                            message="QMT 连接成功，正在完成初始化...",
+                            auto_complete=True,
+                        )
+                    )
+
+                # 重启失败
                 return _render_fragment(
                     _build_wizard_wait_dialog(
                         message="正在重试连接...",
-                        error=restart_result.get("error", "连接失败"),
+                        error=result.get("error", "连接失败"),
                         auto_retry=True,
                     )
                 )
 
-            # restart_qmt 成功仅代表交易接口已连接，需验证 xtdata
-            logger.info("[retry-startup] restart_qmt 成功，验证 xtdata...")
-            retest = test_xtquant_connection(
-                xtquant_path=new_settings.xtquant_path or None,
-                qmt_path=new_settings.qmt_path or None,
-            )
-            logger.info("[retry-startup] xtdata 验证结果: {}", retest)
-            if not retest["success"]:
-                return _render_fragment(
-                    _build_wizard_wait_dialog(
-                        message="QMT 已启动，正在等待 xtdata 连接就绪...",
-                        error=retest.get("error", "xtdata 连接失败"),
-                        auto_retry=True,
-                    )
-                )
+            # 情况 C：没有后台任务 → 启动一个（在线程池中执行，不阻塞事件循环）
+            logger.info("[retry-startup] 启动后台重启任务...")
+            _restart_status = {}
 
-            # 重启 + xtdata 全部通过 → 触发 complete 提交设置并跳转
-            logger.info("[retry-startup] 全部通过，触发 auto_complete")
+            async def _watch_restart():
+                global _restart_status
+                try:
+                    result = await asyncio.to_thread(
+                        _wizard_restart_qmt,
+                        qmt_path=new_settings.qmt_path,
+                        account_id=new_settings.qmt_account_id,
+                        qmt_password=qmt_password,
+                        kill_first=True,
+                    )
+                    _restart_status = result
+                    logger.info("[retry-startup] 后台重启任务完成: {}", result)
+                except Exception as exc:
+                    _restart_status = {"success": False, "error": str(exc)}
+                    logger.error("[retry-startup] 后台重启任务异常: {}", exc)
+
+            asyncio.create_task(_watch_restart())
+
             return _render_fragment(
                 _build_wizard_wait_dialog(
-                    message="QMT 连接成功，正在完成初始化...",
-                    auto_complete=True,
+                    message="正在重启 QMT...",
+                    auto_retry=True,
                 )
             )
 
@@ -540,44 +616,74 @@ def create_app():
             )
 
     def _wizard_restart_qmt(
-        *, qmt_path: str, account_id: str, qmt_password: str
+        *, qmt_path: str, account_id: str, qmt_password: str, kill_first: bool = False
     ) -> dict:
-        """通过 trade_service.restart_qmt 启动/重启 QMT 客户端。
+        """启动 QMT 并填密码，不等待连接。
 
-        复用 TradeService 已有的完整重启逻辑：
-        - 杀旧进程 → 启动新进程 → 自动填密码登录 → 等待交易接口连接
-
-        Args:
-            qmt_path: QMT 安装路径（userdata_mini 或其父目录）。
-            account_id: QMT 资金账号。
-            qmt_password: QMT 交易密码（必填，无密码无法自动登录）。
+        init-wizard 场景：QMT 没在运行时启动它，已在运行时不做任何操作。
+        kill_first=True 时先杀掉已有进程再重启（用于重试场景）。
+        连接验证由 /init-wizard/retry-startup 的 auto-retry 轮询完成。
 
         Returns:
             ``{"success": True}`` 或 ``{"success": False, "error": <str>}``
         """
         from qmt_gateway.services.trade_service import trade_service
+        from qmt_gateway.qmt_init_helpers import is_qmt_process_running
 
         if not qmt_password or not qmt_password.strip():
             return {"success": False, "error": "未提供 QMT 交易密码，无法自动启动"}
 
-        old_qmt_path = trade_service._qmt_path
-        old_account_id = trade_service._account_id
-        result = {"success": False, "error": ""}
-        try:
+        if is_qmt_process_running() and not kill_first:
+            logger.info("[wizard] QMT 已在运行，跳过启动")
             trade_service._qmt_path = qmt_path
             trade_service._account_id = account_id
-            result = trade_service.restart_qmt(qmt_password)
-            if result.get("success"):
-                trade_service._qmt_path = qmt_path
-                trade_service._account_id = account_id
-            return result
+            return {"success": True}
+
+        password_token = None
+        try:
+            executable = trade_service._resolve_qmt_client_path(qmt_path)
+
+            if kill_first:
+                logger.info("[wizard] ① 杀掉旧 QMT 进程...")
+                try:
+                    trade_service._kill_qmt_process(executable.name)
+                    logger.info("[wizard] ① 已终止旧 QMT 进程")
+                except Exception:
+                    logger.info("[wizard] ① 无旧 QMT 进程需终止")
+                trade_service.disconnect()
+                import time
+                time.sleep(1)
+
+            logger.info("[wizard] ② 启动 QMT: qmt_path={}", qmt_path)
+
+            if trade_service._get_current_session_id() == 0:
+                password_token = trade_service.issue_restart_password_token(qmt_password)
+
+            process = trade_service._launch_qmt_process(executable, password_token=password_token)
+            logger.info("[wizard] ② QMT 进程已启动: pid={}", process.pid)
+
+            if password_token is None:
+                logger.info("[wizard] ③ 正在自动填入登录密码...")
+                trade_service._fill_qmt_login_password(process.pid, qmt_password)
+                logger.info("[wizard] ③ 登录密码已填入")
+
+            logger.info("[wizard] 启动+填密码完成，连接验证交给 auto-retry")
+
+            trade_service._qmt_path = qmt_path
+            trade_service._account_id = account_id
+
+            if password_token is not None:
+                trade_service.discard_restart_password_token(password_token)
+
+            return {"success": True}
         except Exception as exc:
-            logger.error(f"_wizard_restart_qmt 异常: {exc}")
+            logger.error(f"[wizard] 启动 QMT 异常: {exc}")
+            if password_token is not None:
+                try:
+                    trade_service.discard_restart_password_token(password_token)
+                except Exception:
+                    pass
             return {"success": False, "error": str(exc)}
-        finally:
-            if not result.get("success"):
-                trade_service._qmt_path = old_qmt_path
-                trade_service._account_id = old_account_id
 
     def _build_wizard_failure_fragment(
         *,
@@ -631,6 +737,8 @@ def create_app():
 
         messages.append(
             Div(
+                Div(id="wizard-retry-loading", cls="htmx-indicator text-sm text-gray-500 mb-2",
+                    children="正在操作，请稍候..."),
                 Button(
                     "重试启动 QMT",
                     cls="btn px-8 py-2",
@@ -638,6 +746,7 @@ def create_app():
                     style=f"background: {PRIMARY_COLOR}; color: white; border: none;",
                     hx_post="/init-wizard/retry-startup",
                     hx_target="#wizard-form-container",
+                    hx_indicator="#wizard-retry-loading",
                 ),
                 Button(
                     "返回修改配置",
@@ -699,7 +808,6 @@ def create_app():
                 P("QMT 启动失败，正在重试...", cls="text-lg font-bold text-orange-600 mb-3"),
                 P(error, cls="text-gray-700 mb-3 text-sm leading-relaxed"),
             ])
-            auto_delay = 3
         else:
             inner_parts.extend([
                 Div(
@@ -721,13 +829,17 @@ def create_app():
         # 按钮区域
         inner_parts.append(
             Div(
+                Div(id="wizard-retry-loading", cls="htmx-indicator text-sm text-gray-500 mb-2",
+                    children="正在操作，请稍候..."),
                 Button(
                     "重试",
                     cls="btn px-8 py-2",
                     id="wizard-retry-btn",
-                    style=f"background: {PRIMARY_COLOR}; color: white; border: none;",
+                    disabled="disabled",
+                    style="background: #d1d5db; color: white; border: none; cursor: not-allowed;",
                     hx_post="/init-wizard/retry-startup",
                     hx_target="#wizard-form-container",
+                    hx_indicator="#wizard-retry-loading",
                 ),
                 Button(
                     "返回修改配置",
@@ -784,7 +896,7 @@ def create_app():
             qmt_path: 同上。
         """
         try:
-            from qmt_gateway.core import add_xtquant_path, require_xtdata
+            from qmt_gateway.core import require_xtdata
 
             if xtquant_path is None or qmt_path is None:
                 settings = db.get_settings()
@@ -794,11 +906,6 @@ def create_app():
                 qmt_path = qmt_path or (
                     settings.qmt_path if settings.qmt_path else None
                 )
-
-            add_xtquant_path(
-                xtquant_path=xtquant_path,
-                qmt_path=qmt_path,
-            )
 
             xtdata = require_xtdata(
                 xtquant_path=xtquant_path,

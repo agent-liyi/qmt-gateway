@@ -173,7 +173,7 @@ def _snapshot_positions(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> None:
     if rows is None:
         return
     try:
-        db.conn.execute(
+        db.execute_write(
             "delete from positions where portfolio_id = ? and dt = ?",
             (portfolio_id, today),
         )
@@ -399,7 +399,7 @@ def register_routes(app):
         return trade_service.get_connection_status()
 
     @app.post("/api/trade/restart-qmt")
-    def restart_qmt(request, password: str = ""):
+    async def restart_qmt(request, password: str = ""):
         """重启 QMT 客户端并自动填入交易密码。
 
         如果未提供 password，则尝试使用 session 中存储的派生密钥解密已存储的 QMT 密码。
@@ -425,12 +425,32 @@ def register_routes(app):
                 logger.warning(f"解密存储的 QMT 密码失败: {e}")
 
         logger.info("收到 QMT 重启请求")
-        result = trade_service.restart_qmt(password)
+        result = await trade_service.restart_qmt(password)
         if result.get("success"):
             logger.info("QMT 重启完成并已发起重连")
         else:
             logger.warning("QMT 重启失败: {}", result.get("error", "未知错误"))
         return result
+
+    @app.get("/api/trade/restart-qmt/has-password")
+    def has_restart_qmt_password(request):
+        """检查当前会话是否可以获取到 QMT 交易密码。"""
+        require_api_key_or_session(request)
+        try:
+            settings = db.get_settings()
+            if not settings.qmt_password_encrypted:
+                return {"has_password": False, "message": "未存储 QMT 交易密码"}
+            derived_key = request.scope.get("session", {}).get("qmt_decrypt_key")
+            if not derived_key:
+                return {"has_password": False, "message": "会话已过期，请重新登录"}
+            from qmt_gateway.core.crypto_utils import decrypt_password_with_key
+            password = decrypt_password_with_key(settings.qmt_password_encrypted, derived_key)
+            if password:
+                return {"has_password": True, "message": "已存储 QMT 交易密码"}
+            return {"has_password": False, "message": "密码解密失败"}
+        except Exception as e:
+            logger.warning(f"检查 QMT 密码可用性失败: {e}")
+            return {"has_password": False, "message": str(e)}
 
     @app.get("/api/trade/restart-qmt/password")
     def get_restart_qmt_password(request, token: str = ""):

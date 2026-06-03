@@ -26,6 +26,37 @@ from qmt_gateway.db.models import (
 )
 
 
+_TABLE_WRITE_METHODS = {
+    "insert",
+    "insert_all",
+    "upsert",
+    "update",
+    "delete",
+    "delete_where",
+    "drop",
+    "drop_view",
+    "truncate",
+}
+
+
+class _LockedTableProxy:
+    """Serialize mutating sqlite-utils table operations across threads."""
+
+    def __init__(self, table, write_lock: threading.RLock):
+        self._table = table
+        self._write_lock = write_lock
+
+    def __getattr__(self, name):
+        attr = getattr(self._table, name)
+        if name in _TABLE_WRITE_METHODS and callable(attr):
+            def _wrapped(*args, **kwargs):
+                with self._write_lock:
+                    return attr(*args, **kwargs)
+
+            return _wrapped
+        return attr
+
+
 class SQLiteDB:
     """SQLite 数据库单例类
 
@@ -49,6 +80,7 @@ class SQLiteDB:
             return
 
         self._thread_local = threading.local()
+        self._write_lock = threading.RLock()
         self.db_path: str = ""
         self._initialized = False
 
@@ -72,7 +104,8 @@ class SQLiteDB:
         # 确保目录存在
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
 
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=5)
+        conn.execute("PRAGMA busy_timeout = 5000")
         db = su.Database(conn)
 
         # 启用 WAL 模式提高并发读性能
@@ -93,8 +126,8 @@ class SQLiteDB:
             raise RuntimeError("数据库未初始化，请先调用 init(db_path)")
 
         if not hasattr(self._thread_local, "conn"):
-            conn = sqlite3.connect(self.db_path, check_same_thread=True)
-            # 启用外键约束
+            conn = sqlite3.connect(self.db_path, check_same_thread=True, timeout=5)
+            conn.execute("PRAGMA busy_timeout = 5000")
             conn.execute("PRAGMA foreign_keys = ON")
             self._thread_local.conn = conn
             self._thread_local.db = su.Database(conn)
@@ -154,7 +187,15 @@ class SQLiteDB:
 
     def __getitem__(self, table_name) -> su.db.Table:
         """代理获取表对象"""
-        return self.db[table_name]  # type: ignore
+        return _LockedTableProxy(self.db[table_name], self._write_lock)  # type: ignore
+
+    def execute_write(self, sql: str, params: tuple[Any, ...] | list[Any] = ()):
+        """Execute a raw write statement under the shared write lock."""
+
+        with self._write_lock:
+            cursor = self.db.conn.execute(sql, params)
+            self.db.conn.commit()
+            return cursor
 
     def __getattr__(self, name):
         """代理其他方法调用"""

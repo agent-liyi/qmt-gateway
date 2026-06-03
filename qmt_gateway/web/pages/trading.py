@@ -106,6 +106,7 @@ def OrderForm(available_cash: float = 0):
                 cls="absolute z-50 w-full bg-white rounded shadow-lg mt-1 max-h-60 overflow-y-auto",
             ),
             # 隐藏字段存储选中的股票代码
+            Input(type="hidden", id="order-side", value="buy"),
             Input(type="hidden", id="selected-symbol", name="symbol"),
             Input(type="hidden", id="selected-stock-name", name="stock_name"),
             Input(type="hidden", id="selected-last-close", name="last_close", value="0"),
@@ -202,25 +203,33 @@ def OrderForm(available_cash: float = 0):
             Button("全仓", cls="btn btn-outline btn-sm flex-1", onclick="setPositionRatio(1.0)"),
             cls="flex mb-6",
         ),
-        # 买入/卖出按钮
+        # 方向选择按钮（不直接下单）
         Div(
             Button(
                 "买入",
                 id="buy-button",
                 type="button",
                 cls="btn btn-error flex-1 text-white",
-                style="background-color: #dc2626;",
-                onclick="window.submitTradeOrder('buy')",
+                style="background-color: #dc2626; opacity: 1;",
+                onclick="window.setOrderSide('buy')",
             ),
             Button(
                 "卖出",
                 id="sell-button",
                 type="button",
                 cls="btn btn-success flex-1 text-white ml-2",
-                style="background-color: #16a34a;",
-                onclick="window.submitTradeOrder('sell')",
+                style="background-color: #16a34a; opacity: 0.6;",
+                onclick="window.setOrderSide('sell')",
             ),
-            cls="flex",
+            cls="flex mb-2",
+        ),
+        # 确认下单按钮
+        Button(
+            "确认下单",
+            id="confirm-order-button",
+            type="button",
+            cls="btn btn-primary w-full text-white",
+            onclick="window.submitTradeOrder()",
         ),
         cls="h-full rounded-xl bg-white p-4 shadow",
     )
@@ -431,6 +440,12 @@ def PositionTable(positions: list[dict] | None = None):
                 if (window.refreshOrderEstimate) {
                     window.refreshOrderEstimate();
                 }
+                var sideInput = document.getElementById('order-side');
+                if (sideInput) sideInput.value = 'sell';
+                var buyBtn = document.getElementById('buy-button');
+                var sellBtn = document.getElementById('sell-button');
+                if (buyBtn) buyBtn.style.opacity = '0.6';
+                if (sellBtn) sellBtn.style.opacity = '1';
             };
         """),
         id="positions-orders-container",
@@ -534,6 +549,10 @@ def OrdersTable(orders: list[dict] | None = None):
             cls="overflow-x-auto",
         ),
         id="positions-orders-container",
+        hx_get="/api/trade/orders?view=table",
+        hx_trigger="every 5s",
+        hx_target="#positions-orders-container",
+        hx_swap="outerHTML",
     )
 
 
@@ -1016,8 +1035,32 @@ def TradingPage(
                 });
         };
 
-        window.submitTradeOrder = function(side) {
-            var orderSide = side === 'sell' ? 'sell' : 'buy';
+        window.setOrderSide = function(side) {
+            var sideInput = document.getElementById('order-side');
+            if (!sideInput) return;
+            sideInput.value = side;
+
+            var buyBtn = document.getElementById('buy-button');
+            var sellBtn = document.getElementById('sell-button');
+            if (buyBtn) buyBtn.style.opacity = side === 'buy' ? '1' : '0.6';
+            if (sellBtn) sellBtn.style.opacity = side === 'sell' ? '1' : '0.6';
+
+            var priceInput = document.getElementById('order-price');
+            if (priceInput) priceInput.value = '';
+
+            var orderValue = document.getElementById('order-value');
+            if (orderValue) orderValue.value = '';
+
+            var estimate = document.getElementById('order-estimate');
+            if (estimate) estimate.textContent = '--';
+
+            var sharesInput = document.getElementById('est-shares');
+            if (sharesInput) sharesInput.value = '';
+        };
+
+        window.submitTradeOrder = function() {
+            var orderSideInput = document.getElementById('order-side');
+            var orderSide = orderSideInput ? orderSideInput.value : 'buy';
             var sideText = orderSide === 'buy' ? '买入' : '卖出';
             if (window.refreshOrderEstimate) {
                 window.refreshOrderEstimate();

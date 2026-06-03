@@ -68,19 +68,12 @@ def register_routes(app):
         require_api_key_or_session(request)
 
         q = stock_search
-        logger.debug(f"[DEBUG] search_stocks called with q='{q}'")
-        
+
         if not q or len(q) < 1:
-            logger.debug("[DEBUG] Empty query, returning empty")
             return ""
 
-        # 检查股票列表是否已加载
-        all_stocks = stock_service.get_all_stocks()
-        logger.debug(f"[DEBUG] Total stocks in memory: {len(all_stocks)}")
-        
         stocks = stock_service.search_stocks(q)
-        logger.debug(f"[DEBUG] Found {len(stocks)} stocks for query '{q}'")
-        
+
         if not stocks:
             return _render_fragment(Div("无匹配结果", cls="p-2 text-gray-500 text-sm"))
         

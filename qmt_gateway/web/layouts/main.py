@@ -187,6 +187,23 @@ def RestartQmtModal():
                 ),
                 cls="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3",
             ),
+            # 密码输入区域（当没有存储密码时显示）
+            Div(
+                Label("QMT 交易密码", cls="block text-sm font-medium text-gray-700 mb-1"),
+                Input(
+                    type="password",
+                    id="restart-qmt-password",
+                    name="password",
+                    placeholder="请输入 QMT 交易密码",
+                    cls="input input-bordered w-full",
+                ),
+                P(
+                    "未检测到已存储的密码，请手动输入。",
+                    cls="text-xs text-gray-500 mt-1",
+                ),
+                id="restart-qmt-password-section",
+                cls="mb-4 hidden",
+            ),
             Div(id="restart-qmt-message", cls="hidden text-sm mb-4"),
             Div(
                 Button(
@@ -1051,6 +1068,7 @@ def HeaderStatusScript():
             function resetRestartQmtForm() {
                 var message = document.getElementById('restart-qmt-message');
                 var submitButton = document.getElementById('restart-qmt-submit');
+                var passwordInput = document.getElementById('restart-qmt-password');
                 if (message) {
                     message.textContent = '';
                     message.className = 'hidden text-sm mb-4';
@@ -1058,6 +1076,9 @@ def HeaderStatusScript():
                 if (submitButton) {
                     submitButton.disabled = false;
                     submitButton.textContent = '确认重启';
+                }
+                if (passwordInput) {
+                    passwordInput.value = '';
                 }
                 restartRequestInFlight = false;
             }
@@ -1145,6 +1166,28 @@ def HeaderStatusScript():
                     return;
                 }
                 resetRestartQmtForm();
+                
+                // 检查是否有存储的密码
+                var passwordSection = document.getElementById('restart-qmt-password-section');
+                if (passwordSection) {
+                    passwordSection.classList.add('hidden');
+                }
+                
+                fetch('/api/trade/restart-qmt/has-password', {
+                    headers: { 'Accept': 'application/json' },
+                })
+                    .then(function(response) { return response.json(); })
+                    .then(function(data) {
+                        if (!data.has_password && passwordSection) {
+                            passwordSection.classList.remove('hidden');
+                        }
+                    })
+                    .catch(function() {
+                        if (passwordSection) {
+                            passwordSection.classList.remove('hidden');
+                        }
+                    });
+                
                 modal.classList.add('modal-open');
             };
 
@@ -1170,13 +1213,16 @@ def HeaderStatusScript():
                 }
                 showRestartQmtMessage('正在重启 QMT 并尝试重新连接交易接口，请稍候...', true);
 
+                var passwordInput = document.getElementById('restart-qmt-password');
+                var password = passwordInput ? passwordInput.value : '';
+                
                 fetch('/api/trade/restart-qmt', {
                     method: 'POST',
                     headers: {
                         'Accept': 'application/json',
                         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
                     },
-                    body: '',
+                    body: password ? 'password=' + encodeURIComponent(password) : '',
                 })
                     .then(function(response) {
                         return response.json().catch(function() {

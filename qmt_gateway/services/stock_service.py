@@ -113,40 +113,38 @@ class StockService:
         Returns:
             匹配的股票列表
         """
-        logger.debug(f"[DEBUG] search_stocks: query='{query}', stocks_count={len(self._stocks)}")
-        
         if not query:
-            logger.debug("[DEBUG] search_stocks: empty query")
             return []
-        
+
+        # 懒加载：如果股票列表为空，尝试重新加载
+        if not self._stocks:
+            logger.info("股票列表为空，尝试重新加载")
+            self.update_stock_list()
+
+        if not self._stocks:
+            logger.warning("股票列表仍为空，无法搜索")
+            return []
+
         query = query.lower()
         results = []
-        
-        # 只检查前5个股票作为示例
-        sample_stocks = list(self._stocks.values())[:5]
-        for stock in sample_stocks:
-            logger.debug(f"[DEBUG] Sample stock: {stock.symbol}, name='{stock.name}', pinyin='{stock.pinyin}'")
-        
+
         for stock in self._stocks.values():
-            # 按代码搜索
-            if query in stock.symbol.lower():
-                logger.debug(f"[DEBUG] Matched by symbol: {stock.symbol}")
+            # 按代码搜索（前缀匹配，只匹配点号前的纯数字代码部分）
+            code_part = stock.symbol.lower().split('.')[0]
+            if code_part.startswith(query):
                 results.append(stock)
                 continue
-            
+
             # 按名称搜索
             if query in stock.name.lower():
-                logger.debug(f"[DEBUG] Matched by name: {stock.name}")
                 results.append(stock)
                 continue
-            
+
             # 按拼音搜索
             if stock.pinyin and query in stock.pinyin.lower():
-                logger.debug(f"[DEBUG] Matched by pinyin: {stock.pinyin}")
                 results.append(stock)
                 continue
-        
-        logger.debug(f"[DEBUG] search_stocks: found {len(results)} results")
+
         # 限制返回数量
         return results[:20]
 

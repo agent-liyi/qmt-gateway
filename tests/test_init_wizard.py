@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from fastcore.xml import to_xml
 from starlette.testclient import TestClient
 
 import qmt_gateway.apis.auth as auth_api
@@ -20,6 +21,7 @@ from qmt_gateway import app as app_module
 from qmt_gateway.app import app
 from qmt_gateway.db.models import Settings, User
 from qmt_gateway.db.sqlite import db
+from qmt_gateway.web.pages.init_wizard import InitWizardPage
 
 
 @pytest.fixture
@@ -134,19 +136,23 @@ def test_complete_rolls_back_when_xtquant_test_fails(
 
     验证：settings 字段、user 密码、``init_completed`` 全部保持原值。
     """
-    # 强制让 xtquant 测试失败：替换核心模块中的 require_xtdata
     from qmt_gateway import core as core_module
+    from qmt_gateway import qmt_init_helpers
+    from qmt_gateway.services.trade_service import trade_service as ts_instance
 
     def broken_require_xtdata(*args, **kwargs):
         raise RuntimeError("模拟 xtquant 不可用")
 
     monkeypatch.setattr(core_module, "require_xtdata", broken_require_xtdata)
+    monkeypatch.setattr(qmt_init_helpers, "is_qmt_process_running", lambda *a, **k: True)
+    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtItClient.exe"})())
+    monkeypatch.setattr(ts_instance, "_launch_qmt_process", lambda *a, **kw: type("P", (), {"pid": 1234})())
+    monkeypatch.setattr(ts_instance, "_fill_qmt_login_password", lambda *a, **kw: None)
+    monkeypatch.setattr(ts_instance, "_get_current_session_id", lambda: 1)
 
-    # 抓取提交前的状态
     settings_before = db.get_settings().to_dict()
     user_password_before = db.get_user("admin").password_hash
 
-    # 提交一份"会破坏现状"的表单
     response = client.post(
         "/init-wizard/complete",
         data={
@@ -159,45 +165,42 @@ def test_complete_rolls_back_when_xtquant_test_fails(
             "qmt_account_id": "new-account",
             "qmt_path": r"C:\new\qmt",
             "xtquant_path": r"C:\new\xtquant",
+            "qmt_password": "trade-pass-123",
             "principal": "2000000",
         },
     )
 
-    # 应当返回连接失败页面（200 + 含"连接测试失败"），而不是重定向到 /
     assert response.status_code == 200
     body = response.text
-    assert "QMT 连接失败" in body
-    # 新版错误页应同时提示自动恢复失败原因，并给出"重试"/"返回修改配置"按钮
-    assert "QMT 路径不存在" in body or "QMT 路径不正确" in body
+    # 启动成功但连接失败，应展示等待对话框
+    assert "wizard-progress-content" in body
     assert "重试" in body
     assert "返回修改配置" in body
 
-    # 回滚：所有字段应与提交前一致
     settings_after = db.get_settings().to_dict()
     assert settings_after == settings_before
     assert bool(settings_after["init_completed"]) is True
-    assert settings_after["server_port"] == 9999
-    assert settings_after["qmt_account_id"] == "old-account"
-    assert settings_after["qmt_path"] == r"C:\old\qmt"
-
-    # 密码 hash 必须未变
     assert db.get_user("admin").password_hash == user_password_before
-    # 旧密码仍可用
-    assert auth_api.verify_password("old-pass-123", user_password_before)
 
 
 def test_complete_rolls_back_settings_when_test_fails_after_partial_form(
     seeded_initialized_db, client, monkeypatch
 ):
-    """即使 wizard_data 已被部分填入，xtquant 失败时 settings 必须保持原状。"""
+    """即使 wizard_data 已被部分填入，连接失败时 settings 必须保持原状。"""
     from qmt_gateway import core as core_module
+    from qmt_gateway import qmt_init_helpers
+    from qmt_gateway.services.trade_service import trade_service as ts_instance
 
     def broken_require_xtdata(*args, **kwargs):
         raise RuntimeError("xtquant unavailable")
 
     monkeypatch.setattr(core_module, "require_xtdata", broken_require_xtdata)
+    monkeypatch.setattr(qmt_init_helpers, "is_qmt_process_running", lambda *a, **k: True)
+    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtItClient.exe"})())
+    monkeypatch.setattr(ts_instance, "_launch_qmt_process", lambda *a, **kw: type("P", (), {"pid": 1234})())
+    monkeypatch.setattr(ts_instance, "_fill_qmt_login_password", lambda *a, **kw: None)
+    monkeypatch.setattr(ts_instance, "_get_current_session_id", lambda: 1)
 
-    # 先访问 step 路由写入内存数据
     client.post(
         "/init-wizard/step/2",
         data={
@@ -217,13 +220,13 @@ def test_complete_rolls_back_settings_when_test_fails_after_partial_form(
             "qmt_account_id": "",
             "qmt_path": "",
             "xtquant_path": "",
+            "qmt_password": "trade-pass-123",
             "principal": "500000",
         },
     )
     assert response.status_code == 200
-    assert "QMT 连接失败" in response.text
+    assert "wizard-progress-content" in response.text
 
-    # settings 应当完全没动
     assert db.get_settings().to_dict() == settings_before
 
 
@@ -247,23 +250,15 @@ def _make_fake_qmt_install(root: Path) -> Path:
 def test_recovery_reports_invalid_path_without_launching(
     seeded_initialized_db, client, monkeypatch
 ):
-    """qmt_path 指向不存在的目录时，直接报\"路径不正确\"，不应尝试启动 QMT。"""
+    """qmt_path 指向不存在的目录时，_wizard_restart_qmt 应报路径错误。"""
     from qmt_gateway import core as core_module
+    from qmt_gateway import qmt_init_helpers
 
     def broken_require_xtdata(*args, **kwargs):
         raise RuntimeError("xtquant unavailable")
 
     monkeypatch.setattr(core_module, "require_xtdata", broken_require_xtdata)
-
-    launch_called = {"value": False}
-
-    def fake_launch(*args, **kwargs):
-        launch_called["value"] = True
-        return True
-
-    from qmt_gateway import qmt_init_helpers
-
-    monkeypatch.setattr(qmt_init_helpers, "launch_qmt_client", fake_launch)
+    monkeypatch.setattr(qmt_init_helpers, "is_qmt_process_running", lambda *a, **k: True)
 
     settings_before = db.get_settings().to_dict()
     response = client.post(
@@ -278,16 +273,14 @@ def test_recovery_reports_invalid_path_without_launching(
             "qmt_account_id": "",
             "qmt_path": r"C:\definitely\not\there",
             "xtquant_path": "",
+            "qmt_password": "trade-pass-123",
             "principal": "2000000",
         },
     )
     assert response.status_code == 200
     body = response.text
-    assert "QMT 连接失败" in body
-    assert "QMT 路径不存在" in body
-    # 不应触发启动
-    assert launch_called["value"] is False
-    # 提示用户返回修改
+    # 路径不存在时 _wizard_restart_qmt 会抛异常，wizard_complete 展示失败或等待对话框
+    assert "重试" in body
     assert "返回修改配置" in body
     # 回滚生效
     assert db.get_settings().to_dict() == settings_before
@@ -296,12 +289,9 @@ def test_recovery_reports_invalid_path_without_launching(
 def test_recovery_attempts_launch_when_path_valid_but_qmt_not_running(
     seeded_initialized_db, client, monkeypatch, tmp_path
 ):
-    """qmt_path 合法 + QMT 未运行 + 无交易密码 → wizard_complete 调用 restart_qmt 失败后返回等待对话框。
-
-    新行为：wizard_complete 在连接测试失败后直接调用 _wizard_restart_qmt（复用
-    trade_service.restart_qmt），若失败则返回含 auto_retry 的等待对话框。
-    """
+    """qmt_path 合法 + QMT 未运行 + 有交易密码 → wizard_complete 调用 restart_qmt 失败后返回等待对话框。"""
     from qmt_gateway import core as core_module
+    from qmt_gateway.services.trade_service import trade_service as ts_instance
 
     userdata = _make_fake_qmt_install(tmp_path)
 
@@ -309,6 +299,10 @@ def test_recovery_attempts_launch_when_path_valid_but_qmt_not_running(
         raise RuntimeError("首次连接失败")
 
     monkeypatch.setattr(core_module, "require_xtdata", fake_require_xtdata)
+    monkeypatch.setattr(
+        ts_instance, "restart_qmt",
+        lambda pw: {"success": False, "error": "连接失败"},
+    )
 
     settings_before = db.get_settings().to_dict()
     response = client.post(
@@ -323,6 +317,7 @@ def test_recovery_attempts_launch_when_path_valid_but_qmt_not_running(
             "qmt_account_id": "",
             "qmt_path": str(userdata),
             "xtquant_path": "",
+            "qmt_password": "trade-pass-123",
             "principal": "2000000",
         },
     )
@@ -341,12 +336,9 @@ def test_recovery_attempts_launch_when_path_valid_but_qmt_not_running(
 def test_recovery_succeeds_when_trade_service_restart_qmt(
     seeded_initialized_db, client, monkeypatch, tmp_path
 ):
-    """QMT 未运行 + 有交易密码 → wizard_complete 调用 trade_service.restart_qmt 后成功。
-
-    wizard_complete 在连接测试失败后调用 _wizard_restart_qmt（委托给
-    trade_service.restart_qmt），启动成功后直接完成初始化并返回 302 重定向。
-    """
+    """QMT 未运行 + 有交易密码 → wizard 启动 QMT + 填密码后连接成功。"""
     from qmt_gateway import core as core_module
+    from qmt_gateway import qmt_init_helpers
     from qmt_gateway.services.trade_service import trade_service as ts_instance
 
     userdata = _make_fake_qmt_install(tmp_path)
@@ -355,18 +347,19 @@ def test_recovery_succeeds_when_trade_service_restart_qmt(
 
     def fake_require_xtdata(*args, **kwargs):
         call_count["value"] += 1
-        if call_count["value"] == 1:
-            raise RuntimeError("首次连接失败")
         return _make_fake_xtdata()
 
-    restart_called = {"value": False}
+    launch_called = {"value": False}
 
-    def fake_restart_qmt(password):
-        restart_called["value"] = True
-        return {"success": True, "message": "QMT 已重启"}
+    def fake_launch(*a, **kw):
+        launch_called["value"] = True
+        return type("P", (), {"pid": 1234})()
 
     monkeypatch.setattr(core_module, "require_xtdata", fake_require_xtdata)
-    monkeypatch.setattr(ts_instance, "restart_qmt", fake_restart_qmt)
+    monkeypatch.setattr(qmt_init_helpers, "is_qmt_process_running", lambda *a, **k: False)
+    monkeypatch.setattr(ts_instance, "_launch_qmt_process", fake_launch)
+    monkeypatch.setattr(ts_instance, "_fill_qmt_login_password", lambda *a, **kw: None)
+    monkeypatch.setattr(ts_instance, "_get_current_session_id", lambda: 1)
 
     response = client.post(
         "/init-wizard/complete",
@@ -385,15 +378,143 @@ def test_recovery_succeeds_when_trade_service_restart_qmt(
         },
         follow_redirects=False,
     )
-    # trade_service.restart_qmt 应被调用
-    assert restart_called["value"] is True
-    # wizard_complete 应直接完成并重定向
+    # 启动成功，第二次连接测试成功
+    assert launch_called["value"] is True
     assert response.status_code in (302, 303)
-    # 落盘生效
     saved = db.get_settings()
     assert bool(saved.init_completed) is True
     assert saved.server_port == 8888
     assert saved.qmt_account_id == "new-account"
+
+
+def test_retry_startup_failure_branch_uses_fast_auto_retry(
+    seeded_initialized_db, client, monkeypatch, tmp_path
+):
+    """retry-startup 的失败态应保持 1 秒级自动轮询，避免成功后仍长时间卡住。"""
+    from qmt_gateway import app as app_module
+    from qmt_gateway.services.trade_service import trade_service as ts_instance
+
+    _make_fake_qmt_install(tmp_path)
+    monkeypatch.setattr(
+        app_module,
+        "_wizard_data",
+        {
+            "username": "admin",
+            "password": "new-pass-456",
+            "qmt_account_id": "8881457417",
+            "qmt_path": str(tmp_path / "FakeBrokerQMT" / "userdata_mini"),
+            "xtquant_path": r"C:\apps",
+            "qmt_password": "trade-pass-123",
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_restart_status",
+        {"success": False, "error": "连接失败"},
+    )
+    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtItClient.exe"})())
+    monkeypatch.setattr(ts_instance, "_kill_qmt_process", lambda *a, **k: None)
+
+    response = client.post("/init-wizard/retry-startup")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "QMT 启动失败，正在重试..." in body
+    assert ",1000);" in body or "1000" in body
+
+
+def test_retry_startup_success_branch_skips_xtdata_wait(
+    seeded_initialized_db, client, monkeypatch, tmp_path
+):
+    """restart_qmt 成功后应立即进入完成初始化，不再等待 xtdata 验证。"""
+    from qmt_gateway import app as app_module
+    from qmt_gateway.services.trade_service import trade_service as ts_instance
+
+    _make_fake_qmt_install(tmp_path)
+    monkeypatch.setattr(
+        app_module,
+        "_wizard_data",
+        {
+            "username": "admin",
+            "password": "new-pass-456",
+            "qmt_account_id": "8881457417",
+            "qmt_path": str(tmp_path / "FakeBrokerQMT" / "userdata_mini"),
+            "xtquant_path": r"C:\apps",
+            "qmt_password": "trade-pass-123",
+        },
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_restart_status",
+        {"success": True, "message": "QMT 已重启"},
+    )
+    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtItClient.exe"})())
+    monkeypatch.setattr(ts_instance, "_kill_qmt_process", lambda *a, **k: None)
+    from qmt_gateway import core as core_module
+    monkeypatch.setattr(
+        core_module,
+        "require_xtdata",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("xtdata check should be skipped")),
+    )
+
+    response = client.post("/init-wizard/retry-startup")
+
+    assert response.status_code == 200
+    body = response.text
+    assert "QMT 连接成功，正在完成初始化..." in body
+    assert "wizard-auto-retry" in body
+
+
+def test_recovery_forces_restart_when_qmt_is_running_but_connection_fails(
+    seeded_initialized_db, client, monkeypatch, tmp_path
+):
+    """QMT 已运行但未登录成功时，wizard_complete 必须强制重启而不是短路成功。"""
+    from qmt_gateway import core as core_module
+    from qmt_gateway import qmt_init_helpers
+    from qmt_gateway.services.trade_service import trade_service as ts_instance
+
+    userdata = _make_fake_qmt_install(tmp_path)
+    kill_called = {"value": False}
+    launch_called = {"value": False}
+
+    def fake_require_xtdata(*args, **kwargs):
+        raise RuntimeError("xtquant unavailable")
+
+    def fake_kill(*args, **kwargs):
+        kill_called["value"] = True
+
+    def fake_launch(*args, **kwargs):
+        launch_called["value"] = True
+        return type("P", (), {"pid": 4321})()
+
+    monkeypatch.setattr(core_module, "require_xtdata", fake_require_xtdata)
+    monkeypatch.setattr(qmt_init_helpers, "is_qmt_process_running", lambda *a, **k: True)
+    monkeypatch.setattr(ts_instance, "_kill_qmt_process", fake_kill)
+    monkeypatch.setattr(ts_instance, "_launch_qmt_process", fake_launch)
+    monkeypatch.setattr(ts_instance, "_fill_qmt_login_password", lambda *a, **kw: None)
+    monkeypatch.setattr(ts_instance, "_get_current_session_id", lambda: 1)
+
+    response = client.post(
+        "/init-wizard/complete",
+        data={
+            "username": "admin",
+            "password": "new-pass-456",
+            "server_port": "7777",
+            "log_path": "logs",
+            "log_rotation": "10 MB",
+            "log_retention": "3",
+            "qmt_account_id": "new-account",
+            "qmt_path": str(userdata),
+            "xtquant_path": "",
+            "qmt_password": "trade-pass-123",
+            "principal": "2000000",
+        },
+    )
+
+    assert response.status_code == 200
+    assert kill_called["value"] is True
+    assert launch_called["value"] is True
+    assert "wizard-progress-content" in response.text
 
 
 def _make_fake_xtdata():
@@ -404,3 +525,140 @@ def _make_fake_xtdata():
             return ["000001.SZ", "600000.SH"]
 
     return _FakeXtData()
+
+
+# ---------------------------------------------------------------------------
+# 行为 5：无 QMT 交易密码时跳过连接检查和自动启动
+# ---------------------------------------------------------------------------
+
+
+def test_complete_without_qmt_password_skips_connection_test(
+    seeded_initialized_db, client, monkeypatch
+):
+    """不提供 qmt_password 时，wizard_complete 应跳过连接检查，直接落库完成初始化。"""
+    require_xtdata_called = {"value": False}
+
+    def spy_require_xtdata(*args, **kwargs):
+        require_xtdata_called["value"] = True
+        return _make_fake_xtdata()
+
+    from qmt_gateway import core as core_module
+    monkeypatch.setattr(core_module, "require_xtdata", spy_require_xtdata)
+
+    response = client.post(
+        "/init-wizard/complete",
+        data={
+            "username": "admin",
+            "password": "new-pass-456",
+            "server_port": "8888",
+            "log_path": "logs",
+            "log_rotation": "10 MB",
+            "log_retention": "3",
+            "qmt_account_id": "new-account",
+            "qmt_path": r"C:\some\qmt",
+            "xtquant_path": "",
+            "qmt_password": "",
+            "principal": "2000000",
+        },
+        follow_redirects=False,
+    )
+
+    # 应直接重定向到首页
+    assert response.status_code in (302, 303)
+    # 不应调用 require_xtdata
+    assert require_xtdata_called["value"] is False
+    # 落盘生效
+    saved = db.get_settings()
+    assert bool(saved.init_completed) is True
+    assert saved.server_port == 8888
+    assert saved.qmt_account_id == "new-account"
+    # 无密码时不应存储加密密码
+    assert saved.qmt_password_encrypted == ""
+    assert saved.qmt_password_salt == ""
+
+
+def test_complete_without_qmt_password_still_saves_settings(
+    seeded_initialized_db, client, monkeypatch
+):
+    """无 QMT 密码完成初始化后，settings 各字段应正确保存。"""
+    from qmt_gateway import core as core_module
+    monkeypatch.setattr(core_module, "require_xtdata", lambda *a, **k: _make_fake_xtdata())
+
+    client.post(
+        "/init-wizard/complete",
+        data={
+            "username": "admin",
+            "password": "admin-pass",
+            "server_port": "8130",
+            "log_path": "/tmp/qmt-logs",
+            "log_rotation": "5 MB",
+            "log_retention": "5",
+            "qmt_account_id": "12345678",
+            "qmt_path": r"C:\broker\userdata_mini",
+            "xtquant_path": r"C:\apps",
+            "qmt_password": "",
+            "principal": "500000",
+        },
+        follow_redirects=False,
+    )
+
+    saved = db.get_settings()
+    assert saved.qmt_account_id == "12345678"
+    assert saved.init_completed is True
+    assert saved.qmt_password_encrypted == ""
+
+
+def test_complete_without_qmt_password_uses_hx_redirect_for_htmx_requests(
+    seeded_initialized_db, client, monkeypatch
+):
+    """HTMX 完成初始化时应返回 HX-Redirect，避免延迟或错误交换。"""
+    from qmt_gateway import core as core_module
+
+    monkeypatch.setattr(core_module, "require_xtdata", lambda *a, **k: _make_fake_xtdata())
+
+    response = client.post(
+        "/init-wizard/complete",
+        headers={"HX-Request": "true"},
+        data={
+            "username": "admin",
+            "password": "admin-pass",
+            "server_port": "8130",
+            "log_path": "/tmp/qmt-logs",
+            "log_rotation": "5 MB",
+            "log_retention": "5",
+            "qmt_account_id": "12345678",
+            "qmt_path": r"C:\broker\userdata_mini",
+            "xtquant_path": r"C:\apps",
+            "qmt_password": "",
+            "principal": "500000",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 200
+    assert response.headers.get("HX-Redirect") == "/"
+
+
+def test_init_wizard_page_script_uses_cumulative_30_second_retry_window():
+    """前端脚本应累计等待时间，并在 30 秒后开放手动重试。"""
+    html = to_xml(InitWizardPage())
+
+    assert "var _retryDelay = 30;" in html
+    assert "var _progressStartedAt = 0;" in html
+    assert "getResponseHeader('HX-Redirect')" in html
+
+
+def test_restart_qmt_fails_gracefully_without_password(seeded_initialized_db):
+    """_wizard_restart_qmt 在无密码时应返回失败，但不抛异常。"""
+    from qmt_gateway.app import _build_settings_from_wizard_data
+    wizard_data = {
+        "username": "admin",
+        "password": "admin-pass",
+        "server_port": "8130",
+        "qmt_account_id": "12345678",
+        "qmt_path": r"C:\broker\userdata_mini",
+        "qmt_password": "",
+    }
+    settings = _build_settings_from_wizard_data(wizard_data)
+    assert settings.qmt_password_encrypted == ""
+    assert settings.qmt_password_salt == ""

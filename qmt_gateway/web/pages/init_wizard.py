@@ -272,14 +272,22 @@ def Step5_QMT(form_data: dict | None = None):
                 # QMT 交易密码 - 横向布局
                 Div(
                     Label("QMT 交易密码", cls=label_cls),
-                    Input(
-                        type="password",
-                        name="qmt_password",
-                        value=fd.get("qmt_password", ""),
-                        placeholder="用于自动登录 QMT，加密存储",
-                        cls="input input-bordered flex-1",
+                    Div(
+                        Input(
+                            type="password",
+                            name="qmt_password",
+                            value=fd.get("qmt_password", ""),
+                            placeholder="可不填写，跳过自动启动和连接检查",
+                            cls="input input-bordered flex-1",
+                        ),
+                        P(
+                            "提示：若不填写，将跳过自动启动 QMT 和连接检查。"
+                            "重启 QMT 交易服务时需手动输入密码。",
+                            cls="text-xs text-gray-500 mt-1",
+                        ),
+                        cls="flex-1",
                     ),
-                    cls="flex items-center gap-3 mb-4",
+                    cls="flex items-start gap-3 mb-4",
                 ),
                 # QMT 路径 - 横向布局 + 保留下方提示
                 Div(
@@ -384,7 +392,7 @@ def _WizardProgressModal(visible: bool = False, oob: bool = False):
     - 标题 "检测 QMT 是否正在运行"
     - 加载动画 + 状态文字
     - 已等待时间计数器
-    - 重试按钮（3 秒后启用）+ 返回修改配置按钮
+    - 重试按钮（30 秒后启用）+ 返回修改配置按钮
 
     Args:
         visible: 是否可见（用于 OOB 交换时强制显示对话框）。
@@ -456,7 +464,7 @@ def _WizardScript():
     """向导页面的 HTMX 事件处理脚本。
 
     - 点击"完成初始化"或"重试"按钮时**立即**显示进度对话框并启动计时器
-    - 重试按钮 3 秒后启用；点击时先 abort 挂起的请求再发新的
+        - 重试按钮累计等待 30 秒后启用；auto-retry 不应重置这个计时
     - 请求成功后在 beforeSwap 中拦截，阻止 htmx 交换并全页跳转首页
     - 请求出错时隐藏进度对话框
     """
@@ -464,13 +472,23 @@ def _WizardScript():
 <script>
 (function() {
   var _timer = null;
-  var _elapsed = 0;
-  var _retryDelay = 3;
+    var _retryDelay = 30;
   var _wizardRequestActive = false;
+    var _progressStartedAt = 0;
+
+    function currentElapsedSeconds() {
+        if (!_progressStartedAt) return 0;
+        return Math.max(0, Math.floor((Date.now() - _progressStartedAt) / 1000));
+    }
+
+    function updateElapsedText() {
+        var el = document.getElementById('wizard-elapsed');
+        if (el) el.textContent = '已等待 ' + currentElapsedSeconds() + ' 秒';
+    }
 
   function enableRetryBtn() {
     var btn = document.getElementById('wizard-retry-btn');
-    if (!btn || !btn.disabled) return;
+        if (!btn) return;
     btn.disabled = false;
     btn.textContent = '重试';
     btn.style.background = '#D13527';
@@ -486,13 +504,41 @@ def _WizardScript():
     btn.style.cursor = 'not-allowed';
   }
 
-  function openProgressModal() {
+    function syncProgressState() {
+        updateElapsedText();
+        if (_wizardRequestActive) {
+            disableRetryBtn('正在重试...');
+            return;
+        }
+        if (currentElapsedSeconds() >= _retryDelay) {
+            enableRetryBtn();
+            return;
+        }
+        disableRetryBtn('重试');
+    }
+
+    function ensureProgressTimer() {
+        if (_timer) return;
+        _timer = setInterval(function() {
+            syncProgressState();
+        }, 1000);
+    }
+
+    function openProgressModal(options) {
+        options = options || {};
     var m = document.getElementById('wizard-progress-modal');
     if (!m) return;
+        var shouldResetTimer = !!options.resetTimer;
+        var shouldResetContent = !!options.resetContent;
+
+        if (!m.classList.contains('modal-open') || !_progressStartedAt) {
+            shouldResetTimer = true;
+        }
+
     m.classList.add('modal-open');
 
     var content = document.getElementById('wizard-progress-content');
-    if (content) {
+        if (content && shouldResetContent) {
       content.innerHTML =
         '<div class="mb-4"><span class="loading loading-spinner loading-lg text-primary"></span></div>' +
         '<p class="text-base text-gray-700 mb-2" id="wizard-progress-text">正在自动启动 QMT 客户端并测试连接，请稍候...</p>' +
@@ -507,19 +553,17 @@ def _WizardScript():
       if (window.htmx) htmx.process(content);
     }
 
-    _elapsed = 0;
-    if (_timer) clearInterval(_timer);
-    _timer = setInterval(function() {
-      _elapsed++;
-      var el = document.getElementById('wizard-elapsed');
-      if (el) el.textContent = '已等待 ' + _elapsed + ' 秒';
-      if (_elapsed >= _retryDelay) enableRetryBtn();
-    }, 1000);
+        if (shouldResetTimer) {
+            _progressStartedAt = Date.now();
+        }
+        ensureProgressTimer();
+        syncProgressState();
   }
 
   function closeProgressModal() {
     if (_timer) { clearInterval(_timer); _timer = null; }
     _wizardRequestActive = false;
+        _progressStartedAt = 0;
     var m = document.getElementById('wizard-progress-modal');
     if (m) m.classList.remove('modal-open');
   }
@@ -530,13 +574,27 @@ def _WizardScript():
     if (!btn) return;
     var hxPost = btn.getAttribute('hx-post') || '';
 
-    if (hxPost.indexOf('/init-wizard/complete') !== -1 ||
-        hxPost.indexOf('/init-wizard/retry-startup') !== -1) {
+    if (hxPost.indexOf('/init-wizard/complete') !== -1) {
+      var pwInput = document.querySelector('input[name="qmt_password"]');
+      if (pwInput && !pwInput.value.trim()) {
+        return;
+      }
+            _wizardRequestActive = true;
       var target = document.getElementById('wizard-form-container');
       if (target) {
         try { htmx.abort(target); } catch(ex) {}
       }
-      openProgressModal();
+            openProgressModal({ resetTimer: true, resetContent: true });
+    } else if (hxPost.indexOf('/init-wizard/retry-startup') !== -1) {
+            _wizardRequestActive = true;
+      var target = document.getElementById('wizard-form-container');
+      if (target) {
+        try { htmx.abort(target); } catch(ex) {}
+      }
+            openProgressModal({
+                resetTimer: btn.id !== 'wizard-auto-retry',
+                resetContent: btn.id !== 'wizard-auto-retry'
+            });
     }
   });
 
@@ -546,7 +604,7 @@ def _WizardScript():
     if (path.indexOf('/init-wizard/complete') !== -1 ||
         path.indexOf('/init-wizard/retry-startup') !== -1) {
       _wizardRequestActive = true;
-      disableRetryBtn('正在重试...');
+            syncProgressState();
     }
   });
 
@@ -556,6 +614,14 @@ def _WizardScript():
     if (!_wizardRequestActive) return;
 
     var xhr = evt.detail.xhr;
+        var hxRedirect = xhr.getResponseHeader('HX-Redirect');
+
+        if (hxRedirect) {
+            evt.preventDefault();
+            _wizardRequestActive = false;
+            window.location.href = hxRedirect;
+            return;
+        }
 
     /* 显式 3xx */
     if (xhr.status >= 300 && xhr.status < 400) {
@@ -577,6 +643,16 @@ def _WizardScript():
     }
   });
 
+    document.body.addEventListener('htmx:afterSwap', function(evt) {
+        var target = evt.detail.target;
+        if (!target) return;
+        if (target.id === 'wizard-form-container' ||
+                target.id === 'wizard-progress-content' ||
+                target.id === 'wizard-progress-modal') {
+            syncProgressState();
+        }
+    });
+
   /* 4. 请求完成后：清除标记，重新启用重试按钮 */
   document.body.addEventListener('htmx:afterRequest', function(evt) {
     var path = (evt.detail.requestConfig && evt.detail.requestConfig.path) || '';
@@ -584,7 +660,7 @@ def _WizardScript():
         path.indexOf('/init-wizard/retry-startup') === -1) return;
 
     _wizardRequestActive = false;
-    enableRetryBtn();
+        syncProgressState();
   });
 
   /* 5. 请求出错时关闭对话框 */

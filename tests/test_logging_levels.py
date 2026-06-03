@@ -48,13 +48,24 @@ def test_stock_service_search_uses_debug_level(monkeypatch):
         "000001.SZ": Stock(symbol="000001.SZ", name="平安银行", pinyin="payh", last_close=11.0),
     }
 
-    results = service.search_stocks("p")
+    # 按代码前缀匹配
+    results = service.search_stocks("60")
+    assert [item.symbol for item in results] == ["600000.SH"]
 
-    assert [item.symbol for item in results] == ["600000.SH", "000001.SZ"]
-    debug_messages = _messages(fake_logger.records, "DEBUG")
-    assert any("[DEBUG] search_stocks: query='p'" in message for message in debug_messages)
-    assert any("[DEBUG] Matched by pinyin" in message for message in debug_messages)
-    assert not any("[DEBUG]" in message for message in _messages(fake_logger.records, "INFO"))
+    results = service.search_stocks("00")
+    assert [item.symbol for item in results] == ["000001.SZ"]
+
+    # 按名称子串匹配
+    results = service.search_stocks("银行")
+    assert len(results) == 2
+
+    # 按拼音子串匹配
+    results = service.search_stocks("pa")
+    assert [item.symbol for item in results] == ["000001.SZ"]
+
+    # 已加载 stocks 时搜索不应产生日志
+    assert not _messages(fake_logger.records, "INFO")
+    assert not _messages(fake_logger.records, "WARNING")
 
 
 def test_trade_asset_debug_logs_use_debug_level(monkeypatch):
