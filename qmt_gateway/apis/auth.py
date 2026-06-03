@@ -9,6 +9,7 @@ from fasthtml.common import *
 from loguru import logger
 from starlette.responses import HTMLResponse
 
+from qmt_gateway.core.crypto_utils import _derive_key
 from qmt_gateway.db import db
 from qmt_gateway.db.models import User
 
@@ -116,6 +117,17 @@ def handle_login(request, username: str, password: str, auto_login: bool = False
         "is_admin": user.is_admin,
     }
 
+    # 如果已设置 QMT 交易密码，预计算解密密钥存储在 session 中
+    settings = db.get_settings()
+    if settings.qmt_password_encrypted and settings.qmt_password_salt:
+        try:
+            import base64
+            salt_bytes = bytes.fromhex(settings.qmt_password_salt)
+            derived_key = _derive_key(password, salt_bytes)
+            request.scope["session"]["qmt_decrypt_key"] = derived_key.decode("ascii")
+        except Exception as e:
+            logger.warning(f"预计算 QMT 密码解密密钥失败: {e}")
+
     logger.info(f"用户登录成功: {username}, 自动登录: {auto_login}")
     return RedirectResponse("/", status_code=302)
 
@@ -160,10 +172,85 @@ def handle_change_password(
     user.password_hash = hash_password(new_password)
     db.save_user(user)
 
+    # 重新加密 QMT 交易密码（使用新登录密码作为密钥）
+    settings = db.get_settings()
+    if settings.qmt_password_encrypted and settings.qmt_password_salt:
+        try:
+            from qmt_gateway.core.crypto_utils import (
+                decrypt_password,
+                encrypt_password,
+            )
+            qmt_password = decrypt_password(
+                settings.qmt_password_encrypted,
+                settings.qmt_password_salt,
+                old_password,
+            )
+            new_encrypted, new_salt = encrypt_password(qmt_password, new_password)
+            settings.qmt_password_encrypted = new_encrypted
+            settings.qmt_password_salt = new_salt
+            db.save_settings(settings)
+            logger.info(f"已使用新登录密码重新加密 QMT 交易密码")
+        except Exception as e:
+            logger.warning(f"重新加密 QMT 交易密码失败: {e}")
+            # 不阻断密码修改流程，用户可以在修改后重新设置 QMT 密码
+
     # 强制重新登录
     request.scope["session"].clear()
     logger.info(f"用户修改密码成功并已注销会话: {user.username}")
     return {"success": True, "message": "密码修改成功"}
+
+
+def handle_change_qmt_password(
+    request,
+    login_password: str,
+    new_qmt_password: str,
+    new_qmt_password_confirm: str = "",
+):
+    """处理修改 QMT 交易密码请求。
+
+    需要验证登录密码，然后使用登录密码作为密钥加密新的 QMT 交易密码。
+    """
+    user_info = request.scope.get("session", {}).get("user")
+    if not user_info:
+        return {"success": False, "message": "未登录"}
+
+    user = db.get_user(user_info["username"])
+    if not user:
+        return {"success": False, "message": "用户不存在"}
+
+    if not login_password:
+        return {"success": False, "message": "请输入登录密码"}
+
+    if not verify_password(login_password, user.password_hash):
+        return {"success": False, "message": "登录密码错误"}
+
+    if not new_qmt_password:
+        return {"success": False, "message": "请输入 QMT 交易密码"}
+
+    if new_qmt_password != new_qmt_password_confirm:
+        return {"success": False, "message": "两次输入的 QMT 交易密码不一致"}
+
+    # 加密并存储新的 QMT 交易密码
+    from qmt_gateway.core.crypto_utils import encrypt_password
+
+    try:
+        encrypted, salt = encrypt_password(new_qmt_password, login_password)
+        settings = db.get_settings()
+        settings.qmt_password_encrypted = encrypted
+        settings.qmt_password_salt = salt
+        db.save_settings(settings)
+
+        # 更新 session 中的解密密钥
+        import base64
+        salt_bytes = bytes.fromhex(salt)
+        derived_key = _derive_key(login_password, salt_bytes)
+        request.scope["session"]["qmt_decrypt_key"] = derived_key.decode("ascii")
+
+        logger.info(f"QMT 交易密码已更新: {user.username}")
+        return {"success": True, "message": "QMT 交易密码已保存"}
+    except Exception as e:
+        logger.warning(f"保存 QMT 交易密码失败: {e}")
+        return {"success": False, "message": f"保存失败: {e}"}
 
 
 def register_routes(app):
@@ -193,4 +280,18 @@ def register_routes(app):
             old_password,
             new_password,
             new_password_confirm=new_password_confirm,
+        )
+
+    @app.post("/auth/qmt-password")
+    def post_change_qmt_password(
+        request,
+        login_password: str,
+        new_qmt_password: str,
+        new_qmt_password_confirm: str = "",
+    ):
+        return handle_change_qmt_password(
+            request,
+            login_password,
+            new_qmt_password,
+            new_qmt_password_confirm=new_qmt_password_confirm,
         )

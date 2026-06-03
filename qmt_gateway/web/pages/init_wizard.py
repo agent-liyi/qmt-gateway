@@ -16,7 +16,12 @@ from qmt_gateway.web.theme import PRIMARY_COLOR, PrimaryButton, SecondaryButton
 
 
 def StepIndicator(current_step: int, total_steps: int = 5):
-    """步骤指示器"""
+    """步骤指示器
+
+    使用连接线 + 圆圈的样式，已完成步骤显示 ✓，
+    当前步骤圆圈带外环高亮，未完成步骤灰色显示。
+    连接线与圆圈垂直居中对齐，整体宽度与表单内容一致。
+    """
     steps = [
         ("欢迎", 1),
         ("管理员", 2),
@@ -25,34 +30,71 @@ def StepIndicator(current_step: int, total_steps: int = 5):
         ("QMT配置", 5),
     ]
 
+    # 所有圆圈统一 w-9 h-9 (36px)，圆心 = padding-top + 18px
+    # 连接线 h-0.5 (2px)，线心 = margin-top + 1px
+    # 对齐公式：padding-top + 18 = margin-top + 1  →  margin-top = padding-top + 17
+    CIRCLE_PAD = 14       # px: 圆圈顶部留白
+    LINE_MARGIN_TOP = CIRCLE_PAD + 17  # = 31px → 线心 = 31+1 = 32 = 14+18 ✓
+
     items = []
     for name, step in steps:
         is_active = step == current_step
         is_completed = step < current_step
 
         if is_active:
-            circle_style = f"background: {PRIMARY_COLOR}; color: white;"
-            text_style = f"color: {PRIMARY_COLOR}; font-weight: bold;"
-        elif is_completed:
-            circle_style = f"background: {PRIMARY_COLOR}; color: white;"
-            text_style = f"color: {PRIMARY_COLOR};"
-        else:
-            circle_style = "background: #e5e7eb; color: #9ca3af;"
-            text_style = "color: #9ca3af;"
-
-        items.append(
-            Div(
-                Div(
-                    str(step),
-                    cls="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold",
-                    style=circle_style,
+            circle = Div(
+                str(step),
+                cls="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold "
+                    "text-white shrink-0",
+                style=(
+                    f"background: {PRIMARY_COLOR};"
+                    f"box-shadow: 0 0 0 4px rgba(209,53,39,0.2);"
                 ),
-                Div(name, cls="text-xs mt-1", style=text_style),
-                cls="flex flex-col items-center mx-2",
             )
-        )
+            label_style = f"color: {PRIMARY_COLOR}; font-weight: 700;"
+        elif is_completed:
+            circle = Div(
+                "✓",
+                cls="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold "
+                    "text-white shrink-0",
+                style=f"background: {PRIMARY_COLOR};",
+            )
+            label_style = f"color: {PRIMARY_COLOR}; font-weight: 500;"
+        else:
+            circle = Div(
+                str(step),
+                cls="w-9 h-9 rounded-full flex items-center justify-center text-sm font-medium "
+                    "shrink-0",
+                style="background: #e5e7eb; color: #9ca3af;",
+            )
+            label_style = "color: #9ca3af;"
 
-    return Div(*items, cls="flex justify-center mb-8")
+        step_col = Div(
+            circle,
+            Div(name, cls="text-xs mt-2 whitespace-nowrap", style=label_style),
+            cls="flex flex-col items-center",
+            style=f"padding-top: {CIRCLE_PAD}px;",
+        )
+        items.append(step_col)
+
+        # 连接线（最后一个步骤后面不加）
+        if step < total_steps:
+            line_color = PRIMARY_COLOR if is_completed else "#e5e7eb"
+            items.append(
+                Div(
+                    cls="flex-1 h-0.5 mx-2 shrink-0",
+                    style=(
+                        f"background: {line_color};"
+                        f"min-width: 24px;"
+                        f"margin-top: {LINE_MARGIN_TOP}px;"
+                    ),
+                )
+            )
+
+    return Div(
+        *items,
+        cls="flex items-start mb-10 max-w-lg mx-auto",
+    )
 
 
 def Step1_Welcome():
@@ -74,42 +116,43 @@ def Step1_Welcome():
 
 def Step2_Admin():
     """步骤2：管理员设置"""
+    label_cls = "w-28 shrink-0 text-sm font-semibold text-gray-700"
     return Div(
         H4("设置管理员账号", cls="text-xl font-semibold mb-4", style=f"color: {PRIMARY_COLOR};"),
         Card(
             CardBody(
                 Div(
-                    Label("用户名", cls="label"),
+                    Label("用户名", cls=label_cls),
                     Input(
                         type="text",
                         name="username",
                         value="admin",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    cls="mb-4",
+                    cls="flex items-center gap-3 mb-4",
                 ),
                 Div(
-                    Label("密码", cls="label"),
+                    Label("密码", cls=label_cls),
                     Input(
                         type="password",
                         name="password",
                         placeholder="请输入密码",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    cls="mb-4",
+                    cls="flex items-center gap-3 mb-4",
                 ),
                 Div(
-                    Label("确认密码", cls="label"),
+                    Label("确认密码", cls=label_cls),
                     Input(
                         type="password",
                         name="password_confirm",
                         placeholder="请再次输入密码",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    cls="mb-4",
+                    cls="flex items-center gap-3",
                 ),
             ),
             cls="mb-4",
@@ -120,54 +163,55 @@ def Step2_Admin():
 
 def Step3_Server():
     """步骤3：服务器设置"""
+    label_cls = "w-28 shrink-0 text-sm font-semibold text-gray-700"
     return Div(
         H4("服务器设置", cls="text-xl font-semibold mb-4", style=f"color: {PRIMARY_COLOR};"),
         P("建议使用默认配置。", cls="text-gray-600 mb-4"),
         Card(
             CardBody(
                 Div(
-                    Label("服务器端口", cls="label"),
+                    Label("服务器端口", cls=label_cls),
                     Input(
                         type="number",
                         name="server_port",
                         value="8130",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    cls="mb-4",
+                    cls="flex items-center gap-3 mb-4",
                 ),
                 Div(
-                    Label("日志路径", cls="label"),
+                    Label("日志路径", cls=label_cls),
                     Input(
                         type="text",
                         name="log_path",
                         value="~/.qmt-gateway/log",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    cls="mb-4",
+                    cls="flex items-center gap-3 mb-4",
                 ),
                 Div(
-                    Label("日志轮转大小", cls="label"),
+                    Label("日志轮转大小", cls=label_cls),
                     Input(
                         type="text",
                         name="log_rotation",
                         value="10 MB",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    cls="mb-4",
+                    cls="flex items-center gap-3 mb-4",
                 ),
                 Div(
-                    Label("日志保留数量", cls="label"),
+                    Label("日志保留数量", cls=label_cls),
                     Input(
                         type="number",
                         name="log_retention",
                         value="10",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    cls="mb-4",
+                    cls="flex items-center gap-3",
                 ),
             ),
             cls="mb-4",
@@ -178,23 +222,24 @@ def Step3_Server():
 
 def Step4_Principal():
     """步骤4：本金设置"""
+    label_cls = "w-28 shrink-0 text-sm font-semibold text-gray-700"
     return Div(
         H4("本金设置", cls="text-xl font-semibold mb-4", style=f"color: {PRIMARY_COLOR};"),
         P("设置账户起始资金，用于盈亏和仓位计算基准。", cls="text-gray-600 mb-4"),
         Card(
             CardBody(
                 Div(
-                    Label("初始本金（元）", cls="label"),
+                    Label("初始本金（元）", cls=label_cls),
                     Input(
                         type="number",
                         name="principal",
                         value="1000000",
                         min="0.01",
                         step="0.01",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    cls="mb-2",
+                    cls="flex items-center gap-3",
                 ),
             ),
             cls="mb-4",
@@ -203,45 +248,67 @@ def Step4_Principal():
     )
 
 
-def Step5_QMT():
+def Step5_QMT(form_data: dict | None = None):
     """步骤5：QMT 配置"""
+    fd = form_data or {}
+    label_cls = "w-28 shrink-0 text-sm font-semibold text-gray-700"
     return Div(
         H4("QMT 配置", cls="text-xl font-semibold mb-4", style=f"color: {PRIMARY_COLOR};"),
         Card(
             CardBody(
+                # QMT 账号 - 横向布局
                 Div(
-                    Label("QMT 账号", cls="label"),
+                    Label("QMT 账号", cls=label_cls),
                     Input(
                         type="text",
                         name="qmt_account_id",
+                        value=fd.get("qmt_account_id", ""),
                         placeholder="请输入 QMT 账号",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    cls="mb-4",
+                    cls="flex items-center gap-3 mb-4",
                 ),
+                # QMT 交易密码 - 横向布局
                 Div(
-                    Label("QMT 路径", cls="label"),
+                    Label("QMT 交易密码", cls=label_cls),
+                    Input(
+                        type="password",
+                        name="qmt_password",
+                        value=fd.get("qmt_password", ""),
+                        placeholder="用于自动登录 QMT，加密存储",
+                        cls="input input-bordered flex-1",
+                    ),
+                    cls="flex items-center gap-3 mb-4",
+                ),
+                # QMT 路径 - 横向布局 + 保留下方提示
+                Div(
+                    Label("QMT 路径", cls=label_cls),
                     Input(
                         type="text",
                         name="qmt_path",
+                        value=fd.get("qmt_path", ""),
                         placeholder=r"例如: C:\国金证券QMT交易端\userdata_mini",
-                        cls="input input-bordered w-full",
+                        cls="input input-bordered flex-1",
                         required="required",
                     ),
-                    P("提示：输入包含 userdata_mini 的完整路径。如果不知道安装位置，可以在文件资源管理器中搜索 userdata_mini", cls="text-xs text-gray-500 mt-1"),
-                    cls="mb-4",
+                    cls="flex items-center gap-3",
                 ),
+                P(
+                    "提示：输入包含 userdata_mini 的完整路径。如果不知道安装位置，可以在文件资源管理器中搜索 userdata_mini",
+                    cls="text-xs text-gray-500 mt-1 ml-31",
+                ),
+                # xtquant 路径 - 横向布局
                 Div(
-                    Label("xtquant 路径", cls="label"),
+                    Label("xtquant 路径", cls=label_cls),
                     Input(
                         type="text",
                         name="xtquant_path",
-                        placeholder=r"例如: C:\apps",
-                        cls="input input-bordered w-full",
+                        value=fd.get("xtquant_path", ""),
+                        placeholder=r"例如: C:\apps（xtquant 解压后的父目录）",
+                        cls="input input-bordered flex-1",
                     ),
-                    P(r"提示：输入 xtquant 解压后的父目录路径。如果解压到 C:\apps\xtquant，则填入 C:\apps", cls="text-xs text-gray-500 mt-1"),
-                    cls="mb-4",
+                    cls="flex items-center gap-3 mt-4",
                 ),
             ),
             cls="mb-4",
@@ -252,12 +319,13 @@ def Step5_QMT():
 
 def WizardContent(step: int, form_data: dict | None = None):
     """根据步骤渲染内容"""
+    if step == 5:
+        return Step5_QMT(form_data=form_data)
     content_map = {
         1: Step1_Welcome(),
         2: Step2_Admin(),
         3: Step3_Server(),
         4: Step4_Principal(),
-        5: Step5_QMT(),
     }
     return content_map.get(step, Step1_Welcome())
 
@@ -302,8 +370,230 @@ def WizardButtons(step: int, total_steps: int = 5):
     return Div(
         Div(*left_buttons, cls="flex gap-2"),
         Div(*right_buttons, cls="flex gap-2"),
-        cls="flex justify-between mt-6 pt-4 border-t",
+        cls="flex justify-between mt-8 pt-5 border-t border-gray-200",
     )
+
+
+def _WizardProgressModal(visible: bool = False, oob: bool = False):
+    """QMT 启动/连接进度对话框（独立于表单容器，不会被 HTMX 交换替换）。
+
+    内容区域 id="wizard-progress-content" 支持 OOB 交换，
+    用于动态更新加载状态、错误信息与重试按钮。
+
+    对话框包含：
+    - 标题 "检测 QMT 是否正在运行"
+    - 加载动画 + 状态文字
+    - 已等待时间计数器
+    - 重试按钮（3 秒后启用）+ 返回修改配置按钮
+
+    Args:
+        visible: 是否可见（用于 OOB 交换时强制显示对话框）。
+        oob: 是否作为 HTMX OOB 交换元素返回（响应片段中使用）。
+    """
+    modal_cls = "modal modal-open" if visible else "modal"
+    kwargs = dict(
+        cls=modal_cls,
+        id="wizard-progress-modal",
+    )
+    if oob:
+        kwargs["hx_swap_oob"] = "true"
+    return Div(
+        Div(cls="modal-backdrop"),
+        Div(
+            Div(
+                # 标题
+                H3(
+                    "检测 QMT 是否正在运行",
+                    cls="text-lg font-bold text-gray-800 mb-6",
+                ),
+                # 可 OOB 替换的内容区
+                Div(
+                    Div(
+                        Span(cls="loading loading-spinner loading-lg text-primary"),
+                        cls="mb-4",
+                    ),
+                    P(
+                        "正在自动启动 QMT 客户端并测试连接，请稍候...",
+                        cls="text-base text-gray-700 mb-2",
+                        id="wizard-progress-text",
+                    ),
+                    P(
+                        "已等待 0 秒",
+                        cls="text-sm text-gray-400",
+                        id="wizard-elapsed",
+                    ),
+                    # 按钮区域
+                    Div(
+                        Button(
+                            "重试",
+                            cls="btn px-8 py-2",
+                            id="wizard-retry-btn",
+                            disabled="disabled",
+                            style="background: #d1d5db; color: white; border: none; cursor: not-allowed;",
+                            hx_post="/init-wizard/retry-startup",
+                            hx_target="#wizard-form-container",
+                        ),
+                        Button(
+                            "返回修改配置",
+                            cls="btn btn-ghost px-8 py-2",
+                            hx_get="/init-wizard/step/5",
+                            hx_target="#wizard-form-container",
+                        ),
+                        cls="flex justify-center gap-3 mt-6",
+                    ),
+                    id="wizard-progress-content",
+                    cls="text-center py-2 px-2",
+                ),
+                cls="py-6 px-6",
+            ),
+            cls="modal-box bg-white shadow-2xl",
+        ),
+        **kwargs,
+    )
+
+
+def _WizardScript():
+    """向导页面的 HTMX 事件处理脚本。
+
+    - 点击"完成初始化"或"重试"按钮时**立即**显示进度对话框并启动计时器
+    - 重试按钮 3 秒后启用；点击时先 abort 挂起的请求再发新的
+    - 请求成功后在 beforeSwap 中拦截，阻止 htmx 交换并全页跳转首页
+    - 请求出错时隐藏进度对话框
+    """
+    return NotStr(r"""
+<script>
+(function() {
+  var _timer = null;
+  var _elapsed = 0;
+  var _retryDelay = 3;
+  var _wizardRequestActive = false;
+
+  function enableRetryBtn() {
+    var btn = document.getElementById('wizard-retry-btn');
+    if (!btn || !btn.disabled) return;
+    btn.disabled = false;
+    btn.textContent = '重试';
+    btn.style.background = '#D13527';
+    btn.style.cursor = 'pointer';
+  }
+
+  function disableRetryBtn(text) {
+    var btn = document.getElementById('wizard-retry-btn');
+    if (!btn) return;
+    btn.disabled = true;
+    btn.textContent = text || '重试';
+    btn.style.background = '#d1d5db';
+    btn.style.cursor = 'not-allowed';
+  }
+
+  function openProgressModal() {
+    var m = document.getElementById('wizard-progress-modal');
+    if (!m) return;
+    m.classList.add('modal-open');
+
+    var content = document.getElementById('wizard-progress-content');
+    if (content) {
+      content.innerHTML =
+        '<div class="mb-4"><span class="loading loading-spinner loading-lg text-primary"></span></div>' +
+        '<p class="text-base text-gray-700 mb-2" id="wizard-progress-text">正在自动启动 QMT 客户端并测试连接，请稍候...</p>' +
+        '<p class="text-sm text-gray-400" id="wizard-elapsed">已等待 0 秒</p>' +
+        '<div class="flex justify-center gap-3 mt-6">' +
+          '<button class="btn px-8 py-2" id="wizard-retry-btn" disabled ' +
+            'style="background:#d1d5db;color:white;border:none;cursor:not-allowed;" ' +
+            'hx-post="/init-wizard/retry-startup" hx-target="#wizard-form-container">重试</button>' +
+          '<button class="btn btn-ghost px-8 py-2" ' +
+            'hx-get="/init-wizard/step/5" hx-target="#wizard-form-container">返回修改配置</button>' +
+        '</div>';
+      if (window.htmx) htmx.process(content);
+    }
+
+    _elapsed = 0;
+    if (_timer) clearInterval(_timer);
+    _timer = setInterval(function() {
+      _elapsed++;
+      var el = document.getElementById('wizard-elapsed');
+      if (el) el.textContent = '已等待 ' + _elapsed + ' 秒';
+      if (_elapsed >= _retryDelay) enableRetryBtn();
+    }, 1000);
+  }
+
+  function closeProgressModal() {
+    if (_timer) { clearInterval(_timer); _timer = null; }
+    _wizardRequestActive = false;
+    var m = document.getElementById('wizard-progress-modal');
+    if (m) m.classList.remove('modal-open');
+  }
+
+  /* 1. 点击"重试"时，先 abort 挂起的请求 */
+  document.body.addEventListener('click', function(e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    var hxPost = btn.getAttribute('hx-post') || '';
+
+    if (hxPost.indexOf('/init-wizard/complete') !== -1 ||
+        hxPost.indexOf('/init-wizard/retry-startup') !== -1) {
+      var target = document.getElementById('wizard-form-container');
+      if (target) {
+        try { htmx.abort(target); } catch(ex) {}
+      }
+      openProgressModal();
+    }
+  });
+
+  /* 2. 请求发送前：标记 + 禁用重试按钮 */
+  document.body.addEventListener('htmx:beforeRequest', function(evt) {
+    var path = (evt.detail.requestConfig && evt.detail.requestConfig.path) || '';
+    if (path.indexOf('/init-wizard/complete') !== -1 ||
+        path.indexOf('/init-wizard/retry-startup') !== -1) {
+      _wizardRequestActive = true;
+      disableRetryBtn('正在重试...');
+    }
+  });
+
+  /* 3. 交换前：检测重定向（302 被透明跟随为 200 + 首页 HTML）
+        必须在 beforeSwap 拦截，阻止 htmx 把首页 HTML 塞进 wizard 容器 */
+  document.body.addEventListener('htmx:beforeSwap', function(evt) {
+    if (!_wizardRequestActive) return;
+
+    var xhr = evt.detail.xhr;
+
+    /* 显式 3xx */
+    if (xhr.status >= 300 && xhr.status < 400) {
+      evt.preventDefault();
+      _wizardRequestActive = false;
+      window.location.href = xhr.getResponseHeader('Location') || '/';
+      return;
+    }
+
+    /* 200 但响应不含 wizard 片段 → 说明是重定向后的全页 HTML */
+    if (xhr.status === 200) {
+      var text = xhr.responseText || '';
+      if (text.indexOf('wizard-form-container') === -1) {
+        evt.preventDefault();
+        _wizardRequestActive = false;
+        window.location.href = '/';
+        return;
+      }
+    }
+  });
+
+  /* 4. 请求完成后：清除标记，重新启用重试按钮 */
+  document.body.addEventListener('htmx:afterRequest', function(evt) {
+    var path = (evt.detail.requestConfig && evt.detail.requestConfig.path) || '';
+    if (path.indexOf('/init-wizard/complete') === -1 &&
+        path.indexOf('/init-wizard/retry-startup') === -1) return;
+
+    _wizardRequestActive = false;
+    enableRetryBtn();
+  });
+
+  /* 5. 请求出错时关闭对话框 */
+  document.body.addEventListener('htmx:responseError', function(evt) {
+    closeProgressModal();
+  });
+})();
+</script>
+""")
 
 
 def InitWizardForm(step: int = 1, form_data: dict | None = None, error: str = None):
@@ -337,14 +627,27 @@ def InitWizardForm(step: int = 1, form_data: dict | None = None, error: str = No
             cls="bg-white rounded-lg shadow p-6 max-w-4xl mx-auto",
             id="wizard-form",
         ),
+        # 错误信息 OOB 交换区域（用于在重试时清除旧错误）
+        Div(id="wizard-error"),
         cls="py-8 px-4",
         id="wizard-form-container",
     )
 
 
 def InitWizardPage(step: int = 1, form_data: dict | None = None):
-    """初始化向导页面（完整页面）"""
+    """初始化向导页面（完整页面）
+
+    页面结构：
+    - 向导表单（可被 HTMX 交换）
+    - 进度对话框（独立于表单容器，持久存在）
+    - HTMX 事件脚本
+    """
     return create_base_page(
-        InitWizardForm(step, form_data),
+        Div(
+            InitWizardForm(step, form_data),
+            _WizardProgressModal(),
+            _WizardScript(),
+            cls="relative",
+        ),
         page_title="系统初始化 - QMT Gateway",
     )

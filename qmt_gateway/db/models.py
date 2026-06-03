@@ -111,6 +111,8 @@ class Settings(Entity):
     qmt_account_type: str = ""
     qmt_path: str = ""
     xtquant_path: str = ""
+    qmt_password_encrypted: str = ""
+    qmt_password_salt: str = ""
     data_start_date: str = "2024-01-01"
     data_home: str = "data"
     init_completed: bool = False
@@ -130,6 +132,8 @@ class Settings(Entity):
             "qmt_account_type": self.qmt_account_type,
             "qmt_path": self.qmt_path,
             "xtquant_path": self.xtquant_path,
+            "qmt_password_encrypted": self.qmt_password_encrypted,
+            "qmt_password_salt": self.qmt_password_salt,
             "data_start_date": self.data_start_date,
             "data_home": self.data_home,
             "init_completed": int(self.init_completed),
@@ -150,6 +154,8 @@ class Settings(Entity):
             qmt_account_type=data.get("qmt_account_type", ""),
             qmt_path=data.get("qmt_path", ""),
             xtquant_path=data.get("xtquant_path", ""),
+            qmt_password_encrypted=data.get("qmt_password_encrypted", ""),
+            qmt_password_salt=data.get("qmt_password_salt", ""),
             data_start_date=data.get("data_start_date", "2024-01-01"),
             data_home=data.get("data_home", "data"),
             init_completed=bool(data.get("init_completed", 0)),

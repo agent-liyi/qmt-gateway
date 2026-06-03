@@ -21,6 +21,10 @@ from loguru import logger
 from qmt_gateway.config import config
 from qmt_gateway.core import add_xtquant_path
 from qmt_gateway.core.enums import BidType, OrderSide, OrderStatus
+from qmt_gateway.core.process_utils import (
+    kill_process as _kill_process_shared,
+    list_process_ids as _list_process_ids_shared,
+)
 from qmt_gateway.db.models import Order, Trade
 from qmt_gateway.db.sqlite import db
 from qmt_gateway.qmt_login_automation import (
@@ -403,31 +407,12 @@ class TradeService:
         return value.decode("utf-8", errors="ignore")
 
     def _list_process_ids(self, executable_name: str) -> list[int]:
-        result = subprocess.run(
-            ["tasklist", "/FO", "CSV", "/NH", "/FI", f"IMAGENAME eq {executable_name}"],
-            capture_output=True,
-            text=False,
-            timeout=15,
-            check=False,
-        )
-        stdout = self._decode_subprocess_output(result.stdout)
-        stderr = self._decode_subprocess_output(result.stderr)
-        combined = f"{stdout}\n{stderr}".lower()
-        if result.returncode != 0 and not any(marker in combined for marker in QMT_PROCESS_NOT_FOUND_MARKERS):
-            raise RuntimeError(combined.strip() or f"查询 QMT 进程失败，退出码: {result.returncode}")
+        """查询指定可执行文件的进程 ID（委托给共享模块）。"""
+        return _list_process_ids_shared(executable_name)
 
-        process_ids: list[int] = []
-        for row in csv_reader(io.StringIO(stdout)):
-            if len(row) < 2:
-                continue
-            image_name = str(row[0] or "").strip().lower()
-            if image_name != executable_name.lower():
-                continue
-            try:
-                process_ids.append(int(str(row[1]).replace(",", "").strip()))
-            except ValueError:
-                continue
-        return process_ids
+    def _kill_qmt_process(self, executable_name: str) -> str:
+        """强制终止指定可执行文件的进程（委托给共享模块）。"""
+        return _kill_process_shared(executable_name)
 
     def _get_current_session_id(self) -> int | None:
         session_id = c_uint()
@@ -499,24 +484,6 @@ class TradeService:
             if process_id not in process_ids:
                 process_ids.append(process_id)
         return process_ids
-
-    def _kill_qmt_process(self, executable_name: str) -> str:
-
-        result = subprocess.run(
-            ["taskkill", "/F", "/T", "/IM", executable_name],
-            capture_output=True,
-            text=False,
-            timeout=15,
-            check=False,
-        )
-        stdout = self._decode_subprocess_output(result.stdout)
-        stderr = self._decode_subprocess_output(result.stderr)
-        combined = f"{stdout}\n{stderr}".lower()
-        if result.returncode == 0:
-            return "terminated"
-        if any(marker in combined for marker in QMT_PROCESS_NOT_FOUND_MARKERS):
-            return "not-running"
-        raise RuntimeError(combined.strip() or f"终止 QMT 进程失败，退出码: {result.returncode}")
 
     def _wait_for_new_process(self, executable_name: str, before_pids: set[int]):
         deadline = time.monotonic() + max(float(self._qmt_launch_probe_timeout_sec), 1.0)
@@ -696,14 +663,21 @@ class TradeService:
         return False
 
     def _connect_with_helper_status(self, account_id: str, qmt_path: str, password_token: str | None = None) -> dict:
-        deadline = time.monotonic() + max(float(self._qmt_restart_timeout_sec), 1.0)
+        timeout = max(float(self._qmt_restart_timeout_sec), 1.0)
+        deadline = time.monotonic() + timeout
         last_message = self.get_connection_status().get("message", "交易接口重连失败")
+        attempt = 0
 
         while time.monotonic() < deadline:
+            attempt += 1
+            elapsed = int(time.monotonic() - (deadline - timeout))
+
             helper_status = self.get_restart_helper_status(password_token)
             if helper_status:
+                logger.warning("[restart_qmt] 连接尝试 #{} ({}s): 辅助进程报错: {}", attempt, elapsed, helper_status)
                 return {"success": False, "error": helper_status}
 
+            logger.info("[restart_qmt] 连接尝试 #{} ({}s/{:.0f}s)...", attempt, elapsed, timeout)
             if self.connect(account_id=account_id, qmt_path=qmt_path):
                 return {"success": True, "message": "QMT 已重启并重新连接交易接口"}
 
@@ -713,6 +687,7 @@ class TradeService:
         helper_status = self.get_restart_helper_status(password_token)
         if helper_status:
             return {"success": False, "error": helper_status}
+        logger.warning("[restart_qmt] 超时: 共尝试 {} 次, 耗时 {:.0f}s, 最后错误: {}", attempt, timeout, last_message)
         return {"success": False, "error": last_message}
 
     def restart_qmt(self, password: str) -> dict:
@@ -728,26 +703,40 @@ class TradeService:
         password_token: str | None = None
         try:
             executable = self._resolve_qmt_client_path(qmt_path)
-            logger.info("准备重启 QMT: qmt_path={}, executable={}", qmt_path, executable)
+            logger.info("[restart_qmt] ① 准备重启 QMT: qmt_path={}, executable={}", qmt_path, executable)
+
             self.disconnect()
             self._set_connection_state(False, "交易接口连接断开，正在重启 QMT")
+
+            logger.info("[restart_qmt] ② 正在终止旧 QMT 进程...")
             kill_result = self._kill_qmt_process(executable.name)
             if kill_result == "terminated":
-                logger.info("已终止现有 QMT 进程: image={}", executable.name)
+                logger.info("[restart_qmt] ② 已终止现有 QMT 进程: image={}", executable.name)
             else:
-                logger.info("未发现正在运行的 QMT 进程: image={}", executable.name)
+                logger.info("[restart_qmt] ② 未发现正在运行的 QMT 进程: image={}", executable.name)
+
             if self._get_current_session_id() == 0:
                 password_token = self.issue_restart_password_token(resolved_password)
-            process = self._launch_qmt_process(executable, password_token=password_token)
-            if password_token is None:
-                self._fill_qmt_login_password(process.pid, resolved_password)
 
+            logger.info("[restart_qmt] ③ 正在启动新 QMT 进程...")
+            process = self._launch_qmt_process(executable, password_token=password_token)
+            logger.info("[restart_qmt] ③ QMT 进程已启动: pid={}", process.pid)
+
+            if password_token is None:
+                logger.info("[restart_qmt] ④ 正在自动填入登录密码...")
+                self._fill_qmt_login_password(process.pid, resolved_password)
+                logger.info("[restart_qmt] ④ 登录密码已填入")
+
+            logger.info("[restart_qmt] ⑤ 正在连接交易接口 (account={}, timeout={}s)...",
+                        account_id, self._qmt_restart_timeout_sec)
             result = self._connect_with_helper_status(account_id, qmt_path, password_token=password_token)
             if result.get("success"):
+                logger.info("[restart_qmt] ✓ 重启完成，交易接口已连接")
                 return result
+            logger.warning("[restart_qmt] ✗ 重启完成但连接失败: {}", result.get("error"))
             return {"success": False, "error": result.get("error", "交易接口重连失败")}
         except Exception as exc:
-            logger.error(f"重启 QMT 失败: {exc}")
+            logger.error("[restart_qmt] ✗ 重启过程异常: {}", exc)
             self._set_connection_state(False, f"重启 QMT 失败: {exc}")
             return {"success": False, "error": str(exc)}
         finally:

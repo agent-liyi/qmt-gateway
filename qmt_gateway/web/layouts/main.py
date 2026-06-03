@@ -177,7 +177,7 @@ def RestartQmtModal():
                 cls="mb-4 flex items-center justify-between",
             ),
             P(
-                "当交易接口连接断开时，你可以在这里重启 QMT 客户端，并自动填入本次输入的交易密码。",
+                "使用已存储的交易密码自动登录 QMT 客户端。",
                 cls="mb-3 text-sm leading-6 text-gray-600",
             ),
             Div(
@@ -186,18 +186,6 @@ def RestartQmtModal():
                     cls="text-sm leading-6 text-amber-700",
                 ),
                 cls="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3",
-            ),
-            Div(
-                Label("交易密码", cls="label"),
-                Input(
-                    type="password",
-                    id="restart-qmt-password",
-                    placeholder="请输入交易服务器密码",
-                    cls="input input-bordered w-full",
-                    autocomplete="current-password",
-                    onkeydown="if (event.key === 'Enter') { submitRestartQmt(); }",
-                ),
-                cls="mb-4",
             ),
             Div(id="restart-qmt-message", cls="hidden text-sm mb-4"),
             Div(
@@ -367,42 +355,108 @@ def ChangePasswordModal():
                 ),
                 cls="mb-4 flex items-center justify-between",
             ),
-            P(
-                "修改密码后，当前会话将立即失效，需要重新登录。",
-                cls="mb-4 text-sm text-gray-600",
-            ),
+            # Tab 导航
             Div(
-                Label("原密码", cls="label"),
-                Input(
-                    type="password",
-                    id="change-password-old",
-                    placeholder="请输入当前密码",
-                    cls="input input-bordered w-full",
-                    autocomplete="current-password",
+                Button(
+                    "登录密码",
+                    type="button",
+                    id="tab-login-password",
+                    cls="tab tab-bordered tab-active",
+                    onclick="switchPasswordTab('login')",
                 ),
-                cls="mb-3",
+                Button(
+                    "QMT 交易密码",
+                    type="button",
+                    id="tab-qmt-password",
+                    cls="tab tab-bordered",
+                    onclick="switchPasswordTab('qmt')",
+                ),
+                cls="tabs tabs-boxed mb-4",
             ),
+            # 登录密码表单
             Div(
-                Label("新密码", cls="label"),
-                Input(
-                    type="password",
-                    id="change-password-new",
-                    placeholder="请输入新密码",
-                    cls="input input-bordered w-full",
-                    autocomplete="new-password",
-                ),
-                cls="mb-3",
+                id="login-password-form",
+                children=[
+                    P(
+                        "修改登录密码后，当前会话将立即失效，需要重新登录。",
+                        cls="mb-4 text-sm text-gray-600",
+                    ),
+                    Div(
+                        Label("原密码", cls="label"),
+                        Input(
+                            type="password",
+                            id="change-password-old",
+                            placeholder="请输入当前密码",
+                            cls="input input-bordered w-full",
+                            autocomplete="current-password",
+                        ),
+                        cls="mb-3",
+                    ),
+                    Div(
+                        Label("新密码", cls="label"),
+                        Input(
+                            type="password",
+                            id="change-password-new",
+                            placeholder="请输入新密码",
+                            cls="input input-bordered w-full",
+                            autocomplete="new-password",
+                        ),
+                        cls="mb-3",
+                    ),
+                    Div(
+                        Label("再次输入新密码", cls="label"),
+                        Input(
+                            type="password",
+                            id="change-password-confirm",
+                            placeholder="请再次输入新密码",
+                            cls="input input-bordered w-full",
+                            autocomplete="new-password",
+                        ),
+                        cls="mb-3",
+                    ),
+                ],
             ),
+            # QMT 交易密码表单
             Div(
-                Label("再次输入新密码", cls="label"),
-                Input(
-                    type="password",
-                    id="change-password-confirm",
-                    placeholder="请再次输入新密码",
-                    cls="input input-bordered w-full",
-                    autocomplete="new-password",
-                ),
-                cls="mb-3",
+                id="qmt-password-form",
+                cls="hidden",
+                children=[
+                    P(
+                        "修改 QMT 交易密码后，下次重启 QMT 时将自动使用新密码登录。",
+                        cls="mb-4 text-sm text-gray-600",
+                    ),
+                    Div(
+                        Label("登录密码", cls="label"),
+                        Input(
+                            type="password",
+                            id="change-qmt-login-password",
+                            placeholder="请输入登录密码以验证身份",
+                            cls="input input-bordered w-full",
+                            autocomplete="current-password",
+                        ),
+                        cls="mb-3",
+                    ),
+                    Div(
+                        Label("新的 QMT 交易密码", cls="label"),
+                        Input(
+                            type="password",
+                            id="change-qmt-new-password",
+                            placeholder="请输入新的 QMT 交易密码",
+                            cls="input input-bordered w-full",
+                        ),
+                        cls="mb-3",
+                    ),
+                    Div(
+                        Label("再次输入新的 QMT 交易密码", cls="label"),
+                        Input(
+                            type="password",
+                            id="change-qmt-confirm-password",
+                            placeholder="请再次输入新的 QMT 交易密码",
+                            cls="input input-bordered w-full",
+                        ),
+                        cls="mb-3",
+                    ),
+                ],
             ),
             Div(id="change-password-message", cls="hidden text-sm mb-4"),
             Div(
@@ -430,10 +484,39 @@ def ChangePasswordModal():
 
 def ChangePasswordModalScript():
     return Script("""
+        var currentPasswordTab = 'login';
+
+        function switchPasswordTab(tab) {
+            currentPasswordTab = tab;
+            var loginTab = document.getElementById('tab-login-password');
+            var qmtTab = document.getElementById('tab-qmt-password');
+            var loginForm = document.getElementById('login-password-form');
+            var qmtForm = document.getElementById('qmt-password-form');
+            var message = document.getElementById('change-password-message');
+
+            if (message) {
+                message.className = 'hidden text-sm mb-4';
+                message.textContent = '';
+            }
+
+            if (tab === 'login') {
+                if (loginTab) loginTab.classList.add('tab-active');
+                if (qmtTab) qmtTab.classList.remove('tab-active');
+                if (loginForm) loginForm.classList.remove('hidden');
+                if (qmtForm) qmtForm.classList.add('hidden');
+            } else {
+                if (loginTab) loginTab.classList.remove('tab-active');
+                if (qmtTab) qmtTab.classList.add('tab-active');
+                if (loginForm) loginForm.classList.add('hidden');
+                if (qmtForm) qmtForm.classList.remove('hidden');
+            }
+        }
+
         function showChangePasswordModal() {
             var modal = document.getElementById('change-password-modal');
             if (!modal) return;
-            ['change-password-old', 'change-password-new', 'change-password-confirm'].forEach(function(id) {
+            ['change-password-old', 'change-password-new', 'change-password-confirm',
+             'change-qmt-login-password', 'change-qmt-new-password', 'change-qmt-confirm-password'].forEach(function(id) {
                 var el = document.getElementById(id);
                 if (el) el.value = '';
             });
@@ -447,6 +530,7 @@ def ChangePasswordModalScript():
                 submit.disabled = false;
                 submit.textContent = '保存';
             }
+            switchPasswordTab('login');
             modal.classList.add('modal-open');
         }
 
@@ -465,10 +549,19 @@ def ChangePasswordModalScript():
         }
 
         async function submitChangePassword() {
+            var submit = document.getElementById('change-password-submit');
+
+            if (currentPasswordTab === 'login') {
+                await submitLoginPassword(submit);
+            } else {
+                await submitQmtPassword(submit);
+            }
+        }
+
+        async function submitLoginPassword(submit) {
             var oldEl = document.getElementById('change-password-old');
             var newEl = document.getElementById('change-password-new');
             var confirmEl = document.getElementById('change-password-confirm');
-            var submit = document.getElementById('change-password-submit');
             var oldPassword = oldEl ? oldEl.value : '';
             var newPassword = newEl ? newEl.value : '';
             var confirmPassword = confirmEl ? confirmEl.value : '';
@@ -513,6 +606,61 @@ def ChangePasswordModalScript():
                 }
             } catch (e) {
                 showChangePasswordMessage('修改失败: ' + e.message, false);
+                if (submit) {
+                    submit.disabled = false;
+                    submit.textContent = '保存';
+                }
+            }
+        }
+
+        async function submitQmtPassword(submit) {
+            var loginPwEl = document.getElementById('change-qmt-login-password');
+            var newPwEl = document.getElementById('change-qmt-new-password');
+            var confirmPwEl = document.getElementById('change-qmt-confirm-password');
+            var loginPassword = loginPwEl ? loginPwEl.value : '';
+            var newPassword = newPwEl ? newPwEl.value : '';
+            var confirmPassword = confirmPwEl ? confirmPwEl.value : '';
+
+            if (!loginPassword || !newPassword || !confirmPassword) {
+                showChangePasswordMessage('请完整填写登录密码和新的 QMT 交易密码', false);
+                return;
+            }
+            if (newPassword !== confirmPassword) {
+                showChangePasswordMessage('两次输入的 QMT 交易密码不一致', false);
+                return;
+            }
+            if (submit) {
+                submit.disabled = true;
+                submit.textContent = '保存中...';
+            }
+            try {
+                var response = await fetch('/auth/qmt-password', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    },
+                    body: new URLSearchParams({
+                        login_password: loginPassword,
+                        new_qmt_password: newPassword,
+                        new_qmt_password_confirm: confirmPassword,
+                    }).toString(),
+                });
+                var result = await response.json().catch(function() { return {}; });
+                if (response.ok && result.success) {
+                    showChangePasswordMessage('QMT 交易密码已保存', true);
+                    window.setTimeout(function() {
+                        closeChangePasswordModal();
+                    }, 1200);
+                    return;
+                }
+                showChangePasswordMessage(result.message || '保存失败', false);
+                if (submit) {
+                    submit.disabled = false;
+                    submit.textContent = '保存';
+                }
+            } catch (e) {
+                showChangePasswordMessage('保存失败: ' + e.message, false);
                 if (submit) {
                     submit.disabled = false;
                     submit.textContent = '保存';
@@ -643,6 +791,7 @@ def ApiKeyModalScript():
                 data.forEach(function(item) {
                     var row = document.createElement('div');
                     row.className = 'flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2';
+                    row.dataset.keyId = String(item.id || '');
                     var left = document.createElement('div');
                     left.className = 'flex flex-col';
                     var name = document.createElement('span');
@@ -651,22 +800,19 @@ def ApiKeyModalScript():
                     var meta = document.createElement('span');
                     meta.className = 'text-xs text-gray-500 font-mono';
                     var prefix = item.key_prefix || '';
-                    var status = item.revoked ? '已吊销' : '有效';
                     var created = item.created_at || '';
-                    meta.textContent = prefix + ' · ' + status + ' · ' + created;
+                    meta.textContent = prefix + ' · ' + created;
                     left.appendChild(name);
                     left.appendChild(meta);
                     row.appendChild(left);
-                    if (!item.revoked) {
-                        var btn = document.createElement('button');
-                        btn.type = 'button';
-                        btn.className = 'btn btn-xs btn-ghost text-red-600';
-                        btn.textContent = '吊销';
-                        btn.addEventListener('click', function() {
-                            revokeApiKey(item.id);
-                        });
-                        row.appendChild(btn);
-                    }
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn btn-xs btn-ghost text-red-600';
+                    btn.textContent = '吊销';
+                    btn.addEventListener('click', function() {
+                        revokeApiKey(item.id, row);
+                    });
+                    row.appendChild(btn);
                     list.appendChild(row);
                 });
             } catch (e) {
@@ -712,7 +858,7 @@ def ApiKeyModalScript():
             }
         }
 
-        async function revokeApiKey(keyId) {
+        async function revokeApiKey(keyId, row) {
             if (!keyId) return;
             if (!window.confirm('确定要吊销该 API key 吗？吊销后无法恢复。')) {
                 return;
@@ -724,8 +870,13 @@ def ApiKeyModalScript():
                 });
                 var result = await response.json().catch(function() { return {}; });
                 if (response.ok && result.code === 0) {
+                    if (row && row.parentNode) {
+                        row.parentNode.removeChild(row);
+                    }
+                    if (list && list.children.length === 0) {
+                        list.innerHTML = '<div class="text-sm text-gray-400">尚未生成任何 API key</div>';
+                    }
                     showApiKeyMessage('已吊销', true);
-                    refreshApiKeyList();
                 } else {
                     showApiKeyMessage((result && result.message) || '吊销失败', false);
                 }
@@ -898,12 +1049,8 @@ def HeaderStatusScript():
             }
 
             function resetRestartQmtForm() {
-                var passwordInput = document.getElementById('restart-qmt-password');
                 var message = document.getElementById('restart-qmt-message');
                 var submitButton = document.getElementById('restart-qmt-submit');
-                if (passwordInput) {
-                    passwordInput.value = '';
-                }
                 if (message) {
                     message.textContent = '';
                     message.className = 'hidden text-sm mb-4';
@@ -994,17 +1141,11 @@ def HeaderStatusScript():
 
             window.openRestartQmtModal = function() {
                 var modal = document.getElementById('restart-qmt-modal');
-                var passwordInput = document.getElementById('restart-qmt-password');
                 if (!modal || tradeConnectionState.connected) {
                     return;
                 }
                 resetRestartQmtForm();
                 modal.classList.add('modal-open');
-                if (passwordInput) {
-                    window.setTimeout(function() {
-                        passwordInput.focus();
-                    }, 0);
-                }
             };
 
             window.closeRestartQmtModal = function() {
@@ -1016,18 +1157,9 @@ def HeaderStatusScript():
             };
 
             window.submitRestartQmt = function() {
-                var passwordInput = document.getElementById('restart-qmt-password');
                 var submitButton = document.getElementById('restart-qmt-submit');
-                var password = passwordInput ? String(passwordInput.value || '') : '';
 
                 if (restartRequestInFlight) {
-                    return;
-                }
-                if (!password.trim()) {
-                    showRestartQmtMessage('请输入交易密码', false);
-                    if (passwordInput) {
-                        passwordInput.focus();
-                    }
                     return;
                 }
 
@@ -1044,7 +1176,7 @@ def HeaderStatusScript():
                         'Accept': 'application/json',
                         'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
                     },
-                    body: new URLSearchParams({ password: password }).toString(),
+                    body: '',
                 })
                     .then(function(response) {
                         return response.json().catch(function() {

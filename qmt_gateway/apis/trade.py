@@ -400,8 +400,30 @@ def register_routes(app):
 
     @app.post("/api/trade/restart-qmt")
     def restart_qmt(request, password: str = ""):
-        """重启 QMT 客户端并自动填入交易密码"""
+        """重启 QMT 客户端并自动填入交易密码。
+
+        如果未提供 password，则尝试使用 session 中存储的派生密钥解密已存储的 QMT 密码。
+        """
         require_api_key_or_session(request)
+
+        # 如果未提供密码，尝试使用存储的加密密码
+        if not password:
+            try:
+                settings = db.get_settings()
+                if settings.qmt_password_encrypted:
+                    from qmt_gateway.core.crypto_utils import decrypt_password_with_key
+                    # 从 session 获取预计算的解密密钥
+                    derived_key = request.scope.get("session", {}).get("qmt_decrypt_key")
+                    if derived_key:
+                        password = decrypt_password_with_key(
+                            settings.qmt_password_encrypted, derived_key
+                        )
+                        logger.info("已使用存储的加密密码自动登录 QMT")
+                    else:
+                        logger.warning("session 中无 qmt_decrypt_key，无法解密存储的密码")
+            except Exception as e:
+                logger.warning(f"解密存储的 QMT 密码失败: {e}")
+
         logger.info("收到 QMT 重启请求")
         result = trade_service.restart_qmt(password)
         if result.get("success"):

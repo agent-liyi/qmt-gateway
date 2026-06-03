@@ -19,6 +19,7 @@ from qmt_gateway.services.trade_service import TradeService
 
 
 trade_service_module = importlib.import_module("qmt_gateway.services.trade_service")
+process_utils_module = importlib.import_module("qmt_gateway.core.process_utils")
 
 
 def test_cancel_order_returns_recent_cancel_error(monkeypatch):
@@ -197,7 +198,7 @@ def test_kill_qmt_process_ignores_missing_process_message(monkeypatch):
     missing_message = '错误: 没有找到进程 "XtItClient.exe"。'.encode("gbk")
 
     monkeypatch.setattr(
-        trade_service_module.subprocess,
+        process_utils_module.subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(returncode=128, stdout=b"", stderr=missing_message),
     )
@@ -209,7 +210,7 @@ def test_kill_qmt_process_raises_for_other_failures(monkeypatch):
     service = TradeService()
 
     monkeypatch.setattr(
-        trade_service_module.subprocess,
+        process_utils_module.subprocess,
         "run",
         lambda *args, **kwargs: SimpleNamespace(returncode=5, stdout=b"", stderr=b"Access is denied."),
     )

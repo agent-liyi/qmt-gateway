@@ -10,6 +10,7 @@ from typing import Any
 from fasthtml.common import *
 from loguru import logger
 
+from qmt_gateway.apis.api_keys import require_api_key_or_session
 from qmt_gateway.services.quote_service import quote_service
 
 
@@ -95,8 +96,9 @@ def register_routes(app):
         await quote_ws.handle(ws)
 
     @app.get("/api/v1/quotes/status")
-    def get_quote_status():
+    def get_quote_status(request):
         """获取行情服务状态"""
+        require_api_key_or_session(request)
         return {
             "running": quote_service.is_running(),
             "clients": len(quote_ws._clients),

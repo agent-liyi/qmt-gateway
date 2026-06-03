@@ -28,9 +28,14 @@ from qmt_gateway.db.models import Asset, Settings, User
 from qmt_gateway.runtime import runtime
 from qmt_gateway.services.scheduler import scheduler
 from qmt_gateway.web.pages.data_mgmt import DataMgmtPage
-from qmt_gateway.web.pages.init_wizard import InitWizardForm, InitWizardPage
+from qmt_gateway.web.pages.init_wizard import (
+    InitWizardForm,
+    InitWizardPage,
+    _WizardProgressModal,
+)
 from qmt_gateway.web.pages.logs import LogsPage
 from qmt_gateway.web.pages.trading import TradingPage
+from qmt_gateway.web.theme import PRIMARY_COLOR
 from starlette.responses import HTMLResponse, StreamingResponse
 
 # 存储向导表单数据的临时缓存
@@ -42,9 +47,224 @@ def _render_page(page) -> HTMLResponse:
     return HTMLResponse(to_xml(page))
 
 
-def _render_fragment(fragment) -> HTMLResponse:
-    """显式渲染 HTMX 片段，规避 FastHTML 片段响应兼容问题。"""
-    return HTMLResponse(to_xml(fragment))
+def _render_fragment(*fragments) -> HTMLResponse:
+    """显式渲染 HTMX 片段，规避 FastHTML 片段响应兼容问题。
+
+    支持多个片段同时输出（用于 OOB 交换）。
+    """
+    return HTMLResponse(to_xml(fragments if len(fragments) > 1 else fragments[0]))
+
+
+def _seed_wizard_data_from_current_settings() -> dict:
+    """用数据库中现有的 settings 与管理员账号预填向导表单。
+
+    这样在 ``force=true`` 模式下，用户一路点击"下一步"而不修改任何字段，
+    最终点击"完成初始化"时，提交的内容与原值一致，**等价于一次 no-op**。
+    """
+    seed: dict = {}
+    try:
+        settings = db.get_settings()
+    except Exception:
+        settings = None
+    if settings is not None:
+        seed["server_port"] = str(settings.server_port)
+        seed["log_path"] = settings.log_path
+        seed["log_rotation"] = settings.log_rotation
+        seed["log_retention"] = str(settings.log_retention)
+        seed["qmt_account_id"] = settings.qmt_account_id
+        seed["qmt_path"] = settings.qmt_path
+        seed["xtquant_path"] = settings.xtquant_path
+        seed["principal"] = "1000000"  # 本金不强制保留；给个默认以便 no-op
+    try:
+        existing = db.get_user("admin")
+        if existing is not None:
+            seed["username"] = existing.username
+    except Exception:
+        pass
+    return seed
+
+
+def _snapshot_wizard_state(username: str) -> dict:
+    """在 ``/init-wizard/complete`` 落盘前抓取需要回滚的字段。
+
+    涵盖：
+    - 现有 settings（用于回滚端口、日志、QMT 路径等）
+    - 现管理员用户的 ``password_hash``、``auto_login``（密码可能被改写）
+    - 现有 ``assets`` 表中 ``portfolio_id='default'`` 当天那一行（本金可能被改写）
+    """
+    snapshot: dict = {"settings": None, "user": None, "asset": None}
+    try:
+        snapshot["settings"] = db.get_settings().to_dict()
+    except Exception:
+        pass
+    try:
+        user = db.get_user(username) if username else None
+        if user is not None:
+            snapshot["user"] = user.to_dict()
+    except Exception:
+        pass
+    try:
+        asset_row = db.conn.execute(
+            """
+            select portfolio_id, dt, principal, cash, frozen_cash,
+                   market_value, total
+            from assets
+            where portfolio_id = ?
+            order by dt desc
+            limit 1
+            """,
+            ("default",),
+        ).fetchone()
+        if asset_row is not None:
+            snapshot["asset"] = {
+                "portfolio_id": asset_row[0],
+                "dt": asset_row[1],
+                "principal": asset_row[2],
+                "cash": asset_row[3],
+                "frozen_cash": asset_row[4],
+                "market_value": asset_row[5],
+                "total": asset_row[6],
+            }
+    except Exception:
+        pass
+    return snapshot
+
+
+def _rollback_wizard_state(snapshot: dict) -> None:
+    """根据 :func:`_snapshot_wizard_state` 抓取的内容恢复 DB。
+
+    任一字段不存在时（首次初始化、用户从未被创建过等）会跳过该字段的恢复。
+    """
+    if not snapshot:
+        return
+    if snapshot.get("settings") is not None:
+        try:
+            db.save_settings(Settings.from_dict(snapshot["settings"]))
+        except Exception as e:
+            logger.error(f"回滚 settings 失败: {e}")
+    if snapshot.get("user") is not None:
+        try:
+            db.save_user(User.from_dict(snapshot["user"]))
+        except Exception as e:
+            logger.error(f"回滚 user 失败: {e}")
+    if snapshot.get("asset") is not None:
+        try:
+            asset = Asset.from_dict(snapshot["asset"])
+            db["assets"].upsert(asset.to_dict(), pk=Asset.__pk__)
+        except Exception as e:
+            logger.error(f"回滚 asset 失败: {e}")
+
+
+def _build_settings_from_wizard_data(wizard_data: dict) -> "Settings":
+    """根据向导表单数据构造新的 Settings 对象（不落库）。"""
+    try:
+        server_port = int(wizard_data.get("server_port", 8130))
+    except (TypeError, ValueError):
+        server_port = 8130
+    try:
+        log_retention = int(wizard_data.get("log_retention", 10))
+    except (TypeError, ValueError):
+        log_retention = 10
+
+    new_settings = db.get_settings()
+    new_settings.server_port = server_port
+    new_settings.log_path = str(
+        Path(wizard_data.get("log_path", "~/.qmt-gateway/log"))
+        .expanduser()
+        .resolve()
+    )
+    new_settings.log_rotation = wizard_data.get("log_rotation", "10 MB")
+    new_settings.log_retention = log_retention
+    new_settings.qmt_account_id = wizard_data.get("qmt_account_id", "")
+
+    qmt_path = wizard_data.get("qmt_path", "")
+    new_settings.qmt_path = str(Path(qmt_path).expanduser().resolve()) if qmt_path else ""
+
+    xtquant_path = wizard_data.get("xtquant_path", "")
+    new_settings.xtquant_path = str(Path(xtquant_path).expanduser().resolve()) if xtquant_path else ""
+
+    # 加密存储 QMT 交易密码
+    qmt_password = wizard_data.get("qmt_password", "")
+    admin_password = wizard_data.get("password", "")
+    if qmt_password and admin_password:
+        from qmt_gateway.core.crypto_utils import encrypt_password
+        encrypted, salt = encrypt_password(qmt_password, admin_password)
+        new_settings.qmt_password_encrypted = encrypted
+        new_settings.qmt_password_salt = salt
+
+    new_settings.init_step = 5
+    return new_settings
+
+
+def _commit_wizard_settings(wizard_data: dict, new_settings) -> None:
+    """原子提交向导配置：用户、Settings、本金、标记初始化完成。"""
+    username = wizard_data.get("username", "admin")
+    password = wizard_data.get("password", "")
+
+    try:
+        principal = float(wizard_data.get("principal", 1000000))
+        if principal <= 0:
+            principal = 1000000
+    except (TypeError, ValueError):
+        principal = 1000000
+
+    if password:
+        existing_user = db.get_user(username)
+        if existing_user is not None:
+            existing_user.password_hash = hash_password(password)
+            existing_user.auto_login = False
+            db.save_user(existing_user)
+            logger.info(f"更新现有用户: {username}")
+        else:
+            db.save_user(
+                User(
+                    username=username,
+                    password_hash=hash_password(password),
+                    auto_login=False,
+                )
+            )
+            logger.info(f"创建新用户: {username}")
+
+    db.save_settings(new_settings)
+
+    today = datetime.date.today()
+    portfolio_id = "default"
+    asset_row = db.conn.execute(
+        """
+        select cash, frozen_cash, market_value, total
+        from assets
+        where portfolio_id = ?
+        order by dt desc
+        limit 1
+        """,
+        (portfolio_id,),
+    ).fetchone()
+    if asset_row:
+        cash = float(asset_row[0] or 0)
+        frozen_cash = float(asset_row[1] or 0)
+        market_value = float(asset_row[2] or 0)
+        total = float(asset_row[3] or principal)
+    else:
+        cash = principal
+        frozen_cash = 0.0
+        market_value = 0.0
+        total = principal
+
+    initial_asset = Asset(
+        portfolio_id=portfolio_id,
+        dt=today,
+        principal=principal,
+        cash=cash,
+        frozen_cash=frozen_cash,
+        market_value=market_value,
+        total=total if total > 0 else principal,
+    )
+    db["assets"].upsert(initial_asset.to_dict(), pk=Asset.__pk__)
+
+    new_settings.init_completed = True
+    new_settings.init_completed_at = datetime.datetime.now()
+    db.save_settings(new_settings)
+    config.reload()
 
 
 def check_init_required():
@@ -93,21 +313,30 @@ def create_app():
 
         Args:
             force: 如果为 "true"，强制重新运行初始化向导
+
+        注意：``force=true`` 走完全只读的流程，**不会在打开页面时修改任何持久化状态**。
+        所有数据仅缓存在进程内的 ``_wizard_data``，直到用户最终点击
+        ``完成初始化`` 时才会一次性原子提交。如果用户中途关闭页面，原有
+        ``init_completed`` 状态保持不变，主应用继续可用。
         """
-        # 检查是否需要初始化，或者强制重新初始化
+        global _wizard_data
+
+        # 非 force 模式且已初始化完成 → 回到首页
         if force != "true" and not check_init_required():
             return RedirectResponse("/", status_code=302)
 
-        # 强制重新初始化时，重置初始化状态
+        # force 模式：用现有 settings 与管理员账号预填表单，以便用户在
+        # 不修改任何字段时点击"完成初始化"等同于"保持现状"。
         if force == "true":
             try:
-                settings = db.get_settings()
-                settings.init_completed = False
-                settings.init_step = 0
-                db.save_settings(settings)
-                logger.info("强制重新初始化向导")
+                _wizard_data = _seed_wizard_data_from_current_settings()
+                logger.info("进入强制重新初始化向导（仅内存暂存，未落盘）")
             except Exception as e:
-                logger.error(f"重置初始化状态失败: {e}")
+                logger.error(f"预填向导初始数据失败: {e}")
+                _wizard_data = {}
+        else:
+            # 首次初始化：清空暂存
+            _wizard_data = {}
 
         return _render_page(InitWizardPage(step=1))
 
@@ -128,157 +357,454 @@ def create_app():
             password_confirm = _wizard_data.get("password_confirm", "")
             logger.info(f"第2步密码校验: password='{password}', password_confirm='{password_confirm}'")
             if password != password_confirm:
-                # 返回第2步，并显示错误信息
+                # 返回第2步，并显示错误信息 + OOB 隐藏进度对话框
                 return _render_fragment(
                     InitWizardForm(
                         step=2,
                         form_data=_wizard_data,
                         error="两次输入的密码不一致，请重新输入",
-                    )
+                    ),
+                    _WizardProgressModal(visible=False, oob=True),
                 )
 
-        # 返回表单部分（用于 HTMX 更新）
-        return _render_fragment(InitWizardForm(step=step, form_data=_wizard_data))
+        # 返回表单部分（用于 HTMX 更新）+ OOB 隐藏进度对话框
+        return _render_fragment(
+            InitWizardForm(step=step, form_data=_wizard_data),
+            _WizardProgressModal(visible=False, oob=True),
+        )
 
     @app.post("/init-wizard/complete")
     async def wizard_complete(request):
-        """完成初始化"""
+        """完成初始化（原子提交）。
+
+        流程：
+
+        1. 把最后一步的表单数据合并进 ``_wizard_data``；
+        2. **快照**当前 settings / user / asset，以便回滚；
+        3. **先用新值（未落库）测试 xtquant 连接**——失败则原样回滚、返回错误；
+        4. 测试通过后再**一次性**把 user / settings / asset 写回 DB；
+        5. 标记 ``init_completed=True``、刷新内存配置并跳转首页。
+        """
         global _wizard_data
+        snapshot: dict = {}
 
         try:
-            # 保存最后一步的表单数据（从表单数据获取）
+            # 1. 合并表单数据
             form_data = await request.form()
             form_dict = {k: v for k, v in form_data.items()}
+            logger.info(f"wizard_complete 接收表单: {form_dict}")
             _wizard_data.update(form_dict)
+            logger.info(f"wizard_complete 合并后 _wizard_data: qmt_path={_wizard_data.get('qmt_path')!r}, "
+                        f"xtquant_path={_wizard_data.get('xtquant_path')!r}, "
+                        f"qmt_account_id={_wizard_data.get('qmt_account_id')!r}")
 
-            # 保存管理员账号（强制重新初始化时覆盖已有用户）
             username = _wizard_data.get("username", "admin")
-            password = _wizard_data.get("password", "")
 
-            if password:
-                # 检查用户是否已存在
-                existing_user = db.get_user(username)
-                if existing_user:
-                    # 更新现有用户
-                    existing_user.password_hash = hash_password(password)
-                    existing_user.auto_login = False
-                    db.save_user(existing_user)
-                    logger.info(f"更新现有用户: {username}")
-                else:
-                    # 创建新用户
-                    user = User(
-                        username=username,
-                        password_hash=hash_password(password),
-                        auto_login=False,
-                    )
-                    db.save_user(user)
-                    logger.info(f"创建新用户: {username}")
+            # 2. 快照（必须在做任何写操作前完成）
+            snapshot = _snapshot_wizard_state(username=username)
 
-            # 保存服务器设置
-            settings = db.get_settings()
-            settings.server_port = int(_wizard_data.get("server_port", 8130))
-            settings.log_path = str(Path(_wizard_data.get("log_path", "~/.qmt-gateway/log")).expanduser().resolve())
-            settings.log_rotation = _wizard_data.get("log_rotation", "10 MB")
-            settings.log_retention = int(_wizard_data.get("log_retention", 10))
+            # 3. 构造新 settings（在内存中，不落库）
+            new_settings = _build_settings_from_wizard_data(_wizard_data)
+            qmt_password = _wizard_data.get("qmt_password", "")
 
-            # 保存 QMT 配置（规范化路径格式）
-            settings.qmt_account_id = _wizard_data.get("qmt_account_id", "")
-            settings.qmt_path = str(Path(_wizard_data.get("qmt_path", "")).expanduser().resolve()) if _wizard_data.get("qmt_path") else ""
-            settings.xtquant_path = str(Path(_wizard_data.get("xtquant_path", "")).expanduser().resolve()) if _wizard_data.get("xtquant_path") else ""
-
-            principal = float(_wizard_data.get("principal", 1000000))
-            if principal <= 0:
-                principal = 1000000
-
-            today = datetime.date.today()
-            portfolio_id = "default"
-            asset_row = db.conn.execute(
-                """
-                select cash, frozen_cash, market_value, total
-                from assets
-                where portfolio_id = ?
-                order by dt desc
-                limit 1
-                """,
-                (portfolio_id,),
-            ).fetchone()
-            if asset_row:
-                cash = float(asset_row[0] or 0)
-                frozen_cash = float(asset_row[1] or 0)
-                market_value = float(asset_row[2] or 0)
-                total = float(asset_row[3] or principal)
-            else:
-                cash = principal
-                frozen_cash = 0.0
-                market_value = 0.0
-                total = principal
-
-            initial_asset = Asset(
-                portfolio_id=portfolio_id,
-                dt=today,
-                principal=principal,
-                cash=cash,
-                frozen_cash=frozen_cash,
-                market_value=market_value,
-                total=total if total > 0 else principal,
+            # 4. 用新值先做连接测试——失败则尝试自动启动 QMT
+            test_result = test_xtquant_connection(
+                xtquant_path=new_settings.xtquant_path or None,
+                qmt_path=new_settings.qmt_path or None,
             )
-            db["assets"].upsert(initial_asset.to_dict(), pk=Asset.__pk__)
-
-            settings.init_step = 5
-            db.save_settings(settings)
-
-            # 重新加载配置
-            config.reload()
-
-            # 测试 xtquant 和 QMT 连接
-            test_result = test_xtquant_connection()
             if not test_result["success"]:
-                return Div(
-                    P(f"✗ 连接测试失败", cls="text-red-600 font-bold mb-4"),
-                    P(f"错误: {test_result['error']}", cls="text-gray-600 mb-4"),
-                    Button(
-                        "返回修改配置",
-                        cls="btn btn-secondary px-6 py-2",
-                        hx_get="/init-wizard/step/5",
-                        hx_target="#wizard-form-container",
-                    ),
-                    cls="text-center py-8",
+                path_probe = probe_qmt_path(new_settings.qmt_path)
+                if not path_probe["valid"]:
+                    # 路径不合法 → 提示用户修正
+                    _rollback_wizard_state(snapshot)
+                    logger.warning(f"QMT 路径不合法: {path_probe.get('reason')}")
+                    return _render_fragment(
+                        _build_wizard_failure_fragment(
+                            original_error=test_result.get("error", "未知错误"),
+                            recovery_reason=path_probe.get("reason"),
+                            recovery_hint="请检查 QMT 路径是否正确。",
+                        )
+                    )
+
+                # 路径合法但连不上 → 使用 trade_service.restart_qmt 启动/重启 QMT
+                logger.info("QMT 路径合法但连接失败，尝试通过 trade_service.restart_qmt 自动启动")
+                restart_result = _wizard_restart_qmt(
+                    qmt_path=new_settings.qmt_path,
+                    account_id=new_settings.qmt_account_id,
+                    qmt_password=qmt_password,
                 )
+                if not restart_result.get("success"):
+                    _rollback_wizard_state(snapshot)
+                    return _render_fragment(
+                        _build_wizard_wait_dialog(
+                            message="正在重试连接...",
+                            error=restart_result.get("error", "连接失败"),
+                            auto_retry=True,
+                        )
+                    )
 
-            # 标记初始化完成
-            settings.init_completed = True
-            settings.init_completed_at = datetime.datetime.now()
-            db.save_settings(settings)
+                # restart_qmt 成功仅代表交易接口已连接，需再次验证 xtdata
+                retest = test_xtquant_connection(
+                    xtquant_path=new_settings.xtquant_path or None,
+                    qmt_path=new_settings.qmt_path or None,
+                )
+                if not retest["success"]:
+                    _rollback_wizard_state(snapshot)
+                    return _render_fragment(
+                        _build_wizard_wait_dialog(
+                            message="QMT 已启动，正在等待 xtdata 连接就绪...",
+                            error=retest.get("error", "xtdata 连接失败"),
+                            auto_retry=True,
+                        )
+                    )
 
-            logger.info("初始化完成")
+            # 5. 测试通过：原子落库
+            _commit_wizard_settings(_wizard_data, new_settings)
+            logger.info("初始化完成（原子提交成功）")
             return RedirectResponse("/", status_code=302)
 
         except Exception as e:
             logger.error(f"完成初始化失败: {e}")
+            try:
+                _rollback_wizard_state(snapshot)
+            except Exception:
+                pass
             return Div(f"初始化失败: {e}", cls="text-red-500")
 
-    def test_xtquant_connection():
-        """测试 xtquant 和 QMT 连接"""
+    @app.post("/init-wizard/retry-startup")
+    async def wizard_retry_startup():
+        """重试：杀旧进程 → 重启 QMT → 自动登录 → 验证 xtdata。
+
+        只负责 QMT 重启与连接验证，不做 settings 提交。
+        成功后通过 auto-retry 触发 /init-wizard/complete 完成初始化。
+        """
+        global _wizard_data
+
+        qmt_password = _wizard_data.get("qmt_password", "")
+        logger.info("[retry-startup] 收到重试请求, password={}", '***' if qmt_password else '(empty)')
+
+        try:
+            new_settings = _build_settings_from_wizard_data(_wizard_data)
+            logger.info("[retry-startup] qmt_path={}, account_id={}", new_settings.qmt_path, new_settings.qmt_account_id)
+
+            # 直接重启 QMT（杀旧进程 → 启动 → 自动登录）
+            logger.info("[retry-startup] 调用 _wizard_restart_qmt...")
+            restart_result = _wizard_restart_qmt(
+                qmt_path=new_settings.qmt_path,
+                account_id=new_settings.qmt_account_id,
+                qmt_password=qmt_password,
+            )
+            logger.info("[retry-startup] restart_result={}", restart_result)
+            if not restart_result.get("success"):
+                return _render_fragment(
+                    _build_wizard_wait_dialog(
+                        message="正在重试连接...",
+                        error=restart_result.get("error", "连接失败"),
+                        auto_retry=True,
+                    )
+                )
+
+            # restart_qmt 成功仅代表交易接口已连接，需验证 xtdata
+            logger.info("[retry-startup] restart_qmt 成功，验证 xtdata...")
+            retest = test_xtquant_connection(
+                xtquant_path=new_settings.xtquant_path or None,
+                qmt_path=new_settings.qmt_path or None,
+            )
+            logger.info("[retry-startup] xtdata 验证结果: {}", retest)
+            if not retest["success"]:
+                return _render_fragment(
+                    _build_wizard_wait_dialog(
+                        message="QMT 已启动，正在等待 xtdata 连接就绪...",
+                        error=retest.get("error", "xtdata 连接失败"),
+                        auto_retry=True,
+                    )
+                )
+
+            # 重启 + xtdata 全部通过 → 触发 complete 提交设置并跳转
+            logger.info("[retry-startup] 全部通过，触发 auto_complete")
+            return _render_fragment(
+                _build_wizard_wait_dialog(
+                    message="QMT 连接成功，正在完成初始化...",
+                    auto_complete=True,
+                )
+            )
+
+        except Exception as e:
+            logger.error("[retry-startup] 异常: {}", e)
+            return _render_fragment(
+                _build_wizard_wait_dialog(
+                    message="正在重试连接...",
+                    error=str(e),
+                    auto_retry=True,
+                )
+            )
+
+    def _wizard_restart_qmt(
+        *, qmt_path: str, account_id: str, qmt_password: str
+    ) -> dict:
+        """通过 trade_service.restart_qmt 启动/重启 QMT 客户端。
+
+        复用 TradeService 已有的完整重启逻辑：
+        - 杀旧进程 → 启动新进程 → 自动填密码登录 → 等待交易接口连接
+
+        Args:
+            qmt_path: QMT 安装路径（userdata_mini 或其父目录）。
+            account_id: QMT 资金账号。
+            qmt_password: QMT 交易密码（必填，无密码无法自动登录）。
+
+        Returns:
+            ``{"success": True}`` 或 ``{"success": False, "error": <str>}``
+        """
+        from qmt_gateway.services.trade_service import trade_service
+
+        if not qmt_password or not qmt_password.strip():
+            return {"success": False, "error": "未提供 QMT 交易密码，无法自动启动"}
+
+        old_qmt_path = trade_service._qmt_path
+        old_account_id = trade_service._account_id
+        result = {"success": False, "error": ""}
+        try:
+            trade_service._qmt_path = qmt_path
+            trade_service._account_id = account_id
+            result = trade_service.restart_qmt(qmt_password)
+            if result.get("success"):
+                trade_service._qmt_path = qmt_path
+                trade_service._account_id = account_id
+            return result
+        except Exception as exc:
+            logger.error(f"_wizard_restart_qmt 异常: {exc}")
+            return {"success": False, "error": str(exc)}
+        finally:
+            if not result.get("success"):
+                trade_service._qmt_path = old_qmt_path
+                trade_service._account_id = old_account_id
+
+    def _build_wizard_failure_fragment(
+        *,
+        original_error: str,
+        recovery_reason: str | None,
+        recovery_hint: str | None,
+    ):
+        """构造 xtquant 连接失败时的错误反馈。
+
+        返回一个 tuple：
+        - 主内容：InitWizardForm(step=5)，保持向导上下文可见
+        - OOB 1：更新 #wizard-progress-content 为错误信息 + 重试/返回按钮
+        - OOB 2：清除 #wizard-error 旧错误信息
+
+        对话框（#wizard-progress-modal）会保持可见，
+        用户可在对话框内点击"重试"或"返回修改"。
+        """
+        messages: list[Any] = [
+            Div(
+                Span("✗", cls="text-4xl text-red-500"),
+                cls="mb-4",
+            ),
+            P("QMT 连接失败", cls="text-lg font-bold text-red-600 mb-3"),
+            P(
+                f"{original_error}",
+                cls="text-gray-700 mb-3 text-sm leading-relaxed",
+            ),
+        ]
+        if recovery_reason:
+            messages.append(
+                P(
+                    f"自动恢复: {recovery_reason}",
+                    cls="text-gray-700 mb-2 text-sm",
+                )
+            )
+        if recovery_hint:
+            messages.append(
+                P(recovery_hint, cls="text-gray-500 text-xs mb-6"),
+            )
+        else:
+            messages.append(
+                P(
+                    "已自动回滚，本次提交未生效。",
+                    cls="text-gray-500 text-xs mb-6",
+                )
+            )
+
+        messages.append(
+            P("已等待 0 秒", cls="text-sm text-gray-400 mb-4", id="wizard-elapsed")
+        )
+
+        messages.append(
+            Div(
+                Button(
+                    "重试启动 QMT",
+                    cls="btn px-8 py-2",
+                    id="wizard-retry-btn",
+                    style=f"background: {PRIMARY_COLOR}; color: white; border: none;",
+                    hx_post="/init-wizard/retry-startup",
+                    hx_target="#wizard-form-container",
+                ),
+                Button(
+                    "返回修改配置",
+                    cls="btn btn-ghost px-8 py-2",
+                    hx_post="/init-wizard/step/5",
+                    hx_target="#wizard-form-container",
+                ),
+                cls="flex justify-center gap-3 mt-4",
+            )
+        )
+        return (
+            InitWizardForm(step=5, form_data=_wizard_data),
+            Div(
+                *messages,
+                id="wizard-progress-content",
+                hx_swap_oob="true",
+                cls="text-center py-8 px-8",
+            ),
+            Div(id="wizard-error", hx_swap_oob="true"),
+            _WizardProgressModal(visible=True, oob=True),
+        )
+
+    def _build_wizard_wait_dialog(
+        *,
+        message: str = "",
+        error: str = "",
+        auto_retry: bool = False,
+        auto_complete: bool = False,
+    ):
+        """构造 QMT 启动等待/重试对话框（OOB 更新 #wizard-progress-content）。
+
+        Args:
+            message: 显示给用户的等待消息。
+            error: 如果有错误，显示错误信息。
+            auto_retry: 自动触发 POST /init-wizard/retry-startup（重启 QMT）。
+            auto_complete: 自动触发 POST /init-wizard/complete（提交设置并跳转）。
+
+        Returns:
+            一个 tuple：(InitWizardForm(step=5), OOB progress-content, OOB wizard-error)。
+        """
+        inner_parts: list[Any] = []
+        auto_delay = 1  # seconds
+        auto_target = "/init-wizard/retry-startup"
+
+        if auto_complete:
+            # 连接成功 → 显示成功消息，自动触发 complete
+            inner_parts.extend([
+                Div(Span("✓", cls="text-4xl text-green-500"), cls="mb-4"),
+                P(
+                    message or "QMT 连接成功，正在完成初始化...",
+                    cls="text-base text-green-700 font-semibold mb-2",
+                ),
+            ])
+            auto_target = "/init-wizard/complete"
+            auto_delay = 1
+        elif error:
+            inner_parts.extend([
+                Div(Span("⚠", cls="text-4xl text-orange-500"), cls="mb-4"),
+                P("QMT 启动失败，正在重试...", cls="text-lg font-bold text-orange-600 mb-3"),
+                P(error, cls="text-gray-700 mb-3 text-sm leading-relaxed"),
+            ])
+            auto_delay = 3
+        else:
+            inner_parts.extend([
+                Div(
+                    Span(cls="loading loading-spinner loading-lg text-primary"),
+                    cls="mb-4",
+                ),
+                P(
+                    message or "检测到 QMT 未运行，正在尝试自动启动...",
+                    cls="text-base text-gray-700 mb-2",
+                ),
+                P("请稍候，可能需要几秒到几十秒", cls="text-gray-500 text-sm mb-2"),
+            ])
+
+        # 已等待时间（JS 计时器会持续更新）
+        inner_parts.append(
+            P("已等待 0 秒", cls="text-sm text-gray-400 mb-4", id="wizard-elapsed")
+        )
+
+        # 按钮区域
+        inner_parts.append(
+            Div(
+                Button(
+                    "重试",
+                    cls="btn px-8 py-2",
+                    id="wizard-retry-btn",
+                    style=f"background: {PRIMARY_COLOR}; color: white; border: none;",
+                    hx_post="/init-wizard/retry-startup",
+                    hx_target="#wizard-form-container",
+                ),
+                Button(
+                    "返回修改配置",
+                    cls="btn btn-ghost px-8 py-2",
+                    hx_get="/init-wizard/step/5",
+                    hx_target="#wizard-form-container",
+                ),
+                cls="flex justify-center gap-3 mt-4",
+            )
+        )
+
+        # 自动触发：隐藏按钮 + 自触发脚本
+        if auto_retry or auto_complete:
+            inner_parts.append(
+                Form(
+                    Button(
+                        "",
+                        id="wizard-auto-retry",
+                        cls="hidden",
+                        hx_post=auto_target,
+                        hx_target="#wizard-form-container",
+                    ),
+                    cls="hidden",
+                )
+            )
+            inner_parts.append(
+                NotStr(
+                    f'<script>'
+                    f'setTimeout(function(){{'
+                    f'var b=document.getElementById("wizard-auto-retry");'
+                    f'if(b)htmx.trigger("#wizard-auto-retry","click");'
+                    f'}},{auto_delay * 1000});'
+                    f'</script>'
+                )
+            )
+
+        return (
+            InitWizardForm(step=5, form_data=_wizard_data),
+            Div(
+                *inner_parts,
+                id="wizard-progress-content",
+                hx_swap_oob="true",
+                cls="text-center py-8 px-8",
+            ),
+            Div(id="wizard-error", hx_swap_oob="true"),
+            _WizardProgressModal(visible=True, oob=True),
+        )
+
+    def test_xtquant_connection(xtquant_path: str | None = None, qmt_path: str | None = None):
+        """测试 xtquant 和 QMT 连接（不做 QMT 自愈）。
+
+        Args:
+            xtquant_path: 显式传入时使用传入值；为 None 时回退到 DB 当前 settings。
+            qmt_path: 同上。
+        """
         try:
             from qmt_gateway.core import add_xtquant_path, require_xtdata
 
-            # 添加 xtquant 路径
-            settings = db.get_settings()
-            xtquant_path = settings.xtquant_path if settings.xtquant_path else None
-            qmt_path = settings.qmt_path if settings.qmt_path else None
+            if xtquant_path is None or qmt_path is None:
+                settings = db.get_settings()
+                xtquant_path = xtquant_path or (
+                    settings.xtquant_path if settings.xtquant_path else None
+                )
+                qmt_path = qmt_path or (
+                    settings.qmt_path if settings.qmt_path else None
+                )
 
             add_xtquant_path(
                 xtquant_path=xtquant_path,
                 qmt_path=qmt_path,
             )
 
-            # 测试导入 xtquant
             xtdata = require_xtdata(
                 xtquant_path=xtquant_path,
                 qmt_path=qmt_path,
             )
 
-            # 测试获取市场列表
             markets = xtdata.get_stock_list_in_sector("沪深A股")
             if markets and len(markets) > 0:
                 logger.info(f"xtquant 连接测试成功，获取到 {len(markets)} 只股票")
@@ -289,6 +815,29 @@ def create_app():
         except Exception as e:
             logger.error(f"xtquant 连接测试失败: {e}")
             return {"success": False, "error": str(e)}
+
+    def probe_qmt_path(qmt_path: str | None) -> dict:
+        """校验 qmt_path 能否解析为合法的 QMT 客户端可执行文件。
+
+        Returns:
+            ``{"valid": True, "executable": <Path>, "qmt_path": <Path>}``
+            或 ``{"valid": False, "reason": <str>}``。
+        """
+        from qmt_gateway.qmt_init_helpers import resolve_qmt_executable
+
+        try:
+            executable = resolve_qmt_executable(qmt_path)
+        except FileNotFoundError as exc:
+            return {"valid": False, "reason": str(exc)}
+        except ValueError as exc:
+            return {"valid": False, "reason": str(exc)}
+        except Exception as exc:  # 兜底
+            return {"valid": False, "reason": f"校验 QMT 路径时发生异常: {exc}"}
+        return {
+            "valid": True,
+            "executable": executable,
+            "qmt_path": Path(executable).parent.parent,
+        }
 
     # 主页面路由
     @app.get("/")

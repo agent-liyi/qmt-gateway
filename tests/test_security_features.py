@@ -106,6 +106,32 @@ def test_revoke_api_key_disables_lookup(seeded_admin, client):
     assert record is None
 
 
+def test_list_api_keys_excludes_revoked(seeded_admin, client):
+    """吊销后的 API key 不应再出现在列表中。"""
+    _login_session(client)
+    keep_body = client.post("/api/api-keys", data={"name": "keep"}).json()
+    drop_body = client.post("/api/api-keys", data={"name": "drop"}).json()
+
+    response = client.delete(f"/api/api-keys/{drop_body['data']['id']}")
+    assert response.status_code == 200
+
+    listed = client.get("/api/api-keys").json()["data"]
+    listed_ids = {entry["id"] for entry in listed}
+    assert keep_body["data"]["id"] in listed_ids
+    assert drop_body["data"]["id"] not in listed_ids
+    assert all(entry["revoked"] is False for entry in listed)
+
+    # 默认参数下，db 层也只返回未吊销条目
+    from_db = [k.id for k in db.list_api_keys()]
+    assert drop_body["data"]["id"] not in from_db
+    assert keep_body["data"]["id"] in from_db
+
+    # include_revoked=True 时仍可获取全部记录
+    from_db_all = [k.id for k in db.list_api_keys(include_revoked=True)]
+    assert drop_body["data"]["id"] in from_db_all
+    assert keep_body["data"]["id"] in from_db_all
+
+
 def test_require_api_key_or_session_accepts_x_api_key_header(seeded_admin, client):
     _login_session(client)
     body = client.post("/api/api-keys", data={"name": "header-test"}).json()

@@ -343,10 +343,15 @@ class SQLiteDB:
             return None
         return ApiKey.from_dict(dict(rows[0]))
 
-    def list_api_keys(self) -> list[ApiKey]:
-        """列出全部 API key 记录（包含已吊销），按创建时间倒序。"""
+    def list_api_keys(self, include_revoked: bool = False) -> list[ApiKey]:
+        """列出 API key 记录，按创建时间倒序。
+
+        Args:
+            include_revoked: 为 True 时同时返回已吊销记录；默认仅返回未吊销记录。
+        """
+        clause = "1=1" if include_revoked else "revoked_at is null"
         rows = self["api_keys"].rows_where(
-            "1=1", (), order_by="created_at desc"
+            clause, (), order_by="created_at desc"
         )
         return [ApiKey.from_dict(dict(row)) for row in rows]
 

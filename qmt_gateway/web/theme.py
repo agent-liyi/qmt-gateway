@@ -55,7 +55,7 @@ class AppTheme:
 
 def PrimaryButton(text, cls="", **kwargs):
     """主色调按钮"""
-    base_cls = "btn px-6 py-2 rounded"
+    base_cls = "btn px-8 py-2 rounded-md font-medium"
     if cls:
         base_cls += f" {cls}"
     return Button(
@@ -68,13 +68,13 @@ def PrimaryButton(text, cls="", **kwargs):
 
 def SecondaryButton(text, cls="", **kwargs):
     """次要按钮"""
-    base_cls = "btn px-6 py-2 rounded"
+    base_cls = "btn px-8 py-2 rounded-md font-medium"
     if cls:
         base_cls += f" {cls}"
     return Button(
         text,
         cls=base_cls,
-        style="background: #f3f4f6; color: #374151; border: 1px solid #d1d5db;",
+        style="background: white; color: #374151; border: 1px solid #d1d5db;",
         **kwargs,
     )
 
