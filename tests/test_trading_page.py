@@ -43,10 +43,60 @@ def test_trading_page_renders_order_submission_hooks():
     assert "notification-center-modal" in html
     assert "buy-button" in html
     assert "sell-button" in html
+    assert "buy-button-asterisk" in html
+    assert "sell-button-asterisk" in html
+    assert "handleOrderSideClick" in html
     assert "fetch('/api/trade/' + orderSide, {" in html
     assert "fetch('/api/trade/cancel', {" in html
     assert "detailLines.join('\\n') + '\\n\\n确定要撤单吗？'" in html
     assert "}, 7000);" in html
+
+
+def test_trading_page_removes_confirm_order_button():
+    """确认下单按钮已被移除 (issue #34)."""
+    html = to_xml(TradingPage())
+    assert "确认下单" not in html
+    assert "confirm-order-button" not in html
+
+
+def test_trading_page_renders_warning_toast_kind():
+    """ShowTradeToast 支持 warning 类型 (用于切换方向、无可用股份提示)."""
+    html = to_xml(TradingPage())
+    assert "'warning'" in html
+    assert "border-amber-200" in html
+
+
+def test_trading_page_two_click_flow_submits_on_second_click():
+    """首次点击切换方向，再次点击提交委托 (issue #28)."""
+    html = to_xml(TradingPage())
+    assert "window.handleOrderSideClick = function(side)" in html
+    assert "currentSide === side" in html
+    assert "window.submitTradeOrder()" in html
+    assert "已切换为" in html
+    assert "请再次点击" in html
+    assert "请再次点击' + sideText + '按钮提交委托" in html
+
+
+def test_position_double_click_shows_toast_for_no_available_shares():
+    """双击持仓无可用股份时弹出 toast (issue #27)."""
+    html = to_xml(TradingPage())
+    assert "无可用股份" in html
+    assert "该持仓无可用股份" in html
+    assert "无法填充卖出表单" in html
+
+
+def test_position_double_click_uses_limit_order_and_real_time_price():
+    """双击持仓使用限价单并填入实时价格 (issue #27)."""
+    html = to_xml(TradingPage())
+    assert "orderTypeInput.value = 'limit'" in html
+    assert "window.onOrderTypeChange('limit')" in html
+
+
+def test_position_double_click_switches_to_sell_with_asterisk():
+    """双击持仓后切换到卖出方向并显示星号指示 (issue #27 + #28)."""
+    html = to_xml(TradingPage())
+    assert "已从持仓填充卖出表单" in html
+    assert "请点击卖出按钮提交委托" in html
 
 
 def test_buy_endpoint_logs_submission(monkeypatch):

@@ -203,33 +203,41 @@ def OrderForm(available_cash: float = 0):
             Button("全仓", cls="btn btn-outline btn-sm flex-1", onclick="setPositionRatio(1.0)"),
             cls="flex mb-6",
         ),
-        # 方向选择按钮（不直接下单）
+        # 方向选择按钮：首次点击切换方向，再次点击提交委托
         Div(
             Button(
-                "买入",
+                Span("买入", cls="order-side-label"),
+                Span(
+                    "✱",
+                    id="buy-button-asterisk",
+                    cls=(
+                        "pointer-events-none absolute -left-[5px] -top-[5px] "
+                        "text-base font-bold leading-none text-white"
+                    ),
+                ),
                 id="buy-button",
                 type="button",
-                cls="btn btn-error flex-1 text-white",
+                cls="btn btn-error flex-1 text-white relative",
                 style="background-color: #dc2626; opacity: 1;",
-                onclick="window.setOrderSide('buy')",
+                onclick="window.handleOrderSideClick('buy')",
             ),
             Button(
-                "卖出",
+                Span("卖出", cls="order-side-label"),
+                Span(
+                    "✱",
+                    id="sell-button-asterisk",
+                    cls=(
+                        "pointer-events-none absolute -left-[5px] -top-[5px] "
+                        "text-base font-bold leading-none text-white hidden"
+                    ),
+                ),
                 id="sell-button",
                 type="button",
-                cls="btn btn-success flex-1 text-white ml-2",
+                cls="btn btn-success flex-1 text-white ml-2 relative",
                 style="background-color: #16a34a; opacity: 0.6;",
-                onclick="window.setOrderSide('sell')",
+                onclick="window.handleOrderSideClick('sell')",
             ),
-            cls="flex mb-2",
-        ),
-        # 确认下单按钮
-        Button(
-            "确认下单",
-            id="confirm-order-button",
-            type="button",
-            cls="btn btn-primary w-full text-white",
-            onclick="window.submitTradeOrder()",
+            cls="flex mb-6",
         ),
         cls="h-full rounded-xl bg-white p-4 shadow",
     )
@@ -403,7 +411,17 @@ def PositionTable(positions: list[dict] | None = None):
         ),
         Script("""
             window.fillSellFromPosition = function(symbol, name, price, avail) {
-                if (!symbol || !avail || Number(avail) <= 0) {
+                if (!symbol) {
+                    return;
+                }
+                var availNum = Number(avail);
+                if (!(availNum > 0)) {
+                    if (window.showTradeToast) {
+                        window.showTradeToast(
+                            '该持仓无可用股份，无法填充卖出表单',
+                            'warning'
+                        );
+                    }
                     return;
                 }
                 var searchInput = document.getElementById('stock-search');
@@ -413,6 +431,7 @@ def PositionTable(positions: list[dict] | None = None):
                 var modeAmount = document.getElementById('order-mode-amount');
                 var modeQuantity = document.getElementById('order-mode-quantity');
                 var orderValueInput = document.getElementById('order-value');
+                var orderTypeInput = document.getElementById('order-type');
                 if (searchInput) {
                     searchInput.value = (name || symbol) + ' (' + symbol + ')';
                 }
@@ -425,6 +444,12 @@ def PositionTable(positions: list[dict] | None = None):
                 if (priceInput && Number(price) > 0) {
                     priceInput.value = Number(price).toFixed(2);
                 }
+                if (orderTypeInput) {
+                    orderTypeInput.value = 'limit';
+                    if (window.onOrderTypeChange) {
+                        window.onOrderTypeChange('limit');
+                    }
+                }
                 if (modeQuantity) {
                     modeQuantity.checked = true;
                 }
@@ -435,7 +460,7 @@ def PositionTable(positions: list[dict] | None = None):
                     window.onOrderModeChange();
                 }
                 if (orderValueInput) {
-                    orderValueInput.value = String(Math.floor(Number(avail) / 100));
+                    orderValueInput.value = String(Math.floor(availNum / 100));
                 }
                 if (window.refreshOrderEstimate) {
                     window.refreshOrderEstimate();
@@ -446,6 +471,16 @@ def PositionTable(positions: list[dict] | None = None):
                 var sellBtn = document.getElementById('sell-button');
                 if (buyBtn) buyBtn.style.opacity = '0.6';
                 if (sellBtn) sellBtn.style.opacity = '1';
+                var buyAsterisk = document.getElementById('buy-button-asterisk');
+                var sellAsterisk = document.getElementById('sell-button-asterisk');
+                if (buyAsterisk) buyAsterisk.classList.add('hidden');
+                if (sellAsterisk) sellAsterisk.classList.remove('hidden');
+                if (window.showTradeToast) {
+                    window.showTradeToast(
+                        '已从持仓填充卖出表单，请点击卖出按钮提交委托',
+                        'warning'
+                    );
+                }
             };
         """),
         id="positions-orders-container",
@@ -931,6 +966,8 @@ def TradingPage(
 
             var toneCls = kind === 'error'
                 ? 'border-red-200 text-red-700'
+                : kind === 'warning'
+                ? 'border-amber-200 text-amber-700'
                 : 'border-green-200 text-green-700';
             toast.className += ' ' + toneCls;
 
@@ -1045,6 +1082,11 @@ def TradingPage(
             if (buyBtn) buyBtn.style.opacity = side === 'buy' ? '1' : '0.6';
             if (sellBtn) sellBtn.style.opacity = side === 'sell' ? '1' : '0.6';
 
+            var buyAsterisk = document.getElementById('buy-button-asterisk');
+            var sellAsterisk = document.getElementById('sell-button-asterisk');
+            if (buyAsterisk) buyAsterisk.classList.toggle('hidden', side !== 'buy');
+            if (sellAsterisk) sellAsterisk.classList.toggle('hidden', side !== 'sell');
+
             var priceInput = document.getElementById('order-price');
             if (priceInput) priceInput.value = '';
 
@@ -1056,6 +1098,25 @@ def TradingPage(
 
             var sharesInput = document.getElementById('est-shares');
             if (sharesInput) sharesInput.value = '';
+        };
+
+        window.handleOrderSideClick = function(side) {
+            var sideInput = document.getElementById('order-side');
+            if (!sideInput) return;
+            var currentSide = sideInput.value;
+
+            if (currentSide === side) {
+                if (window.submitTradeOrder) {
+                    window.submitTradeOrder();
+                }
+            } else {
+                window.setOrderSide(side);
+                var sideText = side === 'buy' ? '买入' : '卖出';
+                showTradeToast(
+                    '已切换为' + sideText + '，请再次点击' + sideText + '按钮提交委托',
+                    'warning'
+                );
+            }
         };
 
         window.submitTradeOrder = function() {
