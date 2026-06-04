@@ -164,8 +164,9 @@ def test_complete_rolls_back_when_xtquant_test_fails(
             "log_retention": "3",
             "qmt_account_id": "new-account",
             "qmt_path": r"C:\new\qmt",
-            "xtquant_path": r"C:\new\xtquant",
+"xtquant_path": r"C:\new\xtquant",
             "qmt_password": "trade-pass-123",
+            "auto_start_qmt": "on",
             "principal": "2000000",
         },
     )
@@ -221,6 +222,7 @@ def test_complete_rolls_back_settings_when_test_fails_after_partial_form(
             "qmt_path": "",
             "xtquant_path": "",
             "qmt_password": "trade-pass-123",
+            "auto_start_qmt": "on",
             "principal": "500000",
         },
     )
@@ -608,6 +610,42 @@ def test_complete_without_qmt_password_still_saves_settings(
     assert saved.qmt_password_encrypted == ""
 
 
+def test_complete_with_password_but_no_auto_start_skips_restart(
+    seeded_initialized_db, client, monkeypatch
+):
+    """有密码但未勾选 auto_start_qmt 时，应只保存密码不执行自动重启/重连。"""
+    from qmt_gateway import app as app_module
+    from qmt_gateway import core as core_module
+    monkeypatch.setattr(core_module, "require_xtdata", lambda *a, **k: _make_fake_xtdata())
+    app_module._wizard_data.clear()
+
+    response = client.post(
+        "/init-wizard/complete",
+        data={
+            "username": "admin",
+            "password": "admin-pass",
+            "server_port": "8130",
+            "log_path": "/tmp/qmt-logs",
+            "log_rotation": "5 MB",
+            "log_retention": "5",
+            "qmt_account_id": "12345678",
+            "qmt_path": r"C:\broker\userdata_mini",
+            "xtquant_path": r"C:\apps",
+            "qmt_password": "my-trade-secret",
+            "principal": "500000",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 303)
+    saved = db.get_settings()
+    assert saved.qmt_account_id == "12345678"
+    assert saved.init_completed is True
+    assert saved.qmt_password_encrypted != ""
+    assert saved.auto_start_qmt is False
+    assert saved.qmt_password_auto_start == ""
+
+
 def test_complete_without_qmt_password_uses_hx_redirect_for_htmx_requests(
     seeded_initialized_db, client, monkeypatch
 ):
@@ -665,15 +703,16 @@ def test_restart_qmt_fails_gracefully_without_password(seeded_initialized_db):
 
 
 def test_step5_password_hint_text_and_alignment():
-    """Step5 密码提示文案精简、左对齐，且输入框与其他输入框同宽."""
+    """Step5 密码和自动启动复选框布局正确."""
     from qmt_gateway.web.pages.init_wizard import Step5_QMT
     html = to_xml(Step5_QMT())
-    # 提示文案已精简
-    assert "可不填写，但会失去自动启动并登录 QMT 的能力" in html
-    assert "提示：若不填写，将跳过自动启动" not in html
+    # 提示文案已移除
+    assert "可不填写，但会失去自动启动并登录 QMT 的能力" not in html
+    # 自动启动复选框 label 包含正确文案
+    assert "允许自动启动、重启 QMT" in html
     # QMT 路径提示中已移除 "提示：" 前缀
     assert "输入包含 userdata_mini" in html
     assert "提示：输入包含" not in html
-    # 密码输入框直接位于 flex 容器中（没有额外 wrapper），与其他输入框同宽
-    assert 'name="qmt_password"' in html
-    assert "flex items-center gap-3 mb-1" in html
+    # 密码输入框有 id 以便 JS 联动
+    assert 'id="qmt-password-input"' in html
+    assert 'id="qmt-password-label"' in html

@@ -442,6 +442,14 @@ def create_app():
                 logger.info("初始化完成（无密码模式，跳过连接检查）")
                 return _redirect_after_hx(request)
 
+            # 4b. 有密码但未启用自动启动时，只保存密码不执行自动重启/重连
+            auto_start_qmt = _wizard_data.get("auto_start_qmt") == "on"
+            if not auto_start_qmt:
+                logger.info("已提供 QMT 交易密码但未启用自动启动，跳过自动重启/重连")
+                _commit_wizard_settings(_wizard_data, new_settings)
+                logger.info("初始化完成（密码已保存，未执行自动重启）")
+                return _redirect_after_hx(request)
+
             # 5. 有密码时，先尝试连接测试；若 QMT 未运行则尝试自动启动
             from qmt_gateway.qmt_init_helpers import is_qmt_process_running
             force_restart = False

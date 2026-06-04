@@ -271,19 +271,16 @@ def Step5_QMT(form_data: dict | None = None):
                 ),
                 # QMT 交易密码 - 横向布局
                 Div(
-                    Label("QMT 交易密码", cls=label_cls),
+                    Label("QMT 交易密码", cls=label_cls, id="qmt-password-label"),
                     Input(
                         type="password",
                         name="qmt_password",
+                        id="qmt-password-input",
                         value=fd.get("qmt_password", ""),
-                        placeholder="可不填写，跳过自动启动和连接检查",
+                        placeholder="选填，启用自动启动时必填",
                         cls="input input-bordered flex-1",
                     ),
-                    cls="flex items-center gap-3 mb-1",
-                ),
-                P(
-                    "可不填写，但会失去自动启动并登录 QMT 的能力",
-                    cls="text-xs text-gray-500 mb-4",
+                    cls="flex items-center gap-3 mb-4",
                 ),
                 # 自动启动 QMT - 复选框
                 Div(
@@ -296,7 +293,7 @@ def Step5_QMT(form_data: dict | None = None):
                         cls="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500",
                     ),
                     Label(
-                        "进程启动时自动启动 QMT（需要填写交易密码）",
+                        "允许自动启动、重启 QMT（需要填写交易密码）",
                         _for="auto_start_qmt",
                         cls="ml-2 text-sm text-gray-700 cursor-pointer",
                     ),
@@ -588,8 +585,23 @@ def _WizardScript():
     var hxPost = btn.getAttribute('hx-post') || '';
 
     if (hxPost.indexOf('/init-wizard/complete') !== -1) {
-      var pwInput = document.querySelector('input[name="qmt_password"]');
-      if (pwInput && !pwInput.value.trim()) {
+      var pwInput = document.getElementById('qmt-password-input');
+      var pwLabel = document.getElementById('qmt-password-label');
+      var autoStartCb = document.getElementById('auto_start_qmt');
+      var pwValue = pwInput ? pwInput.value.trim() : '';
+      var autoStartChecked = autoStartCb ? autoStartCb.checked : false;
+
+      if (autoStartChecked && !pwValue) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (pwInput) { pwInput.classList.add('input-error'); pwInput.focus(); }
+        if (pwLabel) { pwLabel.classList.add('text-red-600'); }
+        return;
+      }
+      if (pwInput) pwInput.classList.remove('input-error');
+      if (pwLabel) pwLabel.classList.remove('text-red-600');
+
+      if (!pwValue) {
         return;
       }
             _wizardRequestActive = true;
@@ -679,6 +691,25 @@ def _WizardScript():
   /* 5. 请求出错时关闭对话框 */
   document.body.addEventListener('htmx:responseError', function(evt) {
     closeProgressModal();
+  });
+
+  /* 6. auto_start_qmt + 密码联动：输入密码后或取消勾选时清除错误样式 */
+  document.body.addEventListener('input', function(e) {
+    if (e.target.id === 'qmt-password-input') {
+      if (e.target.value.trim()) {
+        e.target.classList.remove('input-error');
+        var pwLabel = document.getElementById('qmt-password-label');
+        if (pwLabel) pwLabel.classList.remove('text-red-600');
+      }
+    }
+  });
+  document.body.addEventListener('change', function(e) {
+    if (e.target.id === 'auto_start_qmt' && !e.target.checked) {
+      var pwInput = document.getElementById('qmt-password-input');
+      var pwLabel = document.getElementById('qmt-password-label');
+      if (pwInput) pwInput.classList.remove('input-error');
+      if (pwLabel) pwLabel.classList.remove('text-red-600');
+    }
   });
 })();
 </script>
