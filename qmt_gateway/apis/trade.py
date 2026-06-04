@@ -463,7 +463,7 @@ def register_routes(app):
                 logger.warning(f"解密存储的 QMT 密码失败: {e}")
 
         logger.info("收到 QMT 重启请求")
-        result = await trade_service.restart_qmt(password)
+        result = trade_service.restart_qmt(password)
         if result.get("success"):
             logger.info("QMT 重启完成并已发起重连")
         else:

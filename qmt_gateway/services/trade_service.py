@@ -124,7 +124,7 @@ class TradeService:
         self._cancel_error_wait_timeout_sec = 1.2
         self._connection_message = "交易接口未连接"
         self._connection_updated_at = datetime.datetime.now().isoformat(timespec="seconds")
-        self._qmt_restart_timeout_sec = 120.0
+        self._qmt_restart_timeout_sec = 30.0
         self._qmt_login_timeout_sec = 40.0
         self._qmt_launch_probe_timeout_sec = 15.0
         self._qmt_login_retry_delay_sec = 3.0
