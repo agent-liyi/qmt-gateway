@@ -204,8 +204,6 @@ class TradeService:
         self._restart_password_token_ttl_sec = 120.0
         self._restart_password_tokens: dict[str, dict[str, object]] = {}
         self._auto_start_max_retries = 2
-        self._last_connect_fail_time: float = 0.0
-        self._connect_retry_min_interval_sec = 30.0
 
     def _set_connection_state(self, connected: bool, message: str) -> str:
         self._connected = connected
@@ -379,20 +377,10 @@ class TradeService:
         qmt_path = str(self._qmt_path or config.qmt_path or "").strip()
         if not account_id or not qmt_path:
             return False
-        now = time.monotonic()
-        elapsed = now - self._last_connect_fail_time
-        if elapsed < self._connect_retry_min_interval_sec:
-            logger.debug(
-                "距上次连接失败仅 {:.0f}s，跳过自动补连（最小间隔 {}s）",
-                elapsed,
-                self._connect_retry_min_interval_sec,
-            )
+        if not config.auto_start_qmt and not self._connected:
             return False
         logger.info("交易接口未连接，尝试自动补连")
-        result = self.connect(account_id=account_id, qmt_path=qmt_path)
-        if not result:
-            self._last_connect_fail_time = time.monotonic()
-        return result
+        return self.connect(account_id=account_id, qmt_path=qmt_path)
 
     def connect(self, account_id: str, qmt_path: str) -> bool:
         """连接交易接口
