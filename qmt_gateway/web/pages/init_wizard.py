@@ -272,22 +272,18 @@ def Step5_QMT(form_data: dict | None = None):
                 # QMT 交易密码 - 横向布局
                 Div(
                     Label("QMT 交易密码", cls=label_cls),
-                    Div(
-                        Input(
-                            type="password",
-                            name="qmt_password",
-                            value=fd.get("qmt_password", ""),
-                            placeholder="可不填写，跳过自动启动和连接检查",
-                            cls="input input-bordered flex-1",
-                        ),
-                        P(
-                            "提示：若不填写，将跳过自动启动 QMT 和连接检查。"
-                            "重启 QMT 交易服务时需手动输入密码。",
-                            cls="text-xs text-gray-500 mt-1",
-                        ),
-                        cls="flex-1",
+                    Input(
+                        type="password",
+                        name="qmt_password",
+                        value=fd.get("qmt_password", ""),
+                        placeholder="可不填写，跳过自动启动和连接检查",
+                        cls="input input-bordered flex-1",
                     ),
-                    cls="flex items-start gap-3 mb-4",
+                    cls="flex items-center gap-3 mb-1",
+                ),
+                P(
+                    "可不填写，但会失去自动启动并登录 QMT 的能力",
+                    cls="text-xs text-gray-500 mb-4",
                 ),
                 # QMT 路径 - 横向布局 + 保留下方提示
                 Div(
@@ -303,7 +299,7 @@ def Step5_QMT(form_data: dict | None = None):
                     cls="flex items-center gap-3",
                 ),
                 P(
-                    "提示：输入包含 userdata_mini 的完整路径。如果不知道安装位置，可以在文件资源管理器中搜索 userdata_mini",
+                    "输入包含 userdata_mini 的完整路径。如果不知道安装位置，可以在文件资源管理器中搜索 userdata_mini",
                     cls="text-xs text-gray-500 mt-1 ml-31",
                 ),
                 # xtquant 路径 - 横向布局

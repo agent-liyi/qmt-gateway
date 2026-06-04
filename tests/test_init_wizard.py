@@ -662,3 +662,18 @@ def test_restart_qmt_fails_gracefully_without_password(seeded_initialized_db):
     settings = _build_settings_from_wizard_data(wizard_data)
     assert settings.qmt_password_encrypted == ""
     assert settings.qmt_password_salt == ""
+
+
+def test_step5_password_hint_text_and_alignment():
+    """Step5 密码提示文案精简、左对齐，且输入框与其他输入框同宽."""
+    from qmt_gateway.web.pages.init_wizard import Step5_QMT
+    html = to_xml(Step5_QMT())
+    # 提示文案已精简
+    assert "可不填写，但会失去自动启动并登录 QMT 的能力" in html
+    assert "提示：若不填写，将跳过自动启动" not in html
+    # QMT 路径提示中已移除 "提示：" 前缀
+    assert "输入包含 userdata_mini" in html
+    assert "提示：输入包含" not in html
+    # 密码输入框直接位于 flex 容器中（没有额外 wrapper），与其他输入框同宽
+    assert 'name="qmt_password"' in html
+    assert "flex items-center gap-3 mb-1" in html
