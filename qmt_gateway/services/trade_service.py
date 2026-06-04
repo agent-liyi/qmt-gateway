@@ -106,6 +106,11 @@ def _restart_and_login_sync(
             process = service._launch_qmt_process(executable, password_token=password_token)
             if password_token is None:
                 service._fill_qmt_login_password(process.pid, qmt_password)
+                # 等待登录窗口消失，确保 QMT 已处理完密码提交
+                service._wait_for_login_window_to_close(
+                    process.pid,
+                    timeout_sec=float(service._qmt_login_timeout_sec),
+                )
 
             if not verify_connection:
                 logger.info("启动+填密码完成，跳过连接验证（verify_connection=False）")
@@ -113,7 +118,8 @@ def _restart_and_login_sync(
                 service._account_id = account_id
                 return {"success": True, "message": "QMT 已启动，连接验证交给调用方"}
 
-            if service.connect(account_id=account_id, qmt_path=qmt_path):
+            # 多次尝试连接，应对 QMT 还在初始化 mini trader 的情况
+            if service._connect_with_retry(account_id=account_id, qmt_path=qmt_path):
                 return {"success": True, "message": "QMT 已重启并重新连接交易接口"}
             return {"success": False, "error": "交易接口重连失败"}
         except Exception as exc:
@@ -694,6 +700,37 @@ class TradeService:
 
     def _submit_login_window(self, window):
         submit_login_window(window)
+
+    def _wait_for_login_window_to_close(self, process_id: int, timeout_sec: float = 8.0) -> bool:
+        """等待 QMT 登录窗口自动消失。
+
+        登录窗口消失说明 QMT 已处理完密码提交并进入了交易主界面，
+        此时再调用 ``connect()`` 才能成功建立连接。
+        """
+        try:
+            _Application, Desktop = self._load_pywinauto()
+        except Exception as exc:
+            logger.warning("加载 pywinauto 失败，跳过登录窗口消失检测: {}", exc)
+            return True
+
+        deadline = time.monotonic() + max(float(timeout_sec), 0.5)
+        initial_pids = set(self._collect_qmt_process_ids(process_id, QMT_CLIENT_EXECUTABLE))
+        while time.monotonic() < deadline:
+            for backend in ("uia", "win32"):
+                try:
+                    desktop = Desktop(backend=backend)
+                except Exception:
+                    continue
+                current_pids = set(self._collect_qmt_process_ids(process_id, QMT_CLIENT_EXECUTABLE))
+                if not current_pids:
+                    return True
+                windows = self._iter_login_windows(desktop, current_pids)
+                if not list(windows):
+                    logger.info("QMT 登录窗口已消失，可以尝试连接")
+                    return True
+            time.sleep(0.3)
+        logger.warning("QMT 登录窗口在 {}s 内未消失", timeout_sec)
+        return False
 
     def _fill_qmt_login_password(self, process_id: int, password: str) -> None:
         _Application, Desktop = self._load_pywinauto()

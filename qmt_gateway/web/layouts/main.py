@@ -1215,7 +1215,43 @@ def HeaderStatusScript():
 
                 var passwordInput = document.getElementById('restart-qmt-password');
                 var password = passwordInput ? passwordInput.value : '';
-                
+
+                // 启动连接状态轮询：服务端在 POST 返回前/后都可能仍在尝试连接，
+                // 一旦轮询发现 connected=true 就关闭对话框并停止轮询。
+                var pollTimer = null;
+                var maxPollMs = 30000;
+                var pollStartedAt = Date.now();
+                function startPollingForConnection() {
+                    if (pollTimer) return;
+                    pollTimer = window.setInterval(function() {
+                        if (Date.now() - pollStartedAt > maxPollMs) {
+                            window.clearInterval(pollTimer);
+                            pollTimer = null;
+                            return;
+                        }
+                        fetch('/api/trade/connection-status', {
+                            headers: { 'Accept': 'application/json' },
+                        })
+                            .then(function(r) { return r.ok ? r.json() : null; })
+                            .then(function(data) {
+                                if (data && data.connected) {
+                                    updateConnectionIndicator(data);
+                                    showRestartQmtMessage('QMT 已重新连接交易接口', true);
+                                    window.setTimeout(function() {
+                                        window.closeRestartQmtModal();
+                                        refreshConnectionStatus();
+                                    }, 800);
+                                    if (pollTimer) {
+                                        window.clearInterval(pollTimer);
+                                        pollTimer = null;
+                                    }
+                                }
+                            })
+                            .catch(function() { /* ignore, will retry */ });
+                    }, 1000);
+                }
+                startPollingForConnection();
+
                 fetch('/api/trade/restart-qmt', {
                     method: 'POST',
                     headers: {
@@ -1236,21 +1272,20 @@ def HeaderStatusScript():
                         if (result && result.success) {
                             showRestartQmtMessage(result.message || 'QMT 已重启并重新连接交易接口', true);
                             refreshConnectionStatus();
-                            window.setTimeout(function() {
-                                window.closeRestartQmtModal();
-                                refreshConnectionStatus();
-                            }, 1200);
+                            // 不再 setTimeout 关闭对话框，交由上面的轮询在真正
+                            // 检测到 connected=true 时再关。
                             return;
                         }
 
+                        // POST 失败：不要立即放弃，先看看后台是否还在重连。
                         var errorMessage = result && (result.error || result.message)
                             ? String(result.error || result.message)
                             : 'QMT 重启失败';
-                        showRestartQmtMessage(errorMessage, false);
+                        showRestartQmtMessage(errorMessage + '，正在等待连接...', false);
                     })
                     .catch(function(error) {
                         var message = error && error.message ? error.message : 'QMT 重启失败';
-                        showRestartQmtMessage(message, false);
+                        showRestartQmtMessage(message + '，正在等待连接...', false);
                     })
                     .finally(function() {
                         restartRequestInFlight = false;

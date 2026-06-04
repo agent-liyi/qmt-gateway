@@ -195,6 +195,49 @@ def test_restart_and_login_requires_password():
     assert result == {"success": False, "error": "请输入交易密码"}
 
 
+def test_restart_and_login_waits_for_login_window_before_connecting(monkeypatch):
+    """填入密码后应等待登录窗口消失，再尝试 connect()。"""
+    service = TradeService()
+    service._account_id = "8881457417"
+    service._qmt_path = r"C:\apps\qmt\userdata_mini"
+    executable = Path(r"C:\apps\qmt\bin.x64\XtItClient.exe")
+    calls = []
+
+    monkeypatch.setattr(service, "_get_current_session_id", lambda: 1)
+    monkeypatch.setattr(service, "_resolve_qmt_client_path", lambda qmt_path: executable)
+    monkeypatch.setattr(service, "disconnect", lambda: calls.append("disconnect"))
+    monkeypatch.setattr(service, "discard_restart_password_token", lambda token: calls.append(("discard", token)))
+    monkeypatch.setattr(service, "_set_connection_state", lambda connected, message: calls.append(("state", connected, message)) or message)
+    monkeypatch.setattr(service, "_kill_qmt_process", lambda name: "terminated")
+    monkeypatch.setattr(service, "_launch_qmt_process", lambda path, password_token=None: SimpleNamespace(pid=4321))
+    monkeypatch.setattr(service, "_fill_qmt_login_password", lambda pid, password: calls.append(("fill", pid, password)))
+    monkeypatch.setattr(
+        service,
+        "_wait_for_login_window_to_close",
+        lambda pid, timeout_sec: calls.append(("wait", pid, timeout_sec)) or True,
+    )
+    monkeypatch.setattr(
+        service,
+        "connect",
+        lambda account_id, qmt_path: calls.append(("connect", account_id, qmt_path)) or True,
+    )
+
+    result = service.restart_and_login(
+        qmt_path=r"C:\apps\qmt\userdata_mini",
+        account_id="8881457417",
+        qmt_password="trade-secret",
+        kill_first=True,
+    )
+
+    assert result["success"] is True
+    # 关键：fill 之后必须 wait，然后才 connect
+    assert ("fill", 4321, "trade-secret") in calls
+    fill_index = calls.index(("fill", 4321, "trade-secret"))
+    wait_index = calls.index(("wait", 4321, 20.0))
+    connect_index = calls.index(("connect", "8881457417", r"C:\apps\qmt\userdata_mini"))
+    assert fill_index < wait_index < connect_index
+
+
 def test_kill_qmt_process_ignores_missing_process_message(monkeypatch):
     service = TradeService()
     missing_message = '错误: 没有找到进程 "XtItClient.exe"。'.encode("gbk")
