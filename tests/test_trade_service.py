@@ -1,14 +1,7 @@
 """Trade service regression tests."""
 
 import importlib
-from pathlib import Path
-from types import SimpleNamespace
-
-import pytest
-
-"""Trade service regression tests."""
-
-import importlib
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -331,3 +324,101 @@ def test_helper_info_status_is_not_treated_as_failure():
 
     assert service.consume_restart_password_token(token) == "trade-secret"
     assert service.consume_restart_password_token(token) is None
+
+
+def test_refresh_positions_snapshot_persists_to_db(monkeypatch):
+    """成交回报后应刷新持仓快照到数据库。"""
+    service = TradeService()
+    service._connected = True
+    service._account = object()
+
+    monkeypatch.setattr(
+        service,
+        "get_positions",
+        lambda: [
+            {
+                "symbol": "601398.SH",
+                "name": "工商银行",
+                "shares": 0,
+                "avail": 0,
+                "price": 7.0,
+                "cost": 7.3601,
+                "profit": 0,
+                "market_value": 0,
+            }
+        ],
+    )
+
+    deleted = []
+    upserted = []
+
+    class FakeConn:
+        def execute(self, sql, params=()):
+            deleted.append((sql, params))
+            return SimpleNamespace(fetchone=lambda: None)
+
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "conn",
+        SimpleNamespace(execute=lambda sql, params=(): SimpleNamespace(fetchone=lambda: None)),
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "execute_write",
+        lambda sql, params=(): deleted.append((sql, params)),
+    )
+
+    def fake_upsert(table, record, pk):
+        upserted.append((table, record, pk))
+
+    fake_positions = SimpleNamespace(upsert=fake_upsert)
+    monkeypatch.setattr(trade_service_module.db, "__getitem__", lambda key: fake_positions)
+
+    service.refresh_positions_snapshot()
+
+    assert any("delete from positions" in sql for sql, _ in deleted)
+    assert len(upserted) == 0
+
+
+def test_persist_callback_trade_refreshes_positions(monkeypatch):
+    """成交回调后应触发持仓刷新。"""
+    service = TradeService()
+    refreshed = []
+
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "insert_trade",
+        lambda trade: None,
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "get_order_by_foid",
+        lambda foid: None,
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "update_order",
+        lambda qtoid, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        service,
+        "refresh_positions_snapshot",
+        lambda: refreshed.append(True),
+    )
+
+    xt_trade = SimpleNamespace(
+        traded_id="t-1",
+        order_remark="q-1",
+        stock_code="601398.SH",
+        order_type=24,
+        traded_price=7.29,
+        traded_volume=100,
+        traded_amount=729.0,
+        traded_time=time.time(),
+        order_id="o-1",
+        order_sysid="c-1",
+    )
+
+    service.persist_callback_trade(xt_trade)
+
+    assert refreshed == [True]

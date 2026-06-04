@@ -21,7 +21,7 @@ from loguru import logger
 from qmt_gateway.config import config
 from qmt_gateway.core import add_xtquant_path
 from qmt_gateway.core.enums import BidType, OrderSide, OrderStatus
-from qmt_gateway.db.models import Order, Trade
+from qmt_gateway.db.models import Order, Position, Trade
 from qmt_gateway.db.sqlite import db
 from qmt_gateway.qmt_login_automation import (
     describe_window,
@@ -976,6 +976,44 @@ class TradeService:
             logger.error(f"获取持仓失败: {e}")
             return []
 
+    def refresh_positions_snapshot(self) -> None:
+        """刷新持仓快照到数据库。
+
+        成交回报（on_stock_trade）后调用，确保持仓表中的可用股数、
+        成本、市值等数据与券商保持同步，避免前端显示陈旧数据。
+        """
+        rows = self.get_positions()
+        if rows is None:
+            return
+        try:
+            import datetime
+            today = datetime.date.today()
+            db.execute_write(
+                "delete from positions where portfolio_id = ? and dt = ?",
+                (DEFAULT_PORTFOLIO_ID, today),
+            )
+            for row in rows:
+                symbol = str(row.get("symbol", "")).strip()
+                if not symbol:
+                    continue
+                shares = float(row.get("shares", 0) or 0)
+                if shares <= 0:
+                    continue
+                price = float(row.get("cost", row.get("price", 0)) or 0)
+                position = Position(
+                    portfolio_id=DEFAULT_PORTFOLIO_ID,
+                    dt=today,
+                    asset=symbol,
+                    shares=shares,
+                    avail=float(row.get("avail", 0) or 0),
+                    price=price,
+                    profit=float(row.get("profit", 0) or 0),
+                    mv=float(row.get("market_value", 0) or 0),
+                )
+                db["positions"].upsert(position.to_dict(), pk=Position.__pk__)
+        except Exception as exc:
+            logger.warning(f"持仓快照刷新失败: {exc}")
+
     def get_orders(self) -> list[dict]:
         """获取当日委托列表
 
@@ -1256,6 +1294,7 @@ class TradeService:
             db_order = db.get_order_by_foid(foid)
             if db_order is not None:
                 db.update_order(db_order.qtoid, status=OrderStatus.SUCCEEDED)
+            self.refresh_positions_snapshot()
         except Exception as e:
             logger.error(f"回调成交落库失败: {e}")
 

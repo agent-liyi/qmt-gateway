@@ -1,5 +1,6 @@
 """Trading page regression tests."""
 
+import pytest
 from fastcore.xml import to_xml
 from starlette.testclient import TestClient
 
@@ -274,3 +275,27 @@ def test_get_latest_asset_data_computes_profit_ratio(monkeypatch):
 
     assert result["profit"] == -1000.0
     assert result["profit_ratio"] == -5.0
+
+
+def test_compute_realized_pnl_uses_fifo(monkeypatch):
+    """卖出盈亏应使用 FIFO 方式逐笔匹配买入/卖出。"""
+    trades = [
+        {"side": 1, "price": 10.0, "shares": 100, "tm": "2026-06-04 09:30:00", "tid": "t1"},
+        {"side": 1, "price": 12.0, "shares": 100, "tm": "2026-06-04 09:35:00", "tid": "t2"},
+        {"side": -1, "price": 11.0, "shares": 150, "tm": "2026-06-04 10:00:00", "tid": "t3"},
+    ]
+    monkeypatch.setattr(
+        trade_api,
+        "_fetch_all_dicts",
+        lambda sql, params=(): trades if "trades" in sql else [],
+    )
+    pnl = trade_api._compute_realized_pnl("601398.SH")
+    assert pnl == pytest.approx(50.0)
+
+
+def test_compute_realized_pnl_no_trades(monkeypatch):
+    """无成交时卖出盈亏为 0。"""
+    monkeypatch.setattr(
+        trade_api, "_fetch_all_dicts", lambda sql, params=(): []
+    )
+    assert trade_api._compute_realized_pnl("601398.SH") == 0.0
