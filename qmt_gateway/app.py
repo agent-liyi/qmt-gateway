@@ -376,6 +376,9 @@ def create_app():
         form_data = await request.form()
         form_dict = {k: v for k, v in form_data.items()}
         _wizard_data.update(form_dict)
+        # HTML checkbox 未勾选时不提交，需要显式重置残留值
+        if "auto_start_qmt" not in form_dict:
+            _wizard_data["auto_start_qmt"] = ""
         logger.info(f"接收到表单数据: {form_dict}")
 
         # 第2步（管理员设置）点击下一步时，校验密码一致性
@@ -422,6 +425,9 @@ def create_app():
             form_dict = {k: v for k, v in form_data.items()}
             logger.info(f"wizard_complete 接收表单: {form_dict}")
             _wizard_data.update(form_dict)
+            # HTML checkbox 未勾选时不提交，需要显式重置残留值
+            if "auto_start_qmt" not in form_dict:
+                _wizard_data["auto_start_qmt"] = ""
             logger.info(f"wizard_complete 合并后 _wizard_data: qmt_path={_wizard_data.get('qmt_path')!r}, "
                         f"xtquant_path={_wizard_data.get('xtquant_path')!r}, "
                         f"qmt_account_id={_wizard_data.get('qmt_account_id')!r}")
