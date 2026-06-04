@@ -200,7 +200,7 @@ def _build_settings_from_wizard_data(wizard_data: dict) -> "Settings":
     xtquant_path = wizard_data.get("xtquant_path", "")
     new_settings.xtquant_path = str(Path(xtquant_path).expanduser().resolve()) if xtquant_path else ""
 
-    # 加密存储 QMT 交易密码
+    # 加密存储 QMT 交易密码：只要用户填了就保存，与 auto_start_qmt 无关
     qmt_password = wizard_data.get("qmt_password", "")
     admin_password = wizard_data.get("password", "")
     auto_start_qmt = wizard_data.get("auto_start_qmt") == "on"
@@ -212,6 +212,8 @@ def _build_settings_from_wizard_data(wizard_data: dict) -> "Settings":
         new_settings.qmt_password_encrypted = encrypted
         new_settings.qmt_password_salt = salt
 
+    # auto-start 专用加密：仅当用户授权自动重启时生成（机器密钥加密，
+    # 供进程启动时无 session 解密使用）
     if auto_start_qmt and qmt_password:
         from qmt_gateway.core.crypto_utils import encrypt_for_auto_start
         new_settings.qmt_password_auto_start = encrypt_for_auto_start(qmt_password)

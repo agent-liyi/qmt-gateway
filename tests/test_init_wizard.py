@@ -642,6 +642,51 @@ def test_complete_with_password_but_no_auto_start_skips_restart(
     assert saved.qmt_account_id == "12345678"
     assert saved.init_completed is True
     assert saved.qmt_password_encrypted != ""
+    assert saved.qmt_password_salt != ""
+    assert saved.auto_start_qmt is False
+    assert saved.qmt_password_auto_start == ""
+
+
+def test_complete_via_multistep_flow_saves_qmt_password(
+    seeded_initialized_db, client, monkeypatch
+):
+    """模拟真实多步骤流程：先提交 step 2 设置 admin 密码，再提交 step 5 设置 qmt_password。
+
+    验证：即使 auto_start_qmt 未勾选，qmt_password 仍被加密保存。
+    """
+    from qmt_gateway import app as app_module
+    from qmt_gateway import core as core_module
+    monkeypatch.setattr(core_module, "require_xtdata", lambda *a, **k: _make_fake_xtdata())
+    app_module._wizard_data.clear()
+
+    # step 2 → step 3：设置管理员账号
+    client.post(
+        "/init-wizard/step/3",
+        data={
+            "username": "admin",
+            "password": "admin-pass",
+            "password_confirm": "admin-pass",
+        },
+    )
+
+    # step 5：直接 POST complete（未勾选 auto_start_qmt）
+    response = client.post(
+        "/init-wizard/complete",
+        data={
+            "qmt_account_id": "8881457417",
+            "qmt_path": r"C:\broker\userdata_mini",
+            "xtquant_path": r"C:\apps",
+            "qmt_password": "trade-secret",
+        },
+        follow_redirects=False,
+    )
+
+    assert response.status_code in (302, 303)
+    saved = db.get_settings()
+    assert saved.qmt_account_id == "8881457417"
+    assert saved.init_completed is True
+    assert saved.qmt_password_encrypted != "", "qmt_password 必须被加密保存"
+    assert saved.qmt_password_salt != ""
     assert saved.auto_start_qmt is False
     assert saved.qmt_password_auto_start == ""
 
