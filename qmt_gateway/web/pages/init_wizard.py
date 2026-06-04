@@ -285,6 +285,23 @@ def Step5_QMT(form_data: dict | None = None):
                     "可不填写，但会失去自动启动并登录 QMT 的能力",
                     cls="text-xs text-gray-500 mb-4",
                 ),
+                # 自动启动 QMT - 复选框
+                Div(
+                    Input(
+                        type="checkbox",
+                        name="auto_start_qmt",
+                        id="auto_start_qmt",
+                        value="on",
+                        checked=fd.get("auto_start_qmt") == "on",
+                        cls="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500",
+                    ),
+                    Label(
+                        "进程启动时自动启动 QMT（需要填写交易密码）",
+                        _for="auto_start_qmt",
+                        cls="ml-2 text-sm text-gray-700 cursor-pointer",
+                    ),
+                    cls="flex items-center gap-3 mb-4",
+                ),
                 # QMT 路径 - 横向布局 + 保留下方提示
                 Div(
                     Label("QMT 路径", cls=label_cls),

@@ -30,6 +30,7 @@ class ConfigManager:
         "data_start_date": None,
         "init_completed": False,
         "init_step": 0,
+        "auto_start_qmt": False,
     }
 
     def __init__(self):
@@ -174,6 +175,11 @@ class ConfigManager:
     def is_configured(self) -> bool:
         """检查是否已配置 QMT"""
         return bool(self.qmt_account_id and self.qmt_path)
+
+    @property
+    def auto_start_qmt(self) -> bool:
+        """是否在启动时自动启动 QMT"""
+        return self.get("auto_start_qmt", False)
 
 
 # 全局配置管理器实例

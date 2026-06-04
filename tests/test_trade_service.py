@@ -474,3 +474,100 @@ def test_persist_callback_trade_refreshes_positions(monkeypatch):
     service.persist_callback_trade(xt_trade)
 
     assert refreshed == [True]
+
+
+def test_try_auto_start_qmt_succeeds_on_first_attempt(monkeypatch):
+    service = TradeService()
+    service._auto_start_max_retries = 2
+    calls = []
+
+    monkeypatch.setattr(service, "_decrypt_qmt_password", lambda: "trade-secret")
+    monkeypatch.setattr(
+        service,
+        "restart_and_login",
+        lambda **kwargs: calls.append(kwargs) or {"success": True, "message": "ok"},
+    )
+    monkeypatch.setattr(trade_service_module.time, "sleep", lambda seconds: None)
+
+    result = service.try_auto_start_qmt(qmt_path=r"C:\qmt", account_id="123456")
+
+    assert result is True
+    assert len(calls) == 1
+    assert calls[0]["qmt_password"] == "trade-secret"
+    assert calls[0]["kill_first"] is False
+
+
+def test_try_auto_start_qmt_retries_and_succeeds(monkeypatch):
+    service = TradeService()
+    service._auto_start_max_retries = 2
+    attempts = []
+
+    monkeypatch.setattr(service, "_decrypt_qmt_password", lambda: "trade-secret")
+
+    def fake_restart(**kwargs):
+        attempts.append(True)
+        if len(attempts) < 3:
+            return {"success": False, "error": "not ready"}
+        return {"success": True, "message": "ok"}
+
+    monkeypatch.setattr(service, "restart_and_login", fake_restart)
+    monkeypatch.setattr(trade_service_module.time, "sleep", lambda seconds: None)
+
+    result = service.try_auto_start_qmt(qmt_path=r"C:\qmt", account_id="123456")
+
+    assert result is True
+    assert len(attempts) == 3
+
+
+def test_try_auto_start_qmt_retries_max_then_gives_up(monkeypatch):
+    service = TradeService()
+    service._auto_start_max_retries = 2
+    attempts = []
+
+    monkeypatch.setattr(service, "_decrypt_qmt_password", lambda: "trade-secret")
+    monkeypatch.setattr(
+        service,
+        "restart_and_login",
+        lambda **kwargs: attempts.append(True) or {"success": False, "error": "fail"},
+    )
+    monkeypatch.setattr(trade_service_module.time, "sleep", lambda seconds: None)
+
+    result = service.try_auto_start_qmt(qmt_path=r"C:\qmt", account_id="123456")
+
+    assert result is False
+    assert len(attempts) == 3
+
+
+def test_try_auto_start_qmt_skips_when_no_password(monkeypatch):
+    service = TradeService()
+
+    monkeypatch.setattr(service, "_decrypt_qmt_password", lambda: None)
+
+    result = service.try_auto_start_qmt(qmt_path=r"C:\qmt", account_id="123456")
+
+    assert result is False
+
+
+def test_decrypt_qmt_password_uses_auto_start_encrypted(monkeypatch):
+    service = TradeService()
+
+    fake_settings = SimpleNamespace(
+        qmt_password_auto_start="encrypted-auto-start",
+        qmt_password_encrypted="encrypted-user",
+        qmt_password_salt="salt",
+    )
+
+    monkeypatch.setattr(trade_service_module.db, "get_settings", lambda: fake_settings)
+
+    import qmt_gateway.core.crypto_utils as crypto_module
+    decrypted = []
+    monkeypatch.setattr(
+        crypto_module,
+        "decrypt_for_auto_start",
+        lambda payload: decrypted.append(payload) or "my-password",
+    )
+
+    result = service._decrypt_qmt_password()
+
+    assert result == "my-password"
+    assert decrypted == ["encrypted-auto-start"]

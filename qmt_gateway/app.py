@@ -203,11 +203,20 @@ def _build_settings_from_wizard_data(wizard_data: dict) -> "Settings":
     # 加密存储 QMT 交易密码
     qmt_password = wizard_data.get("qmt_password", "")
     admin_password = wizard_data.get("password", "")
+    auto_start_qmt = wizard_data.get("auto_start_qmt") == "on"
+    new_settings.auto_start_qmt = auto_start_qmt
+
     if qmt_password and admin_password:
         from qmt_gateway.core.crypto_utils import encrypt_password
         encrypted, salt = encrypt_password(qmt_password, admin_password)
         new_settings.qmt_password_encrypted = encrypted
         new_settings.qmt_password_salt = salt
+
+    if auto_start_qmt and qmt_password:
+        from qmt_gateway.core.crypto_utils import encrypt_for_auto_start
+        new_settings.qmt_password_auto_start = encrypt_for_auto_start(qmt_password)
+    else:
+        new_settings.qmt_password_auto_start = ""
 
     new_settings.init_step = 5
     return new_settings

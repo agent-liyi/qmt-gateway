@@ -203,6 +203,7 @@ class TradeService:
         self._qmt_login_retry_delay_sec = 3.0
         self._restart_password_token_ttl_sec = 120.0
         self._restart_password_tokens: dict[str, dict[str, object]] = {}
+        self._auto_start_max_retries = 2
 
     def _set_connection_state(self, connected: bool, message: str) -> str:
         self._connected = connected
@@ -886,6 +887,106 @@ class TradeService:
             kill_first=kill_first,
             verify_connection=verify_connection,
         )
+
+    def _decrypt_qmt_password(self) -> str | None:
+        """尝试解密存储的 QMT 交易密码用于自动启动。
+
+        优先使用 auto-start 专用加密密码（机器密钥加密），
+        如果不存在则尝试使用用户密码加密的密码（需要 auto_login 用户）。
+        """
+        try:
+            settings = db.get_settings()
+            if settings.qmt_password_auto_start:
+                try:
+                    from qmt_gateway.core.crypto_utils import decrypt_for_auto_start
+                    password = decrypt_for_auto_start(settings.qmt_password_auto_start)
+                    if password:
+                        logger.info("已使用 auto-start 加密密码解密 QMT 密码")
+                        return password
+                except Exception as exc:
+                    logger.warning("auto-start 密码解密失败: {}", exc)
+
+            if not settings.qmt_password_encrypted or not settings.qmt_password_salt:
+                return None
+
+            admin_users = db.conn.execute(
+                "SELECT username FROM users WHERE is_admin = 1 AND auto_login = 1"
+            ).fetchall()
+            if not admin_users:
+                logger.info("未找到启用 auto_login 的管理员用户，无法解密 QMT 密码")
+                return None
+
+            from qmt_gateway.core.crypto_utils import decrypt_password
+            for row in admin_users:
+                username = row[0]
+                user = db.get_user(username)
+                if user is None:
+                    continue
+                try:
+                    password = decrypt_password(
+                        settings.qmt_password_encrypted,
+                        settings.qmt_password_salt,
+                        user.password_hash,
+                    )
+                    if password:
+                        logger.info("已使用 auto_login 用户 {} 的密码解密 QMT 密码", username)
+                        return password
+                except Exception:
+                    continue
+            return None
+        except Exception as exc:
+            logger.warning("自动解密 QMT 密码失败: {}", exc)
+            return None
+
+    def try_auto_start_qmt(self, *, qmt_path: str, account_id: str) -> bool:
+        """在进程启动时自动启动 QMT 并登录。
+
+        条件：配置了 auto_start_qmt 且存储了加密的 QMT 交易密码。
+        最多重试 ``_auto_start_max_retries`` 次，即使全部失败也不阻塞服务启动。
+
+        Returns:
+            是否最终连接成功。
+        """
+        qmt_password = self._decrypt_qmt_password()
+        if not qmt_password:
+            logger.info("auto_start_qmt: 未找到可解密的 QMT 交易密码，跳过自动启动")
+            return False
+
+        max_retries = max(int(self._auto_start_max_retries), 0)
+        for attempt in range(1, max_retries + 2):
+            try:
+                logger.info(
+                    "auto_start_qmt: 第 {}/{} 次尝试启动 QMT",
+                    attempt,
+                    max_retries + 1,
+                )
+                result = self.restart_and_login(
+                    qmt_path=qmt_path,
+                    account_id=account_id,
+                    qmt_password=qmt_password,
+                    kill_first=False,
+                    verify_connection=True,
+                )
+                if result.get("success"):
+                    logger.info("auto_start_qmt: 第 {} 次尝试成功", attempt)
+                    return True
+                logger.warning(
+                    "auto_start_qmt: 第 {} 次尝试失败: {}",
+                    attempt,
+                    result.get("error", "未知错误"),
+                )
+            except Exception as exc:
+                logger.warning("auto_start_qmt: 第 {} 次尝试异常: {}", attempt, exc)
+
+            if attempt <= max_retries:
+                time.sleep(3)
+
+        logger.warning(
+            "auto_start_qmt: 已尝试 {} 次，均未成功，服务仍将继续运行",
+            max_retries + 1,
+        )
+        self._set_connection_state(False, "自动启动 QMT 失败，请通过 Web 界面手动重启")
+        return False
 
     def disconnect(self):
         """断开交易接口连接"""

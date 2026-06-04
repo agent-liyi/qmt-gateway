@@ -416,6 +416,14 @@ def register_routes(app):
                     logger.info("已连接到 QMT")
                 else:
                     logger.warning("已和 QMT 断开")
+                    if config.auto_start_qmt:
+                        logger.info("auto_start_qmt 已启用，尝试自动启动 QMT")
+                        import asyncio
+                        await asyncio.to_thread(
+                            trade_service.try_auto_start_qmt,
+                            qmt_path=str(config.qmt_path),
+                            account_id=config.qmt_account_id,
+                        )
         except Exception as e:
             logger.error(f"启动时连接交易接口失败: {e}")
 

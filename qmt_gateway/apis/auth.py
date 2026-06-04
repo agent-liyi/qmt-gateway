@@ -188,6 +188,11 @@ def handle_change_password(
             new_encrypted, new_salt = encrypt_password(qmt_password, new_password)
             settings.qmt_password_encrypted = new_encrypted
             settings.qmt_password_salt = new_salt
+
+            if settings.auto_start_qmt:
+                from qmt_gateway.core.crypto_utils import encrypt_for_auto_start
+                settings.qmt_password_auto_start = encrypt_for_auto_start(qmt_password)
+
             db.save_settings(settings)
             logger.info(f"已使用新登录密码重新加密 QMT 交易密码")
         except Exception as e:
@@ -238,6 +243,13 @@ def handle_change_qmt_password(
         settings = db.get_settings()
         settings.qmt_password_encrypted = encrypted
         settings.qmt_password_salt = salt
+
+        if settings.auto_start_qmt:
+            from qmt_gateway.core.crypto_utils import encrypt_for_auto_start
+            settings.qmt_password_auto_start = encrypt_for_auto_start(new_qmt_password)
+        else:
+            settings.qmt_password_auto_start = ""
+
         db.save_settings(settings)
 
         # 更新 session 中的解密密钥

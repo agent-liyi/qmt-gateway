@@ -131,3 +131,94 @@ def decrypt_password_with_key(encrypted_data: str, derived_key_b64: str) -> str:
         raise ValueError("解密失败：密钥不正确或数据已损坏")
     except Exception as exc:
         raise ValueError(f"解密失败：{exc}") from exc
+
+
+def _get_machine_key() -> bytes:
+    """获取当前机器的唯一标识作为加密密钥源。
+
+    组合多个机器特征：机器名 + 用户名 + 可执行文件路径，
+    生成一个与运行环境绑定的密钥种子。这样即使数据库被复制到其他机器，
+    仍然无法解密 auto-start 密码。
+    """
+    import hashlib
+    import platform
+    import sys
+
+    parts = [
+        platform.node() or "",
+        os.environ.get("USERNAME", os.environ.get("USER", "")),
+        sys.executable,
+        os.path.splitdrive(sys.executable)[0] or "C:",
+    ]
+    seed = "\n".join(parts)
+    return hashlib.sha256(seed.encode("utf-8")).digest()
+
+
+def encrypt_for_auto_start(plaintext: str) -> str:
+    """使用机器密钥加密密码，用于进程启动时自动解密。
+
+    安全性说明：此加密依赖本机环境特征，安全性低于用户密码派生的加密。
+    仅在用户明确启用 auto_start_qmt 时使用，且应与用户密码加密互为补充。
+
+    Args:
+        plaintext: 要加密的明文密码。
+
+    Returns:
+        base64 编码的加密字符串，内含 salt + ciphertext。
+    """
+    if not plaintext:
+        return ""
+
+    machine_key = _get_machine_key()
+    salt = secrets.token_bytes(SALT_LENGTH)
+    combined = machine_key + salt
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=combined,
+        iterations=PBKDF2_ITERATIONS,
+    )
+    key = base64.urlsafe_b64encode(kdf.derive(machine_key))
+    fernet = Fernet(key)
+    encrypted = fernet.encrypt(plaintext.encode("utf-8"))
+
+    payload = salt + encrypted
+    return base64.urlsafe_b64encode(payload).decode("ascii")
+
+
+def decrypt_for_auto_start(encrypted_payload: str) -> str:
+    """使用机器密钥解密 auto-start 密码。
+
+    Args:
+        encrypted_payload: encrypt_for_auto_start 返回的加密字符串。
+
+    Returns:
+        解密后的明文密码。
+
+    Raises:
+        ValueError: 如果数据为空或解密失败。
+    """
+    if not encrypted_payload:
+        return ""
+
+    try:
+        payload = base64.urlsafe_b64decode(encrypted_payload.encode("ascii"))
+        salt = payload[:SALT_LENGTH]
+        encrypted = payload[SALT_LENGTH:]
+
+        machine_key = _get_machine_key()
+        combined = machine_key + salt
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=combined,
+            iterations=PBKDF2_ITERATIONS,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(machine_key))
+        fernet = Fernet(key)
+        decrypted = fernet.decrypt(encrypted)
+        return decrypted.decode("utf-8")
+    except InvalidToken:
+        raise ValueError("auto-start 密码解密失败：机器环境可能已变更")
+    except Exception as exc:
+        raise ValueError(f"auto-start 密码解密失败：{exc}") from exc
