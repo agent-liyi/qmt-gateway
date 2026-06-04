@@ -15,6 +15,7 @@ from qmt_gateway.apis import (
     login_required,
     quote_ws,
     register_api_key_routes,
+    register_ping_routes,
     register_auth_routes,
     register_history_routes,
     register_quotes_routes,
@@ -321,6 +322,7 @@ def create_app():
     register_stock_routes(app)
     register_history_routes(app)
     register_api_key_routes(app)
+    register_ping_routes(app)
 
     # 初始化向导路由
     @app.get("/init-wizard")
