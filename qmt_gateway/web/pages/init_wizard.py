@@ -578,7 +578,7 @@ def _WizardScript():
     if (m) m.classList.remove('modal-open');
   }
 
-  /* 1. 点击"重试"时，先 abort 挂起的请求 */
+  /* 1. 点击"完成初始化"或"重试"时处理进度对话框 */
   document.body.addEventListener('click', function(e) {
     var btn = e.target.closest('button');
     if (!btn) return;
@@ -586,30 +586,14 @@ def _WizardScript():
 
     if (hxPost.indexOf('/init-wizard/complete') !== -1) {
       var pwInput = document.getElementById('qmt-password-input');
-      var pwLabel = document.getElementById('qmt-password-label');
-      var autoStartCb = document.getElementById('auto_start_qmt');
       var pwValue = pwInput ? pwInput.value.trim() : '';
-      var autoStartChecked = autoStartCb ? autoStartCb.checked : false;
-
-      if (autoStartChecked && !pwValue) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (pwInput) { pwInput.classList.add('input-error'); pwInput.focus(); }
-        if (pwLabel) { pwLabel.classList.add('text-red-600'); }
-        return;
-      }
-      if (pwInput) pwInput.classList.remove('input-error');
-      if (pwLabel) pwLabel.classList.remove('text-red-600');
-
-      if (!pwValue) {
-        return;
-      }
-            _wizardRequestActive = true;
+      if (!pwValue) return;
+      _wizardRequestActive = true;
       var target = document.getElementById('wizard-form-container');
       if (target) {
         try { htmx.abort(target); } catch(ex) {}
       }
-            openProgressModal({ resetTimer: true, resetContent: true });
+      openProgressModal({ resetTimer: true, resetContent: true });
     } else if (hxPost.indexOf('/init-wizard/retry-startup') !== -1) {
             _wizardRequestActive = true;
       var target = document.getElementById('wizard-form-container');
@@ -623,7 +607,28 @@ def _WizardScript():
     }
   });
 
-  /* 2. 请求发送前：标记 + 禁用重试按钮 */
+  /* 2. 请求发送前：校验 auto_start_qmt + 密码，拦截无效提交 */
+  document.body.addEventListener('htmx:beforeRequest', function(evt) {
+    var path = (evt.detail.requestConfig && evt.detail.requestConfig.path) || '';
+    if (path.indexOf('/init-wizard/complete') === -1) return;
+
+    var pwInput = document.getElementById('qmt-password-input');
+    var pwLabel = document.getElementById('qmt-password-label');
+    var autoStartCb = document.getElementById('auto_start_qmt');
+    var pwValue = pwInput ? pwInput.value.trim() : '';
+    var autoStartChecked = autoStartCb ? autoStartCb.checked : false;
+
+    if (autoStartChecked && !pwValue) {
+      evt.preventDefault();
+      if (pwInput) { pwInput.classList.add('input-error'); pwInput.focus(); }
+      if (pwLabel) { pwLabel.classList.add('text-red-600'); }
+      return;
+    }
+    if (pwInput) pwInput.classList.remove('input-error');
+    if (pwLabel) pwLabel.classList.remove('text-red-600');
+  });
+
+  /* 3. 请求发送前：标记 + 禁用重试按钮 */
   document.body.addEventListener('htmx:beforeRequest', function(evt) {
     var path = (evt.detail.requestConfig && evt.detail.requestConfig.path) || '';
     if (path.indexOf('/init-wizard/complete') !== -1 ||
