@@ -300,8 +300,8 @@ def test_recovery_attempts_launch_when_path_valid_but_qmt_not_running(
 
     monkeypatch.setattr(core_module, "require_xtdata", fake_require_xtdata)
     monkeypatch.setattr(
-        ts_instance, "restart_qmt",
-        lambda pw: {"success": False, "error": "连接失败"},
+        ts_instance, "restart_and_login",
+        lambda **kw: {"success": False, "error": "连接失败"},
     )
 
     settings_before = db.get_settings().to_dict()

@@ -69,6 +69,73 @@ def _get_xtquant(name: str):
     return _xtquant_modules[name]
 
 
+def _restart_and_login_sync(
+    service: "TradeService",
+    qmt_path: str,
+    account_id: str,
+    qmt_password: str,
+    kill_first: bool,
+    verify_connection: bool = True,
+) -> dict:
+    """``TradeService.restart_and_login`` 的同步实现。
+
+    整体 30 秒超时，超时后返回 ``{"success": False, "error": ...}``。
+    """
+    import concurrent.futures
+
+    timeout_sec = float(service._qmt_restart_timeout_sec)
+
+    def _task() -> dict:
+        password_token: str | None = None
+        try:
+            executable = service._resolve_qmt_client_path(qmt_path)
+            logger.info("准备重启 QMT: qmt_path={}, executable={}", qmt_path, executable)
+            service.disconnect()
+            service._set_connection_state(False, "交易接口连接断开，正在重启 QMT")
+
+            if kill_first:
+                kill_result = service._kill_qmt_process(executable.name)
+                if kill_result == "terminated":
+                    logger.info("已终止现有 QMT 进程: image={}", executable.name)
+                else:
+                    logger.info("未发现正在运行的 QMT 进程: image={}", executable.name)
+
+            if service._get_current_session_id() == 0:
+                password_token = service.issue_restart_password_token(qmt_password)
+
+            process = service._launch_qmt_process(executable, password_token=password_token)
+            if password_token is None:
+                service._fill_qmt_login_password(process.pid, qmt_password)
+
+            if not verify_connection:
+                logger.info("启动+填密码完成，跳过连接验证（verify_connection=False）")
+                service._qmt_path = qmt_path
+                service._account_id = account_id
+                return {"success": True, "message": "QMT 已启动，连接验证交给调用方"}
+
+            if service.connect(account_id=account_id, qmt_path=qmt_path):
+                return {"success": True, "message": "QMT 已重启并重新连接交易接口"}
+            return {"success": False, "error": "交易接口重连失败"}
+        except Exception as exc:
+            logger.error(f"重启 QMT 失败: {exc}")
+            service._set_connection_state(False, f"重启 QMT 失败: {exc}")
+            return {"success": False, "error": str(exc)}
+        finally:
+            service.discard_restart_password_token(password_token)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_task)
+        try:
+            return future.result(timeout=timeout_sec)
+        except concurrent.futures.TimeoutError:
+            logger.warning("重启 QMT 超时 ({}s)，请稍后重试", timeout_sec)
+            service._set_connection_state(False, f"重启 QMT 超时 ({timeout_sec}s)")
+            return {
+                "success": False,
+                "error": f"重启 QMT 超时（{timeout_sec:.0f}秒），请检查 QMT 是否已启动后重试",
+            }
+
+
 class TradeCallback:
     """交易回调实现"""
 
@@ -125,8 +192,8 @@ class TradeService:
         self._connection_message = "交易接口未连接"
         self._connection_updated_at = datetime.datetime.now().isoformat(timespec="seconds")
         self._qmt_restart_timeout_sec = 30.0
-        self._qmt_login_timeout_sec = 40.0
-        self._qmt_launch_probe_timeout_sec = 15.0
+        self._qmt_login_timeout_sec = 20.0
+        self._qmt_launch_probe_timeout_sec = 5.0
         self._qmt_login_retry_delay_sec = 3.0
         self._restart_password_token_ttl_sec = 120.0
         self._restart_password_tokens: dict[str, dict[str, object]] = {}
@@ -715,43 +782,73 @@ class TradeService:
             return {"success": False, "error": helper_status}
         return {"success": False, "error": last_message}
 
-    def restart_qmt(self, password: str) -> dict:
-        resolved_password = str(password or "")
+    def restart_and_login(
+        self,
+        *,
+        qmt_path: str,
+        account_id: str,
+        qmt_password: str,
+        kill_first: bool = False,
+        verify_connection: bool = True,
+    ) -> dict:
+        """统一的 QMT 重启 + 登录入口（同步版本）。
+
+        流程：kill (如需要) → 启动 QMT → 自动填入登录密码 → 验证连接。
+        整体 30 秒超时（由 ``_qmt_restart_timeout_sec`` 控制）。
+        异步端点应使用 ``async_restart_and_login`` 以避免阻塞事件循环。
+
+        Args:
+            qmt_path: QMT 安装路径
+            account_id: 资金账号
+            qmt_password: QMT 交易密码
+            kill_first: 是否先杀掉已有 QMT 进程
+            verify_connection: 是否验证连接。init-wizard 场景设为 False，
+                启动+填密码后立即返回，由调用方轮询验证。
+
+        Returns:
+            ``{"success": True, "message": ...}`` 或
+            ``{"success": False, "error": ...}``
+        """
+        resolved_password = str(qmt_password or "")
+        resolved_path = str(qmt_path or "").strip()
+        resolved_account = str(account_id or "").strip()
+
         if not resolved_password.strip():
             return {"success": False, "error": "请输入交易密码"}
-
-        account_id = str(self._account_id or config.qmt_account_id or "").strip()
-        qmt_path = str(self._qmt_path or config.qmt_path or "").strip()
-        if not account_id or not qmt_path:
+        if not resolved_account or not resolved_path:
             return {"success": False, "error": "QMT 账号或路径未配置"}
 
-        password_token: str | None = None
-        try:
-            executable = self._resolve_qmt_client_path(qmt_path)
-            logger.info("准备重启 QMT: qmt_path={}, executable={}", qmt_path, executable)
-            self.disconnect()
-            self._set_connection_state(False, "交易接口连接断开，正在重启 QMT")
-            kill_result = self._kill_qmt_process(executable.name)
-            if kill_result == "terminated":
-                logger.info("已终止现有 QMT 进程: image={}", executable.name)
-            else:
-                logger.info("未发现正在运行的 QMT 进程: image={}", executable.name)
-            if self._get_current_session_id() == 0:
-                password_token = self.issue_restart_password_token(resolved_password)
-            process = self._launch_qmt_process(executable, password_token=password_token)
-            if password_token is None:
-                self._fill_qmt_login_password(process.pid, resolved_password)
+        return _restart_and_login_sync(
+            self,
+            resolved_path,
+            resolved_account,
+            resolved_password,
+            kill_first,
+            verify_connection=verify_connection,
+        )
 
-            result = self._connect_with_helper_status(account_id, qmt_path, password_token=password_token)
-            if result.get("success"):
-                return result
-            return {"success": False, "error": result.get("error", "交易接口重连失败")}
-        except Exception as exc:
-            logger.error(f"重启 QMT 失败: {exc}")
-            self._set_connection_state(False, f"重启 QMT 失败: {exc}")
-            return {"success": False, "error": str(exc)}
-        finally:
-            self.discard_restart_password_token(password_token)
+    async def async_restart_and_login(
+        self,
+        *,
+        qmt_path: str,
+        account_id: str,
+        qmt_password: str,
+        kill_first: bool = False,
+        verify_connection: bool = True,
+    ) -> dict:
+        """``restart_and_login`` 的异步版本，在线程池中执行同步重置流程。
+
+        异步端点应使用本方法以避免阻塞事件循环。
+        """
+        import asyncio
+        return await asyncio.to_thread(
+            self.restart_and_login,
+            qmt_path=qmt_path,
+            account_id=account_id,
+            qmt_password=qmt_password,
+            kill_first=kill_first,
+            verify_connection=verify_connection,
+        )
 
     def disconnect(self):
         """断开交易接口连接"""

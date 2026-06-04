@@ -152,10 +152,14 @@ def test_restart_qmt_endpoint_logs_submission(monkeypatch):
     monkeypatch.setattr(trade_api, "logger", fake_logger)
     monkeypatch.setattr(trade_api, "login_required", lambda request: {"username": "tester"})
     monkeypatch.setattr(trade_api, "require_api_key_or_session", lambda request: {"username": "tester"})
+
+    async def fake_async_restart_and_login(**kwargs):
+        return {"success": True, "message": "QMT 已重启并重新连接交易接口"}
+
     monkeypatch.setattr(
         trade_api.trade_service,
-        "restart_qmt",
-        lambda password: {"success": True, "message": "QMT 已重启并重新连接交易接口"},
+        "async_restart_and_login",
+        fake_async_restart_and_login,
     )
 
     response = client.post("/api/trade/restart-qmt", data={"password": "trade-secret"})

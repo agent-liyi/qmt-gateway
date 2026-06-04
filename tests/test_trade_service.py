@@ -143,7 +143,7 @@ def test_resolve_qmt_client_path_from_userdata_dir(monkeypatch):
     assert resolved == expected
 
 
-def test_restart_qmt_relaunches_client_and_reconnects(monkeypatch):
+def test_restart_and_login_relaunches_client_and_reconnects(monkeypatch):
     service = TradeService()
     service._account_id = "8881457417"
     service._qmt_path = r"C:\apps\qmt\userdata_mini"
@@ -160,11 +160,16 @@ def test_restart_qmt_relaunches_client_and_reconnects(monkeypatch):
     monkeypatch.setattr(service, "_fill_qmt_login_password", lambda pid, password: calls.append(("fill", pid, password)))
     monkeypatch.setattr(
         service,
-        "_connect_with_helper_status",
-        lambda account_id, qmt_path, password_token=None: calls.append(("connect", account_id, qmt_path, password_token)) or {"success": True, "message": "QMT 已重启并重新连接交易接口"},
+        "connect",
+        lambda account_id, qmt_path: calls.append(("connect", account_id, qmt_path)) or True,
     )
 
-    result = service.restart_qmt("trade-secret")
+    result = service.restart_and_login(
+        qmt_path=r"C:\apps\qmt\userdata_mini",
+        account_id="8881457417",
+        qmt_password="trade-secret",
+        kill_first=True,
+    )
 
     assert result == {"success": True, "message": "QMT 已重启并重新连接交易接口"}
     assert calls == [
@@ -173,15 +178,19 @@ def test_restart_qmt_relaunches_client_and_reconnects(monkeypatch):
         ("kill", "XtItClient.exe"),
         ("launch", executable, None),
         ("fill", 4321, "trade-secret"),
-        ("connect", "8881457417", r"C:\apps\qmt\userdata_mini", None),
+        ("connect", "8881457417", r"C:\apps\qmt\userdata_mini"),
         ("discard", None),
     ]
 
 
-def test_restart_qmt_requires_password():
+def test_restart_and_login_requires_password():
     service = TradeService()
 
-    result = service.restart_qmt("")
+    result = service.restart_and_login(
+        qmt_path=r"C:\broker\userdata_mini",
+        account_id="12345678",
+        qmt_password="",
+    )
 
     assert result == {"success": False, "error": "请输入交易密码"}
 

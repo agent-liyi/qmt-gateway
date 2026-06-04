@@ -441,6 +441,7 @@ def register_routes(app):
         """重启 QMT 客户端并自动填入交易密码。
 
         如果未提供 password，则尝试使用 session 中存储的派生密钥解密已存储的 QMT 密码。
+        重置流程在后台线程中执行，整体 30 秒超时，不阻塞事件循环。
         """
         require_api_key_or_session(request)
 
@@ -463,7 +464,12 @@ def register_routes(app):
                 logger.warning(f"解密存储的 QMT 密码失败: {e}")
 
         logger.info("收到 QMT 重启请求")
-        result = trade_service.restart_qmt(password)
+        result = await trade_service.async_restart_and_login(
+            qmt_path=str(trade_service._qmt_path or config.qmt_path or ""),
+            account_id=str(trade_service._account_id or config.qmt_account_id or ""),
+            qmt_password=password,
+            kill_first=True,
+        )
         if result.get("success"):
             logger.info("QMT 重启完成并已发起重连")
         else:

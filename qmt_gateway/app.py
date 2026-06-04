@@ -620,14 +620,10 @@ def create_app():
     def _wizard_restart_qmt(
         *, qmt_path: str, account_id: str, qmt_password: str, kill_first: bool = False
     ) -> dict:
-        """启动 QMT 并填密码，不等待连接。
+        """统一调用 TradeService.async_restart_and_login（init-wizard 与主界面共用入口）。
 
         init-wizard 场景：QMT 没在运行时启动它，已在运行时不做任何操作。
         kill_first=True 时先杀掉已有进程再重启（用于重试场景）。
-        连接验证由 /init-wizard/retry-startup 的 auto-retry 轮询完成。
-
-        Returns:
-            ``{"success": True}`` 或 ``{"success": False, "error": <str>}``
         """
         from qmt_gateway.services.trade_service import trade_service
         from qmt_gateway.qmt_init_helpers import is_qmt_process_running
@@ -641,51 +637,13 @@ def create_app():
             trade_service._account_id = account_id
             return {"success": True}
 
-        password_token = None
-        try:
-            executable = trade_service._resolve_qmt_client_path(qmt_path)
-
-            if kill_first:
-                logger.info("[wizard] ① 杀掉旧 QMT 进程...")
-                try:
-                    trade_service._kill_qmt_process(executable.name)
-                    logger.info("[wizard] ① 已终止旧 QMT 进程")
-                except Exception:
-                    logger.info("[wizard] ① 无旧 QMT 进程需终止")
-                trade_service.disconnect()
-                import time
-                time.sleep(1)
-
-            logger.info("[wizard] ② 启动 QMT: qmt_path={}", qmt_path)
-
-            if trade_service._get_current_session_id() == 0:
-                password_token = trade_service.issue_restart_password_token(qmt_password)
-
-            process = trade_service._launch_qmt_process(executable, password_token=password_token)
-            logger.info("[wizard] ② QMT 进程已启动: pid={}", process.pid)
-
-            if password_token is None:
-                logger.info("[wizard] ③ 正在自动填入登录密码...")
-                trade_service._fill_qmt_login_password(process.pid, qmt_password)
-                logger.info("[wizard] ③ 登录密码已填入")
-
-            logger.info("[wizard] 启动+填密码完成，连接验证交给 auto-retry")
-
-            trade_service._qmt_path = qmt_path
-            trade_service._account_id = account_id
-
-            if password_token is not None:
-                trade_service.discard_restart_password_token(password_token)
-
-            return {"success": True}
-        except Exception as exc:
-            logger.error(f"[wizard] 启动 QMT 异常: {exc}")
-            if password_token is not None:
-                try:
-                    trade_service.discard_restart_password_token(password_token)
-                except Exception:
-                    pass
-            return {"success": False, "error": str(exc)}
+        return trade_service.restart_and_login(
+            qmt_path=qmt_path,
+            account_id=account_id,
+            qmt_password=qmt_password,
+            kill_first=kill_first,
+            verify_connection=False,
+        )
 
     def _build_wizard_failure_fragment(
         *,
