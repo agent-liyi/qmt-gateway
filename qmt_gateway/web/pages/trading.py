@@ -211,7 +211,7 @@ def OrderForm(available_cash: float = 0):
                     "✱",
                     id="buy-button-asterisk",
                     cls=(
-                        "pointer-events-none absolute -left-[5px] -top-[5px] "
+                        "pointer-events-none absolute left-[5px] top-[5px] "
                         "text-base font-bold leading-none text-white"
                     ),
                 ),
@@ -227,7 +227,7 @@ def OrderForm(available_cash: float = 0):
                     "✱",
                     id="sell-button-asterisk",
                     cls=(
-                        "pointer-events-none absolute -left-[5px] -top-[5px] "
+                        "pointer-events-none absolute left-[5px] top-[5px] "
                         "text-base font-bold leading-none text-white hidden"
                     ),
                 ),
