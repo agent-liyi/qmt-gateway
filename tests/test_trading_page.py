@@ -363,3 +363,216 @@ def test_trading_page_uses_refresh_current_table_after_trade():
     assert "refreshOrdersTable" not in html
     # 应该用 htmx.trigger 触发当前容器的 every 5s 触发器
     assert "htmx.trigger" in html
+
+
+# --- #40: setPositionRatio 卖出应使用可卖股数 -----------------------
+
+def _set_position_ratio_py(
+    side: str,
+    symbol: str,
+    ratio: float,
+    *,
+    avail_shares_by_symbol: dict,
+    available_cash: float,
+    price: float,
+    mode: str = "quantity",
+) -> dict:
+    """Python 版 setPositionRatio 规范实现，与 JS 保持一致 (#40)。
+
+    返回值字段：
+      value: 写入 #order-value 的字符串
+      switched_to_quantity: amount 模式时是否切到 quantity 模式
+      warning: 是否发出"无持仓可卖"提示
+    """
+    result = {"value": "", "switched_to_quantity": False, "warning": False}
+    if not (ratio > 0):
+        return result
+    if side == "sell":
+        avail_shares = float(avail_shares_by_symbol.get(symbol, 0) or 0)
+        if not (avail_shares > 0):
+            result["warning"] = True
+            return result
+        if mode == "amount":
+            hands_from_avail = int(avail_shares // 100)
+            hands_target = int(hands_from_avail * ratio)
+            if hands_target < 1 and hands_from_avail > 0:
+                hands_target = 1
+            result["value"] = str(hands_target)
+            result["switched_to_quantity"] = True
+            return result
+        hands = int((avail_shares * ratio) // 100)
+        if hands < 1 and avail_shares > 0:
+            hands = 1
+        result["value"] = str(hands)
+        return result
+    # buy
+    if not (available_cash > 0):
+        return result
+    if mode == "amount":
+        result["value"] = f"{(available_cash * ratio) / 10000:.2f}"
+        return result
+    if not (price > 0):
+        return result
+    shares = int((available_cash * ratio) // price // 100) * 100
+    result["value"] = str(max(shares // 100, 0))
+    return result
+
+
+def test_set_position_ratio_sell_full_position_two_hands():
+    """200 股可卖 + 1.0 比率 → 2 手 (#40)"""
+    out = _set_position_ratio_py(
+        side="sell",
+        symbol="601398.SH",
+        ratio=1.0,
+        avail_shares_by_symbol={"601398.SH": 200},
+        available_cash=0,
+        price=0,
+    )
+    assert out["value"] == "2"
+    assert out["warning"] is False
+
+
+def test_set_position_ratio_sell_half_position_one_hand():
+    """200 股可卖 + 0.5 比率 → 1 手 (#40)"""
+    out = _set_position_ratio_py(
+        side="sell",
+        symbol="601398.SH",
+        ratio=0.5,
+        avail_shares_by_symbol={"601398.SH": 200},
+        available_cash=0,
+        price=0,
+    )
+    assert out["value"] == "1"
+
+
+def test_set_position_ratio_sell_quarter_position_one_hand():
+    """200 股可卖 + 0.25 比率 → 0 → 兜底为 1 手 (#40)"""
+    out = _set_position_ratio_py(
+        side="sell",
+        symbol="601398.SH",
+        ratio=0.25,
+        avail_shares_by_symbol={"601398.SH": 200},
+        available_cash=0,
+        price=0,
+    )
+    assert out["value"] == "1"
+
+
+def test_set_position_ratio_sell_small_position_floors_to_one_hand():
+    """2 股可卖 + 0.5 比率 → floor(1/100)=0，兜底为 1 手 (#40)
+
+    注：A 股最小卖出 1 手（100 股），故不足 1 手的可卖数会被抬升到 1 手。
+    这是已知行为，提交委托时仍需用户确认。
+    """
+    out = _set_position_ratio_py(
+        side="sell",
+        symbol="601398.SH",
+        ratio=0.5,
+        avail_shares_by_symbol={"601398.SH": 2},
+        available_cash=0,
+        price=0,
+    )
+    assert out["value"] == "1"
+
+
+def test_set_position_ratio_sell_no_position_warns():
+    """未选中持仓时卖出应提示"无持仓可卖"，不写入 input (#40)"""
+    out = _set_position_ratio_py(
+        side="sell",
+        symbol="601398.SH",
+        ratio=0.5,
+        avail_shares_by_symbol={},
+        available_cash=100000,
+        price=10.0,
+    )
+    assert out["value"] == ""
+    assert out["warning"] is True
+
+
+def test_set_position_ratio_sell_amount_mode_switches_to_quantity():
+    """卖出 + 按金额模式应切到按数量并按可卖手数计算 (#40)"""
+    out = _set_position_ratio_py(
+        side="sell",
+        symbol="601398.SH",
+        ratio=0.5,
+        avail_shares_by_symbol={"601398.SH": 400},
+        available_cash=0,
+        price=0,
+        mode="amount",
+    )
+    # 400 股 → 4 手 × 0.5 = 2 手
+    assert out["value"] == "2"
+    assert out["switched_to_quantity"] is True
+
+
+def test_set_position_ratio_buy_uses_available_cash():
+    """买入按金额模式：1万现金 + 1.0 比率 → 1.00 万元 (#40 回归)"""
+    out = _set_position_ratio_py(
+        side="buy",
+        symbol="601398.SH",
+        ratio=1.0,
+        avail_shares_by_symbol={},
+        available_cash=10000,
+        price=10.0,
+        mode="amount",
+    )
+    assert out["value"] == "1.00"
+
+
+def test_set_position_ratio_buy_quantity_uses_cash_and_price():
+    """买入按数量模式：1万现金 / 10元股价 / 1.0 比率 → 10 手 (#40 回归)"""
+    out = _set_position_ratio_py(
+        side="buy",
+        symbol="601398.SH",
+        ratio=1.0,
+        avail_shares_by_symbol={},
+        available_cash=10000,
+        price=10.0,
+        mode="quantity",
+    )
+    assert out["value"] == "10"
+
+
+def test_trading_page_set_position_ratio_branch_on_side():
+    """TradingPage 中的 setPositionRatio 必须按 side 分支：sell 用 avail，buy 用 cash (#40)"""
+    html = to_xml(TradingPage())
+
+    # 卖出分支
+    assert "side === 'sell'" in html
+    assert "_positionAvailBySymbol" in html
+    assert "availShares * ratio" in html
+    # 买入分支
+    assert "availableCash" in html
+    # 卖出/买入分支独立返回
+    assert "当前选中股票无持仓可卖" in html
+
+
+def test_position_table_avail_map_filters_invalid_symbols():
+    """_positionAvailBySymbol 应只暴露有 symbol 的持仓，且 avail 为浮点 (#40)"""
+    from qmt_gateway.web.pages.trading import PositionTable
+
+    positions = [
+        {"symbol": "601398.SH", "avail": 200},
+        {"symbol": "", "avail": 999},  # 无 symbol 应被过滤
+        {"symbol": None, "avail": 100},  # None 应被过滤
+        {"symbol": "000001.SZ", "avail": "150"},  # 字符串数字也应可解析
+    ]
+    html = to_xml(PositionTable(positions))
+
+    # JSON 序列化区段
+    import re
+    import json
+
+    match = re.search(
+        r"window\._positionAvailBySymbol\s*=\s*(\{.*?\});",
+        html,
+        re.DOTALL,
+    )
+    assert match is not None, "_positionAvailBySymbol 未在 HTML 中暴露"
+    parsed = json.loads(match.group(1))
+    assert parsed == {
+        "601398.SH": 200.0,
+        "000001.SZ": 150.0,
+    }
+    assert "" not in parsed
+    assert "None" not in parsed
