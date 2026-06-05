@@ -131,7 +131,7 @@ def register_routes(app):
             symbol: 股票代码
 
         Returns:
-            Speed Dial HTML
+            Speed Dial HTML，通过 X-Last-Close header 返回昨收价
         """
         require_api_key_or_session(request)
         from qmt_gateway.web.pages.trading import SpeedDialGrid
@@ -139,18 +139,21 @@ def register_routes(app):
         if not symbol:
             return _render_fragment(SpeedDialGrid(0))
 
+        last_close = 0.0
         stock = stock_service.get_stock(symbol)
         if stock and stock.last_close > 0:
-            return _render_fragment(SpeedDialGrid(stock.last_close))
+            last_close = stock.last_close
+        else:
+            try:
+                from qmt_gateway.core.xtwrapper import require_xtdata
+                xtdata = require_xtdata()
+                last_close = _get_last_close_from_xtdata(xtdata, symbol)
+            except Exception as e:
+                logger.warning(f"获取股票 {symbol} 信息失败: {e}")
 
-        try:
-            from qmt_gateway.core.xtwrapper import require_xtdata
-            xtdata = require_xtdata()
-            last_close = _get_last_close_from_xtdata(xtdata, symbol)
-            return _render_fragment(SpeedDialGrid(last_close))
-        except Exception as e:
-            logger.warning(f"获取股票 {symbol} 信息失败: {e}")
-            return _render_fragment(SpeedDialGrid(0))
+        resp = _render_fragment(SpeedDialGrid(last_close))
+        resp.headers["X-Last-Close"] = str(last_close)
+        return resp
 
     @app.get("/api/stock/resolve")
     def resolve_stock(request, q: str = ""):
