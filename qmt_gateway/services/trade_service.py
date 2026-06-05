@@ -9,6 +9,7 @@ import locale
 import os
 import subprocess
 import sys
+import threading
 import time
 from ctypes import byref, c_uint, windll
 from csv import reader as csv_reader
@@ -1531,9 +1532,31 @@ class TradeService:
             db_order = db.get_order_by_foid(foid)
             if db_order is not None:
                 db.update_order(db_order.qtoid, status=OrderStatus.SUCCEEDED)
-            self.refresh_positions_snapshot()
+            self._schedule_position_snapshot()
         except Exception as e:
             logger.error(f"回调成交落库失败: {e}")
+
+    def _schedule_position_snapshot(self) -> None:
+        """在后台线程中刷新持仓快照，避免阻塞 QMT 回调导致死锁 (#41)
+
+        on_stock_trade / on_stock_order 回调运行在 QMT 库的内部线程中。
+        refresh_positions_snapshot() 内部需要调用 self._trader.query_stock_positions()，
+        这会从 QMT 回调中再次进入 QMT 库，导致死锁或挂起，并最终使整个网关无响应。
+
+        因此，调度一个独立线程执行该操作，主流程立即返回。
+        """
+        threading.Thread(
+            target=self._safe_refresh_positions_snapshot,
+            name="position-snapshot-refresher",
+            daemon=True,
+        ).start()
+
+    def _safe_refresh_positions_snapshot(self) -> None:
+        """包装 refresh_positions_snapshot，捕获并记录所有异常，避免后台线程崩溃。"""
+        try:
+            self.refresh_positions_snapshot()
+        except Exception as exc:
+            logger.warning(f"后台刷新持仓快照失败: {exc}")
 
     def persist_callback_order(self, xt_order: Any) -> None:
         try:

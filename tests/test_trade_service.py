@@ -571,3 +571,66 @@ def test_decrypt_qmt_password_uses_auto_start_encrypted(monkeypatch):
 
     assert result == "my-password"
     assert decrypted == ["encrypted-auto-start"]
+
+
+def test_persist_callback_trade_does_not_block_on_qmt(monkeypatch):
+    """成交回调不应同步调用 QMT，否则会在 QMT 回调线程中死锁 (#41)
+
+    on_stock_trade 回调运行在 QMT 库的内部线程。
+    refresh_positions_snapshot() 内部需要调用 self._trader.query_stock_positions()，
+    这会从 QMT 回调中再次进入 QMT 库，导致死锁或挂起，并最终使整个网关无响应。
+    修复：persistence 完成后，只调度后台线程执行刷新，主流程立即返回。
+    """
+    import threading
+    import time
+    from types import SimpleNamespace as NS
+
+    service = TradeService()
+
+    xt_trade = NS(
+        traded_id="t-1",
+        order_remark="q-1",
+        stock_code="601398.SH",
+        order_type=24,
+        traded_price=7.29,
+        traded_volume=100,
+        traded_amount=729.0,
+        traded_time=time.time(),
+        order_id="o-1",
+        order_sysid="c-1",
+    )
+
+    snapshot_started = threading.Event()
+    snapshot_finished = threading.Event()
+
+    def slow_snapshot():
+        snapshot_started.set()
+        time.sleep(0.5)  # 模拟慢的 QMT 调用
+        snapshot_finished.set()
+
+    monkeypatch.setattr(service, "_persist_trade_snapshot", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "get_order_by_foid",
+        lambda foid: None,
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "update_order",
+        lambda qtoid, **kwargs: None,
+    )
+    monkeypatch.setattr(service, "refresh_positions_snapshot", slow_snapshot)
+
+    start = time.monotonic()
+    service.persist_callback_trade(xt_trade)
+    elapsed = time.monotonic() - start
+
+    # 主流程应在 0.1 秒内返回（不等待 QMT 调用）
+    assert elapsed < 0.1, f"主流程耗时 {elapsed:.3f}s，应在后台线程中执行"
+    # 后台线程已启动但还没完成（因为有 0.5s 延迟）
+    assert snapshot_started.is_set()
+    assert not snapshot_finished.is_set()
+
+    # 等待后台线程完成
+    snapshot_finished.wait(timeout=2.0)
+    assert snapshot_finished.is_set()

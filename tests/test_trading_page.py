@@ -351,3 +351,15 @@ def test_trading_page_set_position_ratio_uses_avail_for_sell():
     assert "availShares * ratio" in html
     # 卖出时无持仓应提示
     assert "当前选中股票无持仓可卖" in html
+
+
+def test_trading_page_uses_refresh_current_table_after_trade():
+    """卖出/撤单成功后应使用 refreshCurrentTable 而非切换 tab (#41)"""
+    html = to_xml(TradingPage())
+
+    # 新增的 refreshCurrentTable 函数应存在
+    assert "function refreshCurrentTable" in html
+    # 旧的 refreshOrdersTable 应不再被调用（避免切换 tab 引发 sendAbort 竞争）
+    assert "refreshOrdersTable" not in html
+    # 应该用 htmx.trigger 触发当前容器的 every 5s 触发器
+    assert "htmx.trigger" in html

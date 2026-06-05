@@ -1012,18 +1012,25 @@ def TradingPage(
             });
         }
 
-        function refreshOrdersTable() {
-            if (!window.htmx) {
-                return;
-            }
+        // 立即刷新当前显示的持仓/委托表格（不切换 tab）(#41)
+        function refreshCurrentTable() {
             var container = document.getElementById('positions-orders-container');
-            if (!container) {
+            if (!container || !window.htmx) {
                 return;
             }
-            htmx.ajax('GET', '/api/trade/orders?view=table', {
-                target: '#positions-orders-container',
-                swap: 'outerHTML',
-            });
+            // 直接重新触发该元素的 every 5s 触发器，避免与正在进行的请求发生 abort 竞争
+            try {
+                htmx.trigger(container, 'every 5s');
+            } catch (ex) {
+                // 退化为 ajax 调用
+                var url = container.getAttribute('hx-get');
+                if (url) {
+                    htmx.ajax('GET', url, {
+                        target: '#positions-orders-container',
+                        swap: 'outerHTML',
+                    });
+                }
+            }
         }
 
         window.cancelOrder = function(orderId, needConfirm, symbol, name, side, price, shares) {
@@ -1074,7 +1081,7 @@ def TradingPage(
                     }
 
                     showTradeToast('撤单已提交：' + String(symbol || orderId), 'success');
-                    refreshOrdersTable();
+                    refreshCurrentTable();
                 })
                 .catch(function(error) {
                     var errorMessage = error && error.message ? error.message : '网络错误';
@@ -1209,7 +1216,7 @@ def TradingPage(
                         sideText + '委托已提交：' + stockName + ' ' + String(shares) + '股',
                         'success'
                     );
-                    refreshOrdersTable();
+                    refreshCurrentTable();
                 })
                 .catch(function(error) {
                     var errorMessage = error && error.message ? error.message : '网络错误';
