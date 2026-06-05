@@ -276,6 +276,7 @@ def test_recovery_reports_invalid_path_without_launching(
             "qmt_path": r"C:\definitely\not\there",
             "xtquant_path": "",
             "qmt_password": "trade-pass-123",
+            "auto_start_qmt": "on",
             "principal": "2000000",
         },
     )
@@ -320,6 +321,7 @@ def test_recovery_attempts_launch_when_path_valid_but_qmt_not_running(
             "qmt_path": str(userdata),
             "xtquant_path": "",
             "qmt_password": "trade-pass-123",
+            "auto_start_qmt": "on",
             "principal": "2000000",
         },
     )
@@ -376,6 +378,7 @@ def test_recovery_succeeds_when_trade_service_restart_qmt(
             "qmt_path": str(userdata),
             "xtquant_path": "",
             "qmt_password": "trade-pass-123",
+            "auto_start_qmt": "on",
             "principal": "3000000",
         },
         follow_redirects=False,
@@ -509,6 +512,7 @@ def test_recovery_forces_restart_when_qmt_is_running_but_connection_fails(
             "qmt_path": str(userdata),
             "xtquant_path": "",
             "qmt_password": "trade-pass-123",
+            "auto_start_qmt": "on",
             "principal": "2000000",
         },
     )

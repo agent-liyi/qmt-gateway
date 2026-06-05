@@ -303,3 +303,51 @@ def test_compute_realized_pnl_no_trades(monkeypatch):
         trade_api, "_fetch_all_dicts", lambda sql, params=(): []
     )
     assert trade_api._compute_realized_pnl("601398.SH") == 0.0
+
+
+def test_position_table_exposes_avail_map_for_set_position_ratio():
+    """PositionTable 应在脚本中暴露 _positionAvailBySymbol，供 setPositionRatio 卖出时使用 (#40)"""
+    from qmt_gateway.web.pages.trading import PositionTable
+
+    positions = [
+        {
+            "symbol": "601398.SH",
+            "name": "工商银行",
+            "shares": 200,
+            "avail": 200,
+            "price": 7.0,
+            "cost": 7.36,
+            "profit_ratio": 0.5,
+            "market_value": 1400,
+            "position_ratio": 5.0,
+        },
+        {
+            "symbol": "600519.SH",
+            "name": "贵州茅台",
+            "shares": 1,
+            "avail": 1,
+            "price": 1800.0,
+            "cost": 1800.0,
+            "profit_ratio": 0.0,
+            "market_value": 1800,
+            "position_ratio": 10.0,
+        },
+    ]
+    html = to_xml(PositionTable(positions))
+
+    assert "_positionAvailBySymbol" in html
+    assert "601398.SH" in html
+    assert "200" in html
+    assert "600519.SH" in html
+
+
+def test_trading_page_set_position_ratio_uses_avail_for_sell():
+    """setPositionRatio 在卖出时应使用持仓可卖数而非可用资金 (#40)"""
+    html = to_xml(TradingPage())
+
+    # 卖出分支：查找 _positionAvailBySymbol 并按 ratio 折算可卖手数
+    assert "_positionAvailBySymbol" in html
+    # 卖出时按 ratio * availShares 计算手数
+    assert "availShares * ratio" in html
+    # 卖出时无持仓应提示
+    assert "当前选中股票无持仓可卖" in html

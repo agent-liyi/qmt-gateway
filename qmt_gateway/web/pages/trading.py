@@ -6,6 +6,8 @@
 3. 底部：持仓/委托列表（可切换）
 """
 
+import json
+
 from fasthtml.common import Option as HtmlOption
 from fasthtml.common import Select as HtmlSelect
 from fasthtml.common import *
@@ -346,6 +348,13 @@ def PositionTable(positions: list[dict] | None = None):
 
     headers = ["代码", "名称", "持有数", "可卖数", "现价", "成本", "盈亏比", "浮盈", "市值", "持有成本", "卖出盈亏", "仓位"]
 
+    # 将可用股数暴露给前端，供 setPositionRatio 在卖出时使用
+    position_avail_map = {
+        str(p.get("symbol", "")): float(p.get("avail", 0))
+        for p in positions
+        if p.get("symbol")
+    }
+
     rows = []
     if positions:
         for pos in positions:
@@ -410,6 +419,7 @@ def PositionTable(positions: list[dict] | None = None):
             cls="overflow-x-auto",
         ),
         Script("""
+            window._positionAvailBySymbol = """ + json.dumps(position_avail_map) + """;
             window.fillSellFromPosition = function(symbol, name, price, avail) {
                 if (!symbol) {
                     return;
@@ -1259,8 +1269,57 @@ def TradingPage(
             var mode = getOrderMode();
             var price = getCurrentPrice();
             var orderValueInput = document.getElementById('order-value');
+            var sideInput = document.getElementById('order-side');
+            var symbolInput = document.getElementById('selected-symbol');
+            var side = sideInput ? sideInput.value : 'buy';
+            var symbol = symbolInput ? symbolInput.value : '';
+            if (!orderValueInput || !(ratio > 0)) {
+                return;
+            }
+
+            // 卖出时使用该持仓的可卖股数；买入时使用可用资金
+            if (side === 'sell') {
+                var positionMap = window._positionAvailBySymbol || {};
+                var availShares = Number(positionMap[symbol] || 0);
+                if (!(availShares > 0)) {
+                    if (window.showTradeToast) {
+                        window.showTradeToast(
+                            '当前选中股票无持仓可卖',
+                            'warning'
+                        );
+                    }
+                    orderValueInput.value = '';
+                    refreshOrderEstimate();
+                    return;
+                }
+                if (mode === 'amount') {
+                    // 卖出按金额时，amountWan 不可用（无法用比率表达），直接按可卖手数填入
+                    var handsFromAvail = Math.floor(availShares / 100);
+                    var handsTarget = Math.floor(handsFromAvail * ratio);
+                    if (handsTarget < 1 && handsFromAvail > 0) {
+                        handsTarget = 1;
+                    }
+                    orderValueInput.value = String(handsTarget);
+                    var modeQuantity = document.getElementById('order-mode-quantity');
+                    var modeAmount = document.getElementById('order-mode-amount');
+                    if (modeQuantity) modeQuantity.checked = true;
+                    if (modeAmount) modeAmount.checked = false;
+                    if (window.onOrderModeChange) window.onOrderModeChange();
+                    refreshOrderEstimate();
+                    return;
+                }
+                var hands = Math.floor((availShares * ratio) / 100);
+                if (hands < 1 && availShares > 0) {
+                    hands = 1;
+                }
+                orderValueInput.value = String(hands);
+                refreshOrderEstimate();
+                return;
+            }
+
+            // 买入：按可用资金计算
             var availableCash = getAvailableCash();
-            if (!orderValueInput || !(ratio > 0) || !(availableCash > 0)) {
+            if (!(availableCash > 0)) {
                 return;
             }
             if (mode === 'amount') {
@@ -1275,8 +1334,8 @@ def TradingPage(
                 return;
             }
             var shares = Math.floor((availableCash * ratio) / price / 100) * 100;
-            var hands = shares / 100;
-            orderValueInput.value = String(Math.max(hands, 0));
+            var handsBuy = shares / 100;
+            orderValueInput.value = String(Math.max(handsBuy, 0));
             refreshOrderEstimate();
         };
         // 点击页面其他地方时隐藏下拉列表
