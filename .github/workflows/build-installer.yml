@@ -1,0 +1,44 @@
+name: Build NSIS Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-installer:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install NSIS
+        run: |
+          choco install nsis -y
+
+      - name: Download Python 3.13 embeddable package
+        run: |
+          $pythonVersion = "3.13.3"
+          $url = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
+          Invoke-WebRequest -Uri $url -OutFile installer\python-embed.zip
+        shell: pwsh
+
+      - name: Build NSIS installer
+        run: |
+          makensis installer\installer.nsi
+        shell: cmd
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QMT-Gateway-Installer
+          path: QMT-Gateway-Setup-*.exe
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: QMT-Gateway-Setup-*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
