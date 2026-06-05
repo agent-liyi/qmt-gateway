@@ -5,11 +5,12 @@
 
 import datetime
 import sqlite3
+from decimal import Decimal
 
 from fastcore.xml import to_xml
 from fasthtml.common import *
 from loguru import logger
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, JSONResponse
 from qmt_gateway.apis.api_keys import require_api_key_or_session
 from qmt_gateway.config import config
 from qmt_gateway.db.models import Asset, Position
@@ -36,6 +37,86 @@ def _get_value(item, key: str, default=None):
     if isinstance(item, dict):
         return item.get(key, default)
     return getattr(item, key, default)
+
+
+def _json_safe(value):
+    """将非 JSON 可序列化的类型转换为原生 Python 类型。
+
+    处理的类型:
+    - datetime.datetime / datetime.date → ISO 格式字符串
+    - Decimal → float
+    - numpy 数值类型 (int64, float64 等) → 原生 int/float
+    - bytes → hex 字符串
+    - 其他不可序列化类型 → str
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float, str)):
+        return value
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, bytes):
+        return value.hex()
+    # numpy 数值类型: 检查是否有 .item() 方法 (ndarray scalar)
+    if hasattr(value, "item"):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    # 兜底: 转为字符串
+    try:
+        return str(value)
+    except Exception:
+        return None
+
+
+def _json_safe_rows(rows: list[dict]) -> list[dict]:
+    """对字典列表中的每个值执行 _json_safe 归一化。"""
+    return [{k: _json_safe(v) for k, v in row.items()} for row in rows]
+
+
+def _format_time(value) -> str:
+    """将时间值统一格式化为 HH:MM:SS 字符串。
+
+    处理的类型:
+    - datetime.datetime → strftime
+    - str (ISO 格式) → 解析后 strftime
+    - str (HH:MM:SS) → 原样返回
+    - 其他 → str()
+    """
+    if isinstance(value, datetime.datetime):
+        return value.strftime("%H:%M:%S")
+    if isinstance(value, str):
+        if ":" in value:
+            return value
+        try:
+            return datetime.datetime.fromisoformat(value).strftime("%H:%M:%S")
+        except ValueError:
+            return value
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _normalize_side(value) -> str:
+    """将 side 值归一化为 'buy' 或 'sell'。
+
+    处理的类型:
+    - str ('buy'/'sell') → 原样
+    - int (1/2 或 23/24) → 'buy'/'sell'
+    - 枚举 → 根据值判断
+    """
+    if isinstance(value, str):
+        return value if value in ("buy", "sell") else "buy"
+    if isinstance(value, (int, float)):
+        return "buy" if int(value) in (1, 23) else "sell"
+    if hasattr(value, "value"):
+        return _normalize_side(value.value)
+    return "buy"
 
 
 def _require_local_request(request) -> None:
@@ -309,7 +390,7 @@ def get_latest_positions_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> list[
                 "position_ratio": position_ratio,
             }
         )
-    return data
+    return _json_safe_rows(data)
 
 
 def get_latest_orders_data(status: str = "all") -> list[dict]:
@@ -363,9 +444,9 @@ def get_latest_orders_data(status: str = "all") -> list[dict]:
                 }
             )
         if status == "all":
-            return rows
+            return _json_safe_rows(rows)
         target = _normalize_order_status(status)
-        return [row for row in rows if row["status"] == target]
+        return _json_safe_rows([row for row in rows if row["status"] == target])
 
     symbols = [str(_get_value(o, "symbol", "")).strip() for o in orders]
     name_map = _get_stock_name_map(symbols)
@@ -373,8 +454,15 @@ def get_latest_orders_data(status: str = "all") -> list[dict]:
     for order in orders:
         symbol = str(_get_value(order, "symbol", "")).strip()
         normalized_status = _normalize_order_status(_get_value(order, "status", "unknown"))
+        time_raw = _get_value(order, "time", "")
+        if isinstance(time_raw, datetime.datetime):
+            time_text = time_raw.strftime("%H:%M:%S")
+        elif isinstance(time_raw, str):
+            time_text = time_raw
+        else:
+            time_text = str(time_raw) if time_raw else ""
         row = {
-            "time": _get_value(order, "time", ""),
+            "time": time_text,
             "symbol": symbol,
             "name": _get_value(order, "name", "") or name_map.get(symbol, symbol),
             "side": _get_value(order, "side", "buy"),
@@ -387,9 +475,9 @@ def get_latest_orders_data(status: str = "all") -> list[dict]:
         }
         data.append(row)
     if status == "all":
-        return data
+        return _json_safe_rows(data)
     target = _normalize_order_status(status)
-    return [row for row in data if row["status"] == target]
+    return _json_safe_rows([row for row in data if row["status"] == target])
 
 
 def login_required(request):
@@ -539,7 +627,7 @@ def register_routes(app):
             from qmt_gateway.web.pages.trading import PositionTable
             return _render_fragment(PositionTable(positions_data))
 
-        return positions_data
+        return JSONResponse(_json_safe_rows(positions_data))
 
     @app.get("/api/trade/orders")
     def get_orders(request, status: str = "all", view: str = "json"):
@@ -556,27 +644,28 @@ def register_routes(app):
             from qmt_gateway.web.pages.trading import OrdersTable
             return _render_fragment(OrdersTable(orders_data))
 
-        return orders_data
+        return JSONResponse(_json_safe_rows(orders_data))
 
     @app.get("/api/trade/trades")
     def get_trades(request):
         """获取成交列表"""
         require_api_key_or_session(request)
         trades = trade_service.get_trades()
-        return [
+        rows = [
             {
                 "tid": _get_value(t, "tid", ""),
                 "qtoid": _get_value(t, "qtoid", ""),
-                "time": _get_value(t, "time", ""),
+                "time": _format_time(_get_value(t, "time", "")),
                 "symbol": _get_value(t, "symbol", ""),
                 "name": _get_value(t, "name", ""),
-                "side": _get_value(t, "side", "buy"),
+                "side": _normalize_side(_get_value(t, "side", "buy")),
                 "price": _as_float(_get_value(t, "price", 0)),
                 "shares": _as_float(_get_value(t, "shares", 0)),
                 "amount": _as_float(_get_value(t, "amount", 0)),
             }
             for t in trades
         ]
+        return JSONResponse(_json_safe_rows(rows))
 
     @app.post("/api/trade/buy")
     def buy_stock(request, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = ""):
