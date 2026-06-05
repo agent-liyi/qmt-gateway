@@ -651,8 +651,22 @@ def TradingPage(
                 return;
             }
             fetch('/api/stock/info?symbol=' + encodeURIComponent(symbol))
-                .then(function(resp) { return resp.text(); })
-                .then(function(html) { container.innerHTML = html; })
+                .then(function(resp) {
+                    var lastCloseStr = resp.headers.get('X-Last-Close');
+                    if (lastCloseStr) {
+                        var lc = Number(lastCloseStr);
+                        if (lc > 0) {
+                            var pi = document.getElementById('order-price');
+                            if (pi) {
+                                pi.value = lc.toFixed(2);
+                                refreshOrderEstimate();
+                            }
+                            var lci = document.getElementById('selected-last-close');
+                            if (lci) { lci.value = lc.toFixed(4); }
+                        }
+                    }
+                    return resp.text().then(function(html) { container.innerHTML = html; });
+                })
                 .catch(function() {});
         }
 
@@ -801,12 +815,16 @@ def TradingPage(
 
                 // 更新价格输入框 - 填充现价
                 var priceInput = document.getElementById('order-price');
-                if (priceInput && lastClose > 0) {
-                    priceInput.value = lastClose.toFixed(2);
-                    refreshOrderEstimate();
+                if (priceInput) {
+                    if (lastClose > 0) {
+                        priceInput.value = lastClose.toFixed(2);
+                        refreshOrderEstimate();
+                    } else {
+                        priceInput.value = '';
+                    }
                 }
 
-                // 更新 Speed Dial 价格
+                // 更新 Speed Dial 价格（lastClose为0时fetchAndRenderSpeedDial会同时更新价格输入框）
                 if (lastClose > 0) {
                     updateSpeedDial(lastClose);
                 } else if (symbol) {
