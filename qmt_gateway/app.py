@@ -20,6 +20,7 @@ from qmt_gateway.apis import (
     register_history_routes,
     register_quotes_routes,
     register_stock_routes,
+    register_system_routes,
     register_trade_routes,
 )
 from qmt_gateway.apis.auth import hash_password
@@ -334,6 +335,7 @@ def create_app():
     register_history_routes(app)
     register_api_key_routes(app)
     register_ping_routes(app)
+    register_system_routes(app)
 
     # 初始化向导路由
     @app.get("/init-wizard")

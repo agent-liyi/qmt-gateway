@@ -1,6 +1,6 @@
 """定时任务调度器
 
-提供定时更新股票列表等功能。
+提供定时更新股票列表、每日版本检查等功能。
 """
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -31,6 +31,15 @@ class TaskScheduler:
             replace_existing=True,
         )
 
+        # 每天早上 10:00 检查版本更新
+        self.scheduler.add_job(
+            func=self._check_version_update,
+            trigger=CronTrigger(hour=10, minute=0),
+            id="check_version_update",
+            name="检查版本更新",
+            replace_existing=True,
+        )
+
         # 启动时立即更新一次
         self._update_stock_list()
 
@@ -53,6 +62,21 @@ class TaskScheduler:
                 logger.warning("定时任务失败：股票列表更新失败")
         except Exception as e:
             logger.error(f"定时任务异常：{e}")
+
+    def _check_version_update(self):
+        """每日版本检查任务"""
+        logger.info("开始执行定时任务：检查版本更新")
+        try:
+            from qmt_gateway.services.updater import check_update
+            info = check_update()
+            if info.has_update:
+                logger.info(
+                    f"发现新版本: {info.latest_version} (当前 {info.current_version})"
+                )
+            else:
+                logger.debug(f"当前已是最新版本: {info.current_version}")
+        except Exception as e:
+            logger.error(f"版本检查异常：{e}")
 
     def stop(self):
         """停止调度器"""

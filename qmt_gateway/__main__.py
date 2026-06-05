@@ -5,15 +5,14 @@
 
 import argparse
 import sys
-from pathlib import Path
 
 from loguru import logger
 
-from qmt_gateway.app import app
 from qmt_gateway.config import config
 from qmt_gateway.db import db
-from qmt_gateway.db.models import Settings
 from qmt_gateway.runtime import runtime
+from qmt_gateway.services.pip_mirror import ensure_pip_conf
+from qmt_gateway.services.port import find_available_port
 
 
 def main():
@@ -53,8 +52,24 @@ def main():
     # 初始化运行时
     runtime.init(args.home)
 
-    # 获取端口
+    # 确保 pip 镜像源配置存在
+    ensure_pip_conf()
+
+    # 获取端口，若默认端口被占用则自动切换
     port = args.port or config.server_port
+    try:
+        port = find_available_port(default=port, max_tries=10, host=args.host)
+    except RuntimeError as e:
+        logger.error(str(e))
+        sys.exit(1)
+
+    # 将实际使用的端口写回配置
+    if port != config.server_port:
+        try:
+            config.set("server_port", port)
+            logger.info(f"端口已更新为 {port}")
+        except Exception:
+            pass
 
     # 检查是否需要强制初始化
     if args.force and args.init_wizard:

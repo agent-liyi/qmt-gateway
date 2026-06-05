@@ -11,6 +11,7 @@ from qmt_gateway.apis.ping import register_routes as register_ping_routes
 from qmt_gateway.apis.quotes import quote_ws
 from qmt_gateway.apis.quotes import register_routes as register_quotes_routes
 from qmt_gateway.apis.stock import register_routes as register_stock_routes
+from qmt_gateway.apis.system import register_routes as register_system_routes
 from qmt_gateway.apis.trade import register_routes as register_trade_routes
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "register_auth_routes",
     "register_history_routes",
     "register_ping_routes",
+    "register_system_routes",
     "register_trade_routes",
     "register_quotes_routes",
     "register_stock_routes",
