@@ -34,12 +34,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: QMT-Gateway-Installer
-          path: QMT-Gateway-Setup-*.exe
+          path: installer/QMT-Gateway-Setup-*.exe
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: QMT-Gateway-Setup-*.exe
+          files: installer/QMT-Gateway-Setup-*.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
