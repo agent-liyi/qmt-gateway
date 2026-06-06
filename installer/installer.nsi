@@ -22,15 +22,16 @@
 
 ; MUI Settings
 !define MUI_ABORTWARNING
-!define MUI_ICON "installer\icon.ico"
-!define MUI_UNICON "installer\icon.ico"
-!define MUI_WELCOMEFINISHPAGE_BITMAP "installer\welcome.bmp"
+; Icon and bitmap are optional - comment out if files not available
+; !define MUI_ICON "installer\icon.ico"
+; !define MUI_UNICON "installer\icon.ico"
+; !define MUI_WELCOMEFINISHPAGE_BITMAP "installer\welcome.bmp"
 
 ; Welcome page
 !insertmacro MUI_PAGE_WELCOME
 
 ; License page
-!insertmacro MUI_PAGE_LICENSE "LICENSE"
+; !insertmacro MUI_PAGE_LICENSE "LICENSE"
 
 ; Directory page
 !insertmacro MUI_PAGE_DIRECTORY
@@ -124,8 +125,9 @@ Section "!Core (必需)" SEC_CORE
          "..\pyproject.toml"
     File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
          "..\README.md"
-    File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
-         "..\LICENSE"
+    ; LICENSE file - include only if available
+    ; File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
+    ;      "..\LICENSE"
 
     ; Copy startup scripts
     File "start.bat"
