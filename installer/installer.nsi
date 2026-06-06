@@ -52,7 +52,9 @@ var ICONS_GROUP
 ; Instfiles page
 !insertmacro MUI_PAGE_INSTFILES
 
-; Finish page - text strings set per-language in .onInit
+; Finish page - text strings inline (Unicode mode handles UTF-8 encoding)
+!define MUI_FINISHPAGE_RUN_TEXT "立即启动 ${PRODUCT_NAME}"
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "在浏览器中打开 ${PRODUCT_NAME}"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
 !define MUI_FINISHPAGE_SHOWREADME ""
@@ -89,14 +91,6 @@ LangString WELCOME_TEXT ${LANG_ENGLISH} \
 
 Function .onInit
     !insertmacro MUI_LANGDLL_DISPLAY
-    ; Set finish page text per language (avoid inline Unicode in compiled binary)
-    ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
-        StrCpy $MUI_FINISHPAGE_RUN_TEXT "立即启动 ${PRODUCT_NAME}"
-        StrCpy $MUI_FINISHPAGE_SHOWREADME_TEXT "在浏览器中打开 ${PRODUCT_NAME}"
-    ${Else}
-        StrCpy $MUI_FINISHPAGE_RUN_TEXT "Launch ${PRODUCT_NAME}"
-        StrCpy $MUI_FINISHPAGE_SHOWREADME_TEXT "Open ${PRODUCT_NAME} in browser"
-    ${EndIf}
     ; Override welcome text
     ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
         MessageBox MB_OK|MB_ICONINFORMATION "$(WELCOME_TEXT)"
