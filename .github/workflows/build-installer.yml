@@ -27,7 +27,8 @@ jobs:
 
       - name: Build NSIS installer
         run: |
-          makensis installer\installer.nsi
+          chcp 65001 >nul
+          makensis /INPUTCHARSET UTF8 installer\installer.nsi
         shell: cmd
 
       - name: Upload installer artifact

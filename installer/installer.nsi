@@ -1,4 +1,4 @@
-; QMT Gateway Windows Installer (NSIS)
+﻿; QMT Gateway Windows Installer (NSIS)
 ; Issue #48: NSIS installer with embedded Python
 ;
 ; Prerequisites:
@@ -119,8 +119,8 @@ Section "!Core" SEC_CORE
         nsExec::ExecToLog 'powershell -Command "Expand-Archive -Path \'$INSTDIR\python-embed.zip\' -DestinationPath \'$INSTDIR\python\' -Force"'
     ${EndIf}
 
-    ; Copy application source
-    DetailPrint "正在复制项目源码..."
+    ; Copy application source to $INSTDIR\app
+    SetOutPath "$INSTDIR\app"
     File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
          "..\qmt_gateway\*.*"
     File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
@@ -130,6 +130,7 @@ Section "!Core" SEC_CORE
     ; LICENSE file - include only if available
     ; File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
     ;      "..\LICENSE"
+    SetOutPath "$INSTDIR"
 
     ; Copy startup scripts
     File "start.bat"
@@ -243,7 +244,7 @@ Section Uninstall
     KeepData:
         DetailPrint "数据目录已保留"
 
-    ; Remove install directory
+    ; Remove install directory (everything except data/, which user chose above)
     RMDir /r "$INSTDIR\python"
     RMDir /r "$INSTDIR\.venv"
     RMDir /r "$INSTDIR\app"
@@ -251,6 +252,25 @@ Section Uninstall
     Delete "$INSTDIR\start-silent.vbs"
     Delete "$INSTDIR\uninstall.exe"
     Delete "$INSTDIR\${PRODUCT_NAME}.url"
+    ; Clean any other top-level files (e.g. qmt_gateway sources installed at root)
+    Delete "$INSTDIR\__init__.py"
+    Delete "$INSTDIR\__main__.py"
+    Delete "$INSTDIR\app.py"
+    Delete "$INSTDIR\config.py"
+    Delete "$INSTDIR\init_wizard.py"
+    Delete "$INSTDIR\pyproject.toml"
+    Delete "$INSTDIR\qmt_init_helpers.py"
+    Delete "$INSTDIR\qmt_login_automation.py"
+    Delete "$INSTDIR\qmt_restart_helper.py"
+    Delete "$INSTDIR\README.md"
+    Delete "$INSTDIR\runtime.py"
+    Delete "$INSTDIR\trading.py"
+    Delete "$INSTDIR\xtquant_probe.py"
+    RMDir "$INSTDIR\apis"
+    RMDir "$INSTDIR\core"
+    RMDir "$INSTDIR\db"
+    RMDir "$INSTDIR\services"
+    RMDir "$INSTDIR\web"
     RMDir "$INSTDIR"
 
     ; Remove registry keys
