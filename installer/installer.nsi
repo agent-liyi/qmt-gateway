@@ -1,4 +1,4 @@
-; QMT Gateway Windows Installer (NSIS)
+﻿; QMT Gateway Windows Installer (NSIS)
 ; Issue #48: NSIS installer with embedded Python
 ;
 ; Prerequisites:
@@ -8,7 +8,7 @@
 ; Build: makensis installer\installer.nsi
 
 Unicode True
-!define PRODUCT_NAME "迅投 QMT 交易网关"
+!define PRODUCT_NAME "杩呮姇 QMT 浜ゆ槗缃戝叧"
 !define PRODUCT_VERSION "0.1.0"
 !define PRODUCT_PUBLISHER "quantclaws"
 !define PRODUCT_WEB_SITE "https://github.com/quantclaws/qmt-gateway"
@@ -52,12 +52,10 @@ var ICONS_GROUP
 ; Instfiles page
 !insertmacro MUI_PAGE_INSTFILES
 
-; Finish page
-!define MUI_FINISHPAGE_RUN_TEXT "立即启动 ${PRODUCT_NAME}"
+; Finish page - text strings set per-language in .onInit
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
 !define MUI_FINISHPAGE_SHOWREADME ""
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "在浏览器中打开 ${PRODUCT_NAME}"
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION "OpenBrowser"
 !insertmacro MUI_PAGE_FINISH
 
@@ -82,8 +80,8 @@ RequestExecutionLevel admin
 
 ; Custom welcome text
 LangString WELCOME_TEXT ${LANG_SIMPCHINESE} \
-    "本软件需要配合迅投 QMT 交易客户端使用。如果您尚未安装 QMT，请先前往券商官网下载安装。$\n$\n\
-     QMT 安装路径将在初始化向导中配置。"
+    "鏈蒋浠堕渶瑕侀厤鍚堣繀鎶?QMT 浜ゆ槗瀹㈡埛绔娇鐢ㄣ€傚鏋滄偍灏氭湭瀹夎 QMT锛岃鍏堝墠寰€鍒稿晢瀹樼綉涓嬭浇瀹夎銆?\n$\n\
+     QMT 瀹夎璺緞灏嗗湪鍒濆鍖栧悜瀵间腑閰嶇疆銆?
 LangString WELCOME_TEXT ${LANG_ENGLISH} \
     "This software requires the Xuntou QMT trading client. If you haven't installed QMT, \
      please download it from your broker's website first.$\n$\n\
@@ -91,6 +89,14 @@ LangString WELCOME_TEXT ${LANG_ENGLISH} \
 
 Function .onInit
     !insertmacro MUI_LANGDLL_DISPLAY
+    ; Set finish page text per language (avoid inline Unicode in compiled binary)
+    ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
+        StrCpy $MUI_FINISHPAGE_RUN_TEXT "绔嬪嵆鍚姩 ${PRODUCT_NAME}"
+        StrCpy $MUI_FINISHPAGE_SHOWREADME_TEXT "鍦ㄦ祻瑙堝櫒涓墦寮€ ${PRODUCT_NAME}"
+    ${Else}
+        StrCpy $MUI_FINISHPAGE_RUN_TEXT "Launch ${PRODUCT_NAME}"
+        StrCpy $MUI_FINISHPAGE_SHOWREADME_TEXT "Open ${PRODUCT_NAME} in browser"
+    ${EndIf}
     ; Override welcome text
     ${If} $LANGUAGE == ${LANG_SIMPCHINESE}
         MessageBox MB_OK|MB_ICONINFORMATION "$(WELCOME_TEXT)"
@@ -99,8 +105,8 @@ Function .onInit
     ${EndIf}
 FunctionEnd
 
-; Components
-Section "!Core (必需)" SEC_CORE
+; Components - use English section names (NSIS limitation), descriptions are localized
+Section "!Core" SEC_CORE
     SectionIn RO
     SetOutPath "$INSTDIR"
     SetOverwrite on
@@ -111,16 +117,16 @@ Section "!Core (必需)" SEC_CORE
     CreateDirectory "$INSTDIR\data"
 
     ; Extract embedded Python
-    DetailPrint "正在解压内嵌 Python 3.13..."
+    DetailPrint "姝ｅ湪瑙ｅ帇鍐呭祵 Python 3.13..."
     nsExec::ExecToLog '"$INSTDIR\python\python.exe" --version'
     ${If} ${Errors}
         ; Need to extract Python embeddable package
-        DetailPrint "解压 python-3.13-embed-amd64.zip..."
+        DetailPrint "瑙ｅ帇 python-3.13-embed-amd64.zip..."
         nsExec::ExecToLog 'powershell -Command "Expand-Archive -Path \'$INSTDIR\python-embed.zip\' -DestinationPath \'$INSTDIR\python\' -Force"'
     ${EndIf}
 
     ; Copy application source
-    DetailPrint "正在复制项目源码..."
+    DetailPrint "姝ｅ湪澶嶅埗椤圭洰婧愮爜..."
     File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
          "..\qmt_gateway\*.*"
     File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
@@ -136,42 +142,42 @@ Section "!Core (必需)" SEC_CORE
     File "start-silent.vbs"
 
     ; Create venv
-    DetailPrint "正在创建 Python 虚拟环境..."
+    DetailPrint "姝ｅ湪鍒涘缓 Python 铏氭嫙鐜..."
     nsExec::ExecToLog '"$INSTDIR\python\python.exe" -m venv "$INSTDIR\.venv"'
 
-    ; Write pip.conf (国内镜像源)
-    DetailPrint "正在配置 pip 国内镜像源..."
+    ; Write pip.conf (鍥藉唴闀滃儚婧?
+    DetailPrint "姝ｅ湪閰嶇疆 pip 鍥藉唴闀滃儚婧?.."
     nsExec::ExecToLog 'powershell -Command "Set-Content -Path \'$INSTDIR\.venv\pip.conf\' -Value \'[global]$\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple$\ntrusted-host = pypi.tuna.tsinghua.edu.cn\' -Encoding UTF8"'
 
     ; Install dependencies
-    DetailPrint "正在安装 Python 依赖 (使用国内镜像源)..."
+    DetailPrint "姝ｅ湪瀹夎 Python 渚濊禆 (浣跨敤鍥藉唴闀滃儚婧?..."
     nsExec::ExecToLog '"$INSTDIR\.venv\Scripts\pip.exe" install -e "$INSTDIR\app" -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn'
 
     ; Shortcuts
     !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     CreateDirectory "$SMPROGRAMS\$ICONS_GROUP"
     CreateShortCut "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME}.lnk" "$INSTDIR\start.bat"
-    CreateShortCut "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME} (静默启动).lnk" "$INSTDIR\start-silent.vbs"
+    CreateShortCut "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME} (闈欓粯鍚姩).lnk" "$INSTDIR\start-silent.vbs"
     CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\start-silent.vbs"
     !insertmacro MUI_STARTMENU_WRITE_END
 SectionEnd
 
-Section "开机自启" SEC_AUTOSTART
-    DetailPrint "正在注册开机自启任务..."
+Section "Autostart" SEC_AUTOSTART
+    DetailPrint "姝ｅ湪娉ㄥ唽寮€鏈鸿嚜鍚换鍔?.."
     nsExec::ExecToLog 'schtasks /create /tn "QMT Gateway" /tr "wscript.exe \"$INSTDIR\start-silent.vbs\"" /sc onlogon /rl limited /f'
 SectionEnd
 
-Section "防火墙规则" SEC_FIREWALL
-    DetailPrint "正在添加防火墙入站规则..."
+Section "Firewall" SEC_FIREWALL
+    DetailPrint "姝ｅ湪娣诲姞闃茬伀澧欏叆绔欒鍒?.."
     nsExec::ExecToLog 'netsh advfirewall firewall add rule name="QMT Gateway" dir=in action=allow protocol=tcp localport=8130 profile=private enable=yes'
 SectionEnd
 
 ; Section descriptions
-LangString DESC_SEC_CORE ${LANG_SIMPCHINESE} "核心组件（必须安装）"
+LangString DESC_SEC_CORE ${LANG_SIMPCHINESE} "鏍稿績缁勪欢锛堝繀椤诲畨瑁咃級"
 LangString DESC_SEC_CORE ${LANG_ENGLISH} "Core components (required)"
-LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "开机自启（用户登录时自动启动）"
+LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "寮€鏈鸿嚜鍚紙鐢ㄦ埛鐧诲綍鏃惰嚜鍔ㄥ惎鍔級"
 LangString DESC_SEC_AUTOSTART ${LANG_ENGLISH} "Auto-start on login"
-LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "防火墙入站规则（允许局域网访问）"
+LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "闃茬伀澧欏叆绔欒鍒欙紙鍏佽灞€鍩熺綉璁块棶锛?
 LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN access)"
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
@@ -209,22 +215,22 @@ FunctionEnd
 
 Section Uninstall
     ; Stop running processes
-    DetailPrint "正在停止 qmt-gateway 进程..."
+    DetailPrint "姝ｅ湪鍋滄 qmt-gateway 杩涚▼..."
     nsExec::ExecToLog 'taskkill /F /IM "qmt-gateway.exe"'
     nsExec::ExecToLog 'taskkill /F /IM "python.exe" /FI "WINDOWTITLE eq QMT*"'
 
     ; Remove scheduled task
-    DetailPrint "正在删除开机自启任务..."
+    DetailPrint "姝ｅ湪鍒犻櫎寮€鏈鸿嚜鍚换鍔?.."
     nsExec::ExecToLog 'schtasks /delete /tn "QMT Gateway" /f'
 
     ; Remove firewall rule
-    DetailPrint "正在删除防火墙规则..."
+    DetailPrint "姝ｅ湪鍒犻櫎闃茬伀澧欒鍒?.."
     nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="QMT Gateway"'
 
     ; Remove shortcuts
     !insertmacro MUI_STARTMENU_GETFOLDER Application $ICONS_GROUP
     Delete "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME}.lnk"
-    Delete "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME} (静默启动).lnk"
+    Delete "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME} (闈欓粯鍚姩).lnk"
     Delete "$SMPROGRAMS\$ICONS_GROUP\Website.lnk"
     Delete "$SMPROGRAMS\$ICONS_GROUP\Uninstall.lnk"
     Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
@@ -232,16 +238,16 @@ Section Uninstall
 
     ; Ask about data directory
     MessageBox MB_YESNO|MB_ICONQUESTION \
-        "是否删除数据目录？$\n$\n选择「否」将保留数据以便将来恢复。" \
+        "鏄惁鍒犻櫎鏁版嵁鐩綍锛?\n$\n閫夋嫨銆屽惁銆嶅皢淇濈暀鏁版嵁浠ヤ究灏嗘潵鎭㈠銆? \
         /SD IDNO IDYES DeleteData IDNO KeepData
 
     DeleteData:
         RMDir /r "$INSTDIR\data"
         RMDir /r "$APPDATA\qmt-gateway"
-        DetailPrint "数据目录已删除"
+        DetailPrint "鏁版嵁鐩綍宸插垹闄?
 
     KeepData:
-        DetailPrint "数据目录已保留"
+        DetailPrint "鏁版嵁鐩綍宸蹭繚鐣?
 
     ; Remove install directory
     RMDir /r "$INSTDIR\python"
