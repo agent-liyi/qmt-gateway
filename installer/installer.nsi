@@ -10,6 +10,7 @@
 Unicode True
 !define PRODUCT_NAME "迅投 QMT 交易网关"
 !define PRODUCT_VERSION "0.1.0"
+!define BUILD_NUMBER "0"  ; Replaced by CI with github.run_number
 !define PRODUCT_PUBLISHER "quantclaws"
 !define PRODUCT_WEB_SITE "https://github.com/quantclaws/qmt-gateway"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\qmt-gateway.exe"
@@ -73,7 +74,7 @@ var ICONS_GROUP
 ; !insertmacro MUI_RESERVEFILE_INSTALLOPTIONS
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "QMT-Gateway-Setup-${PRODUCT_VERSION}.exe"
+OutFile "QMT-Gateway-Setup-${PRODUCT_VERSION}-build${BUILD_NUMBER}.exe"
 InstallDir "$PROGRAMFILES\${PRODUCT_NAME}"
 InstallDirRegKey HKLM "${PRODUCT_DIR_REGKEY}" ""
 ShowInstDetails show
