@@ -68,7 +68,8 @@ var ICONS_GROUP
 !insertmacro MUI_LANGUAGE "English"
 
 ; MUI reserve files
-!insertmacro MUI_RESERVEFILE_INSTALLOPTIONS
+; MUI_RESERVEFILE_INSTALLOPTIONS is not supported in MUI2
+; !insertmacro MUI_RESERVEFILE_INSTALLOPTIONS
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 OutFile "QMT-Gateway-Setup-${PRODUCT_VERSION}.exe"
