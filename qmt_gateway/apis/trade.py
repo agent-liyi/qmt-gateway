@@ -320,44 +320,6 @@ def get_latest_asset_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
     return result
 
 
-def _compute_realized_pnl(symbol: str, portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> float:
-    """使用 FIFO 方式计算某只股票的累计已实现盈亏（卖出盈亏）。
-
-    通过逐笔匹配买入/卖出成交计算：每次卖出按时间顺序从最早的买入批次中扣减，
-    已实现盈亏 = (卖出价 - 买入价) × 匹配股数。
-    """
-    rows = _fetch_all_dicts(
-        """
-        select side, price, shares from trades
-        where portfolio_id = ? and asset = ?
-        order by tm asc, tid asc
-        """,
-        (portfolio_id, symbol),
-    )
-    buy_lots: list[list[float]] = []
-    realized_pnl = 0.0
-    for row in rows:
-        side = int(_as_float(row.get("side", 0)))
-        price = _as_float(row.get("price", 0))
-        shares = _as_float(row.get("shares", 0))
-        if shares <= 0 or price <= 0:
-            continue
-        if side == 1:  # BUY
-            buy_lots.append([price, shares])
-        else:  # SELL
-            remaining = shares
-            while remaining > 0 and buy_lots:
-                lot_price, lot_remaining = buy_lots[0]
-                matched = min(remaining, lot_remaining)
-                realized_pnl += (price - lot_price) * matched
-                remaining -= matched
-                if lot_remaining - matched <= 0:
-                    buy_lots.pop(0)
-                else:
-                    buy_lots[0][1] = lot_remaining - matched
-    return realized_pnl
-
-
 def get_latest_positions_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> list[dict]:
     _snapshot_positions(portfolio_id)
     positions = [p for p in _get_latest_positions(portfolio_id) if p.shares > 0]
@@ -386,7 +348,6 @@ def get_latest_positions_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> list[
                 "float_profit": float_profit,
                 "market_value": market_value,
                 "hold_cost": hold_cost,
-                "sell_profit": _compute_realized_pnl(p.asset, portfolio_id),
                 "position_ratio": position_ratio,
             }
         )
