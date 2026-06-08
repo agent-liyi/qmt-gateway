@@ -267,10 +267,8 @@ def _window_priority(window) -> int:
     if any(token in title for token in QMT_LOGIN_WINDOW_TITLE_TOKENS):
         score += 100
     if title in QMT_SPLASH_WINDOW_TITLES:
-        score -= 100
-    if width >= 900:
-        score += 10
-    if height >= 600:
+        score -= 50
+    if width >= 400 and height >= 300:
         score += 10
     return score
 
@@ -278,7 +276,9 @@ def _window_priority(window) -> int:
 def is_probable_login_window(window) -> bool:
     title = _control_text(window).lower()
     if title in QMT_SPLASH_WINDOW_TITLES:
-        return False
+        width, height = _window_dimensions(window)
+        if width < 400 or height < 300:
+            return False
     return _window_priority(window) > 0
 
 
@@ -299,73 +299,80 @@ def iter_login_windows(desktop, process_ids: list[int] | set[int]):
     return windows
 
 
+def _all_edit_controls(window):
+    """Return every Edit-like control, top-to-bottom, left-to-right."""
+    edits: list[tuple[tuple[int, int], object]] = []
+    for control in _descendants(window):
+        if not _is_visible(control) or not _is_enabled(control):
+            continue
+        descriptor = _control_descriptor(control)
+        if not _is_edit_like(control, descriptor):
+            continue
+        pos = _control_position(control)
+        edits.append((pos, control))
+    edits.sort(key=lambda item: (item[0][0], item[0][1]))
+    return [control for _, control in edits]
+
+
 def locate_password_input(window):
     """Locate the XtMiniQmt password input.
 
-    The XtMiniQmt login window layout is:
-        账号 (account) → 密码 (password) → 验证码 (captcha) + 刷新验证码
-        → 登录 button.
+    The XtMiniQmt login form has exactly three Edit inputs in a column:
+    account (top) → password (middle) → captcha (bottom). The
+    "刷新验证码" anchor sits BELOW the captcha input by a few pixels,
+    so any "closest input above anchor" heuristic can land on the
+    captcha input by mistake. The robust approach is to use the anchor
+    only to *locate the captcha input* (the Edit that is closest to and
+    above the anchor), then return the Edit immediately above the
+    captcha input.
 
     Strategy (in order):
-    1. Find the "刷新验证码" anchor, then return the input whose top is
-       *just above* the anchor and is closest vertically. This is the
-       password field by layout invariant.
-    2. The input that advertises a password descriptor (e.g. contains
-       "交易密码" or "密码").
-    3. The input that sits *immediately below* the account field.
-    4. The first input whose value is empty -- QMT never pre-fills
-       passwords.
-    5. The second input as a final fallback.
+    1. Use the "刷新验证码" anchor to find the captcha Edit (the Edit
+       whose top is the largest value still less than the anchor's
+       top). Then return the Edit immediately above the captcha input.
+    2. Fall back to picking the 2nd Edit control in document order
+       (account, password, captcha) — the standard XtMiniQmt layout.
+    3. Pick the first Edit whose value is empty (and is not the
+       account field).
+    4. Pick the first Edit that advertises a password descriptor.
     """
+
+    edits = _all_edit_controls(window)
+    if not edits:
+        raise RuntimeError("未找到 QMT 登录密码输入框")
 
     captcha_anchor = _locate_captcha_refresh_control(window)
     if captcha_anchor is not None:
-        captcha_pos = _control_position(captcha_anchor)
-        candidates: list[tuple[int, object]] = []
-        for control in _descendants(window):
-            if not _is_visible(control) or not _is_enabled(control):
-                continue
-            if control is captcha_anchor:
-                continue
-            descriptor = _control_descriptor(control)
-            if _is_captcha_refresh_descriptor(descriptor):
-                continue
-            if not _is_interactive_input(control, descriptor):
-                continue
+        anchor_top = _control_position(captcha_anchor)[0]
+        captcha_input = None
+        best_distance = None
+        for control in edits:
             pos = _control_position(control)
-            if pos[0] >= captcha_pos[0]:
+            if pos[0] >= anchor_top:
                 continue
-            candidates.append((pos[0], control))
-        if candidates:
-            candidates.sort(key=lambda item: captcha_pos[0] - item[0])
-            return candidates[0][1]
+            distance = anchor_top - pos[0]
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                captcha_input = control
 
-    inputs = _visible_input_fields(window)
-    if not inputs:
-        raise RuntimeError("未找到 QMT 登录密码输入框")
+        if captcha_input is not None:
+            captcha_index = edits.index(captcha_input)
+            if captcha_index > 0:
+                return edits[captcha_index - 1]
 
-    for control in inputs:
+    if len(edits) >= 2:
+        return edits[1]
+
+    for control in edits:
+        if not _control_text(control).replace(" ", ""):
+            return control
+
+    for control in edits:
         descriptor = _control_descriptor(control)
         if _is_password_descriptor(descriptor):
             return control
 
-    try:
-        account_input = locate_account_input(window)
-    except Exception:
-        account_input = None
-
-    if account_input is not None:
-        for index, control in enumerate(inputs):
-            if control is account_input and index + 1 < len(inputs):
-                return inputs[index + 1]
-
-    for control in inputs:
-        if not _control_text(control).replace(" ", ""):
-            return control
-
-    if len(inputs) >= 2:
-        return inputs[1]
-    return inputs[-1]
+    raise RuntimeError("未找到 QMT 登录密码输入框")
 
 
 def locate_account_input(window):

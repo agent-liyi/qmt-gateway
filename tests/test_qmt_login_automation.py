@@ -113,7 +113,9 @@ class FakeDesktop:
 
 def test_locate_password_input_uses_captcha_refresh_anchor_when_present():
     """When a '刷新验证码' anchor exists, the password field is the
-    visible input directly above it (closest in vertical distance).
+    Edit input immediately above the captcha input, even when the
+    anchor itself sits a few pixels *below* the captcha input (as is
+    the case in the real XtMiniQmt window).
     """
     account_input = FakeControl(
         text="8881457417",
@@ -141,7 +143,7 @@ def test_locate_password_input_uses_captcha_refresh_anchor_when_present():
         class_name="Pane",
         control_type="Text",
         friendly="Text",
-        rect=FakeRect(left=420, top=320, right=560, bottom=360),
+        rect=FakeRect(left=420, top=326, right=560, bottom=360),
     )
     login_button = FakeControl(
         text="登录",
@@ -317,9 +319,19 @@ def test_iter_login_windows_prefers_named_qmt_login_window_over_splash():
     assert windows[1] is splash
 
 
-def test_is_probable_login_window_rejects_splash():
-    splash = FakeControl(text="XtMiniQmt", rect=FakeRect(right=800, bottom=600))
+def test_is_probable_login_window_rejects_tiny_splash():
+    splash = FakeControl(text="XtMiniQmt", rect=FakeRect(right=300, bottom=200))
     login = FakeControl(text="国金证券QMT交易端 2.0.8.300", rect=FakeRect(right=1168, bottom=768))
 
     assert is_probable_login_window(splash) is False
     assert is_probable_login_window(login) is True
+
+
+def test_is_probable_login_window_accepts_large_xtminiqmt_window():
+    """The real XtMiniQmt login window keeps the 'XtMiniQmt' title
+    throughout (splash → login form). It must not be rejected based on
+    title alone — only very small splash placeholders are.
+    """
+    big = FakeControl(text="XtMiniQmt", rect=FakeRect(right=1168, bottom=768))
+
+    assert is_probable_login_window(big) is True
