@@ -128,10 +128,8 @@ def _visible_input_fields(window):
     """Return visible, enabled, interactive input controls in the window,
     ordered top-to-bottom (and left-to-right as a tie-breaker).
 
-    The XtMiniQmt login window layout is: account field, password field,
-    captcha input field, then the login button. The "刷新验证码" label
-    sits near the captcha area and serves as an anchor for locating the
-    password field (the input directly above it).
+    Controls containing the "刷新验证码" label are excluded because they
+    are anchors, not inputs.
     """
 
     inputs: list[tuple[object, tuple[int, int]]] = []
@@ -140,6 +138,8 @@ def _visible_input_fields(window):
             continue
         descriptor = _control_descriptor(control)
         if not _is_interactive_input(control, descriptor):
+            continue
+        if _is_captcha_refresh_descriptor(descriptor):
             continue
         inputs.append((control, _control_position(control)))
 
@@ -302,19 +302,43 @@ def iter_login_windows(desktop, process_ids: list[int] | set[int]):
 def locate_password_input(window):
     """Locate the XtMiniQmt password input.
 
+    The XtMiniQmt login window layout is:
+        账号 (account) → 密码 (password) → 验证码 (captcha) + 刷新验证码
+        → 登录 button.
+
     Strategy (in order):
-    1. The input that advertises a password descriptor (e.g. contains
+    1. Find the "刷新验证码" anchor, then return the input whose top is
+       *just above* the anchor and is closest vertically. This is the
+       password field by layout invariant.
+    2. The input that advertises a password descriptor (e.g. contains
        "交易密码" or "密码").
-    2. The edit-like input directly above the "刷新验证码" control.
-       The XtMiniQmt layout is: account → password → (验证码 area
-       with 刷新验证码 label) → login button. By finding 刷新验证码
-       and looking at the input above it, we reliably locate the password
-       field.
     3. The input that sits *immediately below* the account field.
     4. The first input whose value is empty -- QMT never pre-fills
        passwords.
     5. The second input as a final fallback.
     """
+
+    captcha_anchor = _locate_captcha_refresh_control(window)
+    if captcha_anchor is not None:
+        captcha_pos = _control_position(captcha_anchor)
+        candidates: list[tuple[int, object]] = []
+        for control in _descendants(window):
+            if not _is_visible(control) or not _is_enabled(control):
+                continue
+            if control is captcha_anchor:
+                continue
+            descriptor = _control_descriptor(control)
+            if _is_captcha_refresh_descriptor(descriptor):
+                continue
+            if not _is_interactive_input(control, descriptor):
+                continue
+            pos = _control_position(control)
+            if pos[0] >= captcha_pos[0]:
+                continue
+            candidates.append((pos[0], control))
+        if candidates:
+            candidates.sort(key=lambda item: captcha_pos[0] - item[0])
+            return candidates[0][1]
 
     inputs = _visible_input_fields(window)
     if not inputs:
@@ -324,24 +348,6 @@ def locate_password_input(window):
         descriptor = _control_descriptor(control)
         if _is_password_descriptor(descriptor):
             return control
-
-    captcha_anchor = _locate_captcha_refresh_control(window)
-    if captcha_anchor is not None:
-        captcha_pos = _control_position(captcha_anchor)
-        best_edit: tuple[object, tuple[int, int]] | None = None
-        for control in inputs:
-            if control is captcha_anchor:
-                continue
-            descriptor = _control_descriptor(control)
-            if not _is_edit_like(control, descriptor):
-                continue
-            pos = _control_position(control)
-            if pos[0] >= captcha_pos[0]:
-                continue
-            if best_edit is None or abs(pos[0] - captcha_pos[0]) < abs(best_edit[1][0] - captcha_pos[0]):
-                best_edit = (control, pos)
-        if best_edit is not None:
-            return best_edit[0]
 
     try:
         account_input = locate_account_input(window)
