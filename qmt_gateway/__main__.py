@@ -85,7 +85,11 @@ def main():
     # 启动服务器
     logger.info(f"启动 QMT Gateway 服务器: http://{args.host}:{port}")
 
+    import logging
     import uvicorn
+
+    logging.getLogger("uvicorn.access").setLevel(logging.DEBUG)
+
     uvicorn.run(
         "qmt_gateway.app:app",
         host=args.host,
