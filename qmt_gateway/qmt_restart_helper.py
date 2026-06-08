@@ -16,7 +16,6 @@ from urllib.request import Request, urlopen
 from pywinauto import Desktop
 from qmt_gateway.qmt_login_automation import (
     describe_window,
-    ensure_independent_trading_checked,
     is_probable_login_window,
     iter_login_windows,
     locate_password_input,
@@ -108,7 +107,6 @@ def _get_probable_login_windows(desktop, process_ids: list[int] | set[int]):
 
 def _submit_login_attempt(window, password: str) -> str:
     try:
-        ensure_independent_trading_checked(window)
         password_edit = locate_password_input(window)
         populate_password_input(window, password_edit, password)
         submit_login_window(window)

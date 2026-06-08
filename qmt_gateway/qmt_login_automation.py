@@ -1,15 +1,15 @@
-"""QMT login window automation helpers."""
+"""QMT Mini login window automation helpers."""
 
 from __future__ import annotations
 
 QMT_LOGIN_BUTTON_TEXTS = ("登录", "登 录", "确定", "确认", "进入")
 QMT_PASSWORD_HINT_TOKENS = ("交易密码", "密码", "password", "passwd", "pwd")
+QMT_CAPTCHA_REFRESH_TOKENS = ("刷新验证码", "刷新 验证码", "换一张", "点击刷新", "refresh captcha")
 QMT_ACCOUNT_HINT_TOKENS = ("账号", "账户", "account", "user", "客户号", "资金账号")
-QMT_INDEPENDENT_TRADING_HINT_TOKENS = ("独立交易", "独立 交易", "independent trade", "独立下单", "独立委托", "独立登录")
-QMT_LOGIN_WINDOW_TITLE_TOKENS = ("qmt", "国金", "交易端", "交易终端", "sinolink")
-QMT_SPLASH_WINDOW_TITLES = ("xtitclient",)
-QMT_PASSWORD_FIELD_CENTER = (0.50, 0.70)
-QMT_LOGIN_BUTTON_CENTER = (0.38, 0.85)
+QMT_LOGIN_WINDOW_TITLE_TOKENS = ("qmt", "国金", "交易端", "交易终端", "sinolink", "xtminiqmt")
+QMT_SPLASH_WINDOW_TITLES = ("xtminiqmt",)
+QMT_PASSWORD_FIELD_CENTER = (0.50, 0.60)
+QMT_LOGIN_BUTTON_CENTER = (0.50, 0.80)
 QMT_NON_INPUT_HINT_TOKENS = (
     "button",
     "按钮",
@@ -71,6 +71,10 @@ def _is_password_descriptor(descriptor: str) -> bool:
     return any(token in descriptor for token in QMT_PASSWORD_HINT_TOKENS)
 
 
+def _is_captcha_refresh_descriptor(descriptor: str) -> bool:
+    return any(token in descriptor for token in QMT_CAPTCHA_REFRESH_TOKENS)
+
+
 def _is_account_descriptor(descriptor: str) -> bool:
     return any(token in descriptor for token in QMT_ACCOUNT_HINT_TOKENS)
 
@@ -124,10 +128,10 @@ def _visible_input_fields(window):
     """Return visible, enabled, interactive input controls in the window,
     ordered top-to-bottom (and left-to-right as a tie-breaker).
 
-    The QMT login window contains a small, fixed set of inputs that sit
-    above the "独立交易" checkbox and the login button. We rely on this
-    invariant: the *first* input with a non-empty value is the account
-    field, and the *next* input is the password field.
+    The XtMiniQmt login window layout is: account field, password field,
+    captcha input field, then the login button. The "刷新验证码" label
+    sits near the captcha area and serves as an anchor for locating the
+    password field (the input directly above it).
     """
 
     inputs: list[tuple[object, tuple[int, int]]] = []
@@ -152,55 +156,17 @@ def _control_index(controls, target) -> int:
     return -1
 
 
-def _iter_control_context(control):
-    current = control
-    for _ in range(3):
-        try:
-            current = current.parent()
-        except Exception:
-            break
-        if current is None:
-            break
-        yield current
+def _locate_captcha_refresh_control(window):
+    """Find the control that contains the '刷新验证码' text.
 
-
-def _locate_following_input(controls, start_index: int, *, exclude_control=None, prefer_edit_like: bool = False):
-    first_interactive = None
-
-    for control in controls[start_index + 1 :]:
-        if control is exclude_control or not _is_visible(control) or not _is_enabled(control):
-            continue
+    This label/button sits next to or below the captcha area in the
+    XtMiniQmt login window. Locating it allows us to find the password
+    input as the edit-like input directly above it.
+    """
+    for control in _descendants(window):
         descriptor = _control_descriptor(control)
-        if _is_account_descriptor(descriptor):
-            continue
-        if not _is_interactive_input(control, descriptor):
-            continue
-        if prefer_edit_like and _is_edit_like(control, descriptor):
+        if _is_captcha_refresh_descriptor(descriptor):
             return control
-        if first_interactive is None:
-            first_interactive = control
-            if not prefer_edit_like:
-                return control
-
-    return first_interactive
-
-
-def _locate_nearby_toggle(controls, anchor_index: int):
-    if anchor_index < 0:
-        return None
-
-    max_distance = min(4, len(controls))
-    for distance in range(1, max_distance):
-        for candidate_index in (anchor_index - distance, anchor_index + distance):
-            if candidate_index < 0 or candidate_index >= len(controls):
-                continue
-            candidate = controls[candidate_index]
-            if not _is_visible(candidate) or not _is_enabled(candidate):
-                continue
-            descriptor = _control_descriptor(candidate)
-            if _is_checkbox_descriptor(descriptor) or _is_toggle_control(candidate):
-                return candidate
-
     return None
 
 
@@ -258,14 +224,6 @@ def _activate_window(window) -> None:
     """Bring ``window`` to the foreground so that subsequent keystrokes
     and clicks reach it instead of whatever window the user is currently
     looking at.
-
-    The helper is best-effort and never raises. It performs three steps:
-
-    1. Restore the window if it is currently minimised.
-    2. Call the Win32 ``BringWindowToTop`` / ``SetForegroundWindow`` APIs
-       directly so the activation succeeds even when pywinauto's
-       ``set_focus`` is denied by Windows' foreground lock.
-    3. Ask pywinauto to set the keyboard focus as a final fallback.
     """
 
     handle = _window_handle(window)
@@ -342,20 +300,20 @@ def iter_login_windows(desktop, process_ids: list[int] | set[int]):
 
 
 def locate_password_input(window):
-    """Locate the QMT password input.
+    """Locate the XtMiniQmt password input.
 
     Strategy (in order):
     1. The input that advertises a password descriptor (e.g. contains
-       "交易密码" or "密码") -- usually the placeholder text of an
-       empty password field.
-    2. The input that sits *immediately below* the account field. This
-       is the structural invariant of the QMT login window: account
-       field, then password field, then the 独立交易 checkbox, then
-       the login button.
-    3. The first input whose value is empty -- QMT never pre-fills
-       passwords, so an empty input below the account is the password
+       "交易密码" or "密码").
+    2. The edit-like input directly above the "刷新验证码" control.
+       The XtMiniQmt layout is: account → password → (验证码 area
+       with 刷新验证码 label) → login button. By finding 刷新验证码
+       and looking at the input above it, we reliably locate the password
        field.
-    4. The last input as a final fallback.
+    3. The input that sits *immediately below* the account field.
+    4. The first input whose value is empty -- QMT never pre-fills
+       passwords.
+    5. The second input as a final fallback.
     """
 
     inputs = _visible_input_fields(window)
@@ -366,6 +324,24 @@ def locate_password_input(window):
         descriptor = _control_descriptor(control)
         if _is_password_descriptor(descriptor):
             return control
+
+    captcha_anchor = _locate_captcha_refresh_control(window)
+    if captcha_anchor is not None:
+        captcha_pos = _control_position(captcha_anchor)
+        best_edit: tuple[object, tuple[int, int]] | None = None
+        for control in inputs:
+            if control is captcha_anchor:
+                continue
+            descriptor = _control_descriptor(control)
+            if not _is_edit_like(control, descriptor):
+                continue
+            pos = _control_position(control)
+            if pos[0] >= captcha_pos[0]:
+                continue
+            if best_edit is None or abs(pos[0] - captcha_pos[0]) < abs(best_edit[1][0] - captcha_pos[0]):
+                best_edit = (control, pos)
+        if best_edit is not None:
+            return best_edit[0]
 
     try:
         account_input = locate_account_input(window)
@@ -447,7 +423,6 @@ def populate_password_input(window, control, password: str) -> None:
 
 def populate_password_via_tab(window, password: str) -> None:
     _activate_window(window)
-    ensure_independent_trading_checked(window)
     account_input = locate_account_input(window)
 
     try:
@@ -496,7 +471,6 @@ def populate_password_via_tab(window, password: str) -> None:
 
 def populate_password_via_layout(window, password: str) -> None:
     _activate_window(window)
-    ensure_independent_trading_checked(window)
     last_error: Exception | None = None
 
     _click_window_relative(window, *QMT_PASSWORD_FIELD_CENTER)
@@ -520,106 +494,6 @@ def populate_password_via_layout(window, password: str) -> None:
 def submit_login_via_layout(window) -> None:
     _activate_window(window)
     _click_window_relative(window, *QMT_LOGIN_BUTTON_CENTER)
-
-
-def _is_independent_trading_descriptor(descriptor: str) -> bool:
-    normalized = descriptor.replace(" ", "")
-    return any(token.replace(" ", "") in normalized for token in QMT_INDEPENDENT_TRADING_HINT_TOKENS)
-
-
-def _is_checkbox_descriptor(descriptor: str) -> bool:
-    return "checkbox" in descriptor or "check box" in descriptor
-
-
-def _is_toggle_control(control) -> bool:
-    if hasattr(control, "toggle"):
-        return True
-    if hasattr(control, "get_toggle_state"):
-        return True
-    if hasattr(control, "is_checked"):
-        return True
-    if hasattr(control, "check") and hasattr(control, "uncheck"):
-        return True
-    return False
-
-
-def _is_checkbox_checked(control) -> bool | None:
-    for probe in (
-        lambda: int(control.get_toggle_state()) == 1,
-        lambda: bool(control.is_checked()),
-    ):
-        try:
-            return bool(probe())
-        except Exception:
-            continue
-    return None
-
-
-def _locate_independent_trading_toggle(window):
-    visible_controls = [control for control in _descendants(window) if _is_visible(control)]
-
-    for control in visible_controls:
-        if not _is_enabled(control):
-            continue
-
-        descriptor = _control_descriptor(control)
-        if not _is_independent_trading_descriptor(descriptor):
-            continue
-
-        if _is_checkbox_descriptor(descriptor) or _is_toggle_control(control):
-            return control
-
-        candidate = _locate_nearby_toggle(visible_controls, _control_index(visible_controls, control))
-        if candidate is not None:
-            return candidate
-
-        for container in _iter_control_context(control):
-            contextual_controls = [container, *_descendants(container)]
-            candidate = _locate_nearby_toggle(
-                contextual_controls,
-                _control_index(contextual_controls, control),
-            )
-            if candidate is not None:
-                return candidate
-
-    return None
-
-
-def _check_control(control) -> None:
-    for action in (
-        lambda: control.check(),
-        lambda: control.check_by_click(),
-        lambda: control.toggle(),
-        lambda: control.click_input(),
-    ):
-        try:
-            action()
-            return
-        except Exception:
-            continue
-    raise RuntimeError("切换 QMT 复选框失败：所有切换方式均不可用")
-
-
-def ensure_independent_trading_checked(window) -> bool:
-    """Locate the 独立交易 checkbox in the login window and ensure it is checked.
-
-    Returns ``True`` when a matching checkbox was found and toggled (or was
-    already selected), ``False`` when no matching checkbox exists in the
-    window. Raises if a matching checkbox is found but cannot be toggled.
-    """
-
-    control = _locate_independent_trading_toggle(window)
-    if control is None:
-        return False
-
-    try:
-        checked = _is_checkbox_checked(control)
-    except Exception:
-        checked = None
-
-    if checked is False:
-        _check_control(control)
-    return True
 
 
 def describe_window(window, max_controls: int = 12) -> str:

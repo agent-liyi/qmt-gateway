@@ -145,7 +145,7 @@ def test_complete_rolls_back_when_xtquant_test_fails(
 
     monkeypatch.setattr(core_module, "require_xtdata", broken_require_xtdata)
     monkeypatch.setattr(qmt_init_helpers, "is_qmt_process_running", lambda *a, **k: True)
-    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtItClient.exe"})())
+    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtMiniQmt.exe"})())
     monkeypatch.setattr(ts_instance, "_launch_qmt_process", lambda *a, **kw: type("P", (), {"pid": 1234})())
     monkeypatch.setattr(ts_instance, "_fill_qmt_login_password", lambda *a, **kw: None)
     monkeypatch.setattr(ts_instance, "_get_current_session_id", lambda: 1)
@@ -197,7 +197,7 @@ def test_complete_rolls_back_settings_when_test_fails_after_partial_form(
 
     monkeypatch.setattr(core_module, "require_xtdata", broken_require_xtdata)
     monkeypatch.setattr(qmt_init_helpers, "is_qmt_process_running", lambda *a, **k: True)
-    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtItClient.exe"})())
+    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtMiniQmt.exe"})())
     monkeypatch.setattr(ts_instance, "_launch_qmt_process", lambda *a, **kw: type("P", (), {"pid": 1234})())
     monkeypatch.setattr(ts_instance, "_fill_qmt_login_password", lambda *a, **kw: None)
     monkeypatch.setattr(ts_instance, "_get_current_session_id", lambda: 1)
@@ -245,7 +245,7 @@ def _make_fake_qmt_install(root: Path) -> Path:
     bin_dir.mkdir(parents=True)
     userdata.mkdir(parents=True)
     # 仅创建一个空文件充作可执行文件
-    (bin_dir / "XtItClient.exe").write_bytes(b"")
+    (bin_dir / "XtMiniQmt.exe").write_bytes(b"")
     return userdata
 
 
@@ -417,7 +417,7 @@ def test_retry_startup_failure_branch_uses_fast_auto_retry(
         "_restart_status",
         {"success": False, "error": "连接失败"},
     )
-    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtItClient.exe"})())
+    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtMiniQmt.exe"})())
     monkeypatch.setattr(ts_instance, "_kill_qmt_process", lambda *a, **k: None)
 
     response = client.post("/init-wizard/retry-startup")
@@ -453,7 +453,7 @@ def test_retry_startup_success_branch_skips_xtdata_wait(
         "_restart_status",
         {"success": True, "message": "QMT 已重启"},
     )
-    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtItClient.exe"})())
+    monkeypatch.setattr(ts_instance, "_resolve_qmt_client_path", lambda p: type("P", (), {"name": "XtMiniQmt.exe"})())
     monkeypatch.setattr(ts_instance, "_kill_qmt_process", lambda *a, **k: None)
     from qmt_gateway import core as core_module
     monkeypatch.setattr(

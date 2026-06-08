@@ -102,7 +102,6 @@ def test_positions_json_returns_200(monkeypatch):
                 "float_profit": 50.0,
                 "market_value": 1050.0,
                 "hold_cost": 1000.0,
-                "sell_profit": 0.0,
                 "position_ratio": 0.1,
             }
         ],
@@ -144,7 +143,6 @@ def test_positions_json_normalizes_datetime_and_decimal(monkeypatch):
                 "float_profit": Decimal("240.00"),
                 "market_value": _NumpyFloat(2240.0),
                 "hold_cost": 2000.0,
-                "sell_profit": 0.0,
                 "position_ratio": 0.2,
             }
         ],

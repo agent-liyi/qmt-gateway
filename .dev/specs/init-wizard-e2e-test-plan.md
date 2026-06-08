@@ -63,11 +63,11 @@
 
 | 编号 | 场景 | 操作 | 预期 |
 | --- | --- | --- | --- |
-| TC-4-01 | 路径指向 `userdata_mini` | `qmt_path = C:\brokerQMT\userdata_mini` | `resolve_qmt_executable` 找到 `bin.x64\XtItClient.exe` |
+| TC-4-01 | 路径指向 `userdata_mini` | `qmt_path = C:\brokerQMT\userdata_mini` | `resolve_qmt_executable` 找到 `bin.x64\XtMiniQmt.exe` |
 | TC-4-02 | 路径指向父目录 | `qmt_path = C:\brokerQMT` | 同上 |
 | TC-4-03 | 路径不存在 | `qmt_path = C:\no\such\path` | `probe_qmt_path` 返回 `valid=False`，wizard 失败并回滚 |
 | TC-4-04 | 路径无 `userdata_mini` | `qmt_path = C:\some\dir` | `probe_qmt_path` 报"目录中应包含 userdata_mini" |
-| TC-4-05 | `bin.x64` 缺失 | 仅有 `userdata_mini` 无 `bin.x64\XtItClient.exe` | `FileNotFoundError` → 失败回滚 |
+| TC-4-05 | `bin.x64` 缺失 | 仅有 `userdata_mini` 无 `bin.x64\XtMiniQmt.exe` | `FileNotFoundError` → 失败回滚 |
 | TC-4-06 | `qmt_path` 含 `~` 波浪号 | `qmt_path = "~/QMT/userdata_mini"` | 解析时 `expanduser` + `resolve`，得到绝对路径 |
 
 ### 5. xtquant 连接 + QMT 自愈
