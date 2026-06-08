@@ -41,7 +41,7 @@ from qmt_gateway.qmt_login_automation import (
 # xtquant 模块（延迟导入）
 _xtquant_modules: dict[str, Any] = {}
 DEFAULT_PORTFOLIO_ID = "default"
-QMT_CLIENT_EXECUTABLE = "XtItClient.exe"
+QMT_CLIENT_EXECUTABLE = "XtMiniQmt.exe"
 QMT_PROCESS_NOT_FOUND_MARKERS = ("not found", "找不到", "没有运行的实例", "没有找到")
 
 
@@ -50,6 +50,8 @@ def _get_xtquant(name: str):
     if name not in _xtquant_modules:
         if name == "xtconstant":
             from xtquant import xtconstant as mod
+        elif name == "XtMiniQmt":
+            from xtquant.xttrader import XtMiniQmt as mod
         elif name == "XtQuantTrader":
             from xtquant.xttrader import XtQuantTrader as mod
         elif name == "XtQuantTraderCallback":
@@ -400,7 +402,7 @@ class TradeService:
             self._prepare_xtquant_env(qmt_path)
 
             # 延迟导入 xtquant
-            XtQuantTrader = _get_xtquant("XtQuantTrader")
+            XtMiniQmt = _get_xtquant("XtMiniQmt")
             StockAccount = _get_xtquant("StockAccount")
             _get_xtquant("xtconstant")
 
@@ -409,7 +411,7 @@ class TradeService:
 
             # 创建交易对象
             session_id = self._build_session_id()
-            self._trader = XtQuantTrader(qmt_path, session_id)
+            self._trader = XtMiniQmt(qmt_path, session_id)
 
             # 注册回调
             callback = TradeCallback(self)

@@ -337,7 +337,7 @@ def PositionTable(positions: list[dict] | None = None):
     if positions is None:
         positions = []
 
-    headers = ["代码", "名称", "持有数", "可卖数", "现价", "成本", "盈亏比", "浮盈", "市值", "持有成本", "卖出盈亏", "仓位"]
+    headers = ["代码", "名称", "持有数", "可卖数", "现价", "成本", "盈亏比", "浮盈", "市值", "持有成本", "仓位"]
 
     rows = []
     if positions:
@@ -376,7 +376,6 @@ def PositionTable(positions: list[dict] | None = None):
                     Td(f"{pos.get('float_profit', 0):.0f}", cls=profit_color),
                     Td(f"{pos.get('market_value', 0):.0f}"),
                     Td(f"{pos.get('hold_cost', 0):.0f}"),
-                    Td(f"{pos.get('sell_profit', 0):.0f}"),
                     Td(f"{pos.get('position_ratio', 0):.1f}%"),
                     cls=row_cls,
                     **row_attrs,

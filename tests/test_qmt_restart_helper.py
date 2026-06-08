@@ -71,7 +71,7 @@ def test_restart_helper_retries_once_when_login_window_stays_visible(monkeypatch
     helper.restart_qmt_in_interactive_session(
         base_url="http://127.0.0.1:8130",
         token="token-1",
-        executable=Path(r"C:\apps\qmt\bin.x64\XtItClient.exe"),
+        executable=Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe"),
         launch_timeout=15.0,
         login_timeout=40.0,
     )
@@ -106,7 +106,7 @@ def test_restart_helper_fails_after_retry_budget_is_exhausted(monkeypatch):
         helper.restart_qmt_in_interactive_session(
             base_url="http://127.0.0.1:8130",
             token="token-1",
-            executable=Path(r"C:\apps\qmt\bin.x64\XtItClient.exe"),
+            executable=Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe"),
             launch_timeout=15.0,
             login_timeout=40.0,
         )
@@ -144,7 +144,7 @@ def test_restart_helper_sleeps_before_retry(monkeypatch):
     helper.restart_qmt_in_interactive_session(
         base_url="http://127.0.0.1:8130",
         token="token-1",
-        executable=Path(r"C:\apps\qmt\bin.x64\XtItClient.exe"),
+        executable=Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe"),
         launch_timeout=15.0,
         login_timeout=40.0,
         retry_delay=5.0,
@@ -188,7 +188,7 @@ def test_restart_helper_retries_when_submit_login_attempt_raises(monkeypatch):
     helper.restart_qmt_in_interactive_session(
         base_url="http://127.0.0.1:8130",
         token="token-1",
-        executable=Path(r"C:\apps\qmt\bin.x64\XtItClient.exe"),
+        executable=Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe"),
         launch_timeout=15.0,
         login_timeout=40.0,
         retry_delay=4.0,

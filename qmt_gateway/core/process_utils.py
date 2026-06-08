@@ -29,7 +29,7 @@ def list_process_ids(executable_name: str) -> list[int]:
     """通过 tasklist 查询指定可执行文件的进程 ID。
 
     Args:
-        executable_name: 可执行文件名，如 ``XtItClient.exe``。
+        executable_name: 可执行文件名，如 ``XtMiniQmt.exe``。
 
     Returns:
         匹配到的进程 ID 列表（可能为空）。
@@ -71,7 +71,7 @@ def kill_process(executable_name: str) -> str:
     """强制终止指定可执行文件的所有进程。
 
     Args:
-        executable_name: 可执行文件名，如 ``XtItClient.exe``。
+        executable_name: 可执行文件名，如 ``XtMiniQmt.exe``。
 
     Returns:
         - ``"terminated"``: 成功终止

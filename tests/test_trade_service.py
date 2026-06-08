@@ -134,7 +134,7 @@ def test_connect_uses_unique_session_id_and_safe_cleanup(monkeypatch):
 
 def test_resolve_qmt_client_path_from_userdata_dir(monkeypatch):
     service = TradeService()
-    expected = Path(r"C:\apps\qmt\bin.x64\XtItClient.exe")
+    expected = Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe")
 
     monkeypatch.setattr(service, "_qmt_executable_exists", lambda path: path == expected)
 
@@ -147,7 +147,7 @@ def test_restart_and_login_relaunches_client_and_reconnects(monkeypatch):
     service = TradeService()
     service._account_id = "8881457417"
     service._qmt_path = r"C:\apps\qmt\userdata_mini"
-    executable = Path(r"C:\apps\qmt\bin.x64\XtItClient.exe")
+    executable = Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe")
     calls = []
 
     monkeypatch.setattr(service, "_get_current_session_id", lambda: 1)
@@ -175,7 +175,7 @@ def test_restart_and_login_relaunches_client_and_reconnects(monkeypatch):
     assert calls == [
         "disconnect",
         ("state", False, "交易接口连接断开，正在重启 QMT"),
-        ("kill", "XtItClient.exe"),
+        ("kill", "XtMiniQmt.exe"),
         ("launch", executable, None),
         ("fill", 4321, "trade-secret"),
         ("connect", "8881457417", r"C:\apps\qmt\userdata_mini"),
@@ -200,7 +200,7 @@ def test_restart_and_login_waits_for_login_window_before_connecting(monkeypatch)
     service = TradeService()
     service._account_id = "8881457417"
     service._qmt_path = r"C:\apps\qmt\userdata_mini"
-    executable = Path(r"C:\apps\qmt\bin.x64\XtItClient.exe")
+    executable = Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe")
     calls = []
 
     monkeypatch.setattr(service, "_get_current_session_id", lambda: 1)
@@ -240,7 +240,7 @@ def test_restart_and_login_waits_for_login_window_before_connecting(monkeypatch)
 
 def test_kill_qmt_process_ignores_missing_process_message(monkeypatch):
     service = TradeService()
-    missing_message = '错误: 没有找到进程 "XtItClient.exe"。'.encode("gbk")
+    missing_message = '错误: 没有找到进程 "XtMiniQmt.exe"。'.encode("gbk")
 
     monkeypatch.setattr(
         process_utils_module.subprocess,
@@ -248,7 +248,7 @@ def test_kill_qmt_process_ignores_missing_process_message(monkeypatch):
         lambda *args, **kwargs: SimpleNamespace(returncode=128, stdout=b"", stderr=missing_message),
     )
 
-    assert service._kill_qmt_process("XtItClient.exe") == "not-running"
+    assert service._kill_qmt_process("XtMiniQmt.exe") == "not-running"
 
 
 def test_kill_qmt_process_raises_for_other_failures(monkeypatch):
@@ -261,7 +261,7 @@ def test_kill_qmt_process_raises_for_other_failures(monkeypatch):
     )
 
     with pytest.raises(RuntimeError, match="access is denied"):
-        service._kill_qmt_process("XtItClient.exe")
+        service._kill_qmt_process("XtMiniQmt.exe")
 
 
 def test_fill_qmt_login_password_uses_active_process_ids(monkeypatch):
@@ -306,7 +306,7 @@ def test_fill_qmt_login_password_uses_active_process_ids(monkeypatch):
 
 def test_launch_qmt_process_uses_shell_open_and_detects_new_pid(monkeypatch):
     service = TradeService()
-    executable = Path(r"C:\apps\qmt\bin.x64\XtItClient.exe")
+    executable = Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe")
     launch_calls = []
     pid_snapshots = iter([[], [8765]])
 
@@ -339,7 +339,7 @@ def test_get_active_interactive_user_parses_quser_output(monkeypatch):
 
 def test_launch_qmt_process_uses_interactive_task_in_session_zero(monkeypatch):
     service = TradeService()
-    executable = Path(r"C:\apps\qmt\bin.x64\XtItClient.exe")
+    executable = Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe")
     calls = []
 
     monkeypatch.setattr(service, "_get_current_session_id", lambda: 0)

@@ -24,7 +24,7 @@ from qmt_gateway.core.process_utils import (
     list_process_ids,
 )
 
-QMT_CLIENT_EXECUTABLE = "XtItClient.exe"
+QMT_CLIENT_EXECUTABLE = "XtMiniQmt.exe"
 QMT_LAUNCH_PROBE_TIMEOUT_SEC = 20.0
 QMT_LAUNCH_POLL_INTERVAL_SEC = 0.5
 

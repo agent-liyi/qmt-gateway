@@ -305,7 +305,7 @@ def test_submit_login_via_layout_clicks_login_button_position():
 
 
 def test_iter_login_windows_prefers_named_qmt_login_window_over_xtitclient_splash():
-    splash = FakeControl(text="XtItClient", rect=FakeRect(right=800, bottom=600), process_id=42)
+    splash = FakeControl(text="XtMiniQmt", rect=FakeRect(right=800, bottom=600), process_id=42)
     login = FakeControl(text="国金证券QMT交易端 2.0.8.300", rect=FakeRect(right=1168, bottom=768), process_id=42)
     desktop = FakeDesktop([splash, login])
 
@@ -316,7 +316,7 @@ def test_iter_login_windows_prefers_named_qmt_login_window_over_xtitclient_splas
 
 
 def test_is_probable_login_window_rejects_xtitclient_splash():
-    splash = FakeControl(text="XtItClient", rect=FakeRect(right=800, bottom=600))
+    splash = FakeControl(text="XtMiniQmt", rect=FakeRect(right=800, bottom=600))
     login = FakeControl(text="国金证券QMT交易端 2.0.8.300", rect=FakeRect(right=1168, bottom=768))
 
     assert is_probable_login_window(splash) is False
