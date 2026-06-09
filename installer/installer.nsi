@@ -152,14 +152,9 @@ Section "-Core" SEC_CORE
 
     !insertmacro LogStep "Core: extract embedded Python"
     SetOutPath "$INSTDIR\python"
-    FileOpen $0 "$INSTDIR\python\_extract.ps1" w
-    FileWrite $0 "Expand-Archive -Path '$INSTDIR\python\python-embed.zip' -DestinationPath '$INSTDIR\python' -Force$\r$\n"
-    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\python-embed.zip' -Force$\r$\n"
-    FileWrite $0 "$pth = Join-Path '$INSTDIR\python' 'python313._pth'$\r$\n"
-    FileWrite $0 "if (Test-Path -LiteralPath $pth) { (Get-Content -LiteralPath $pth) -replace '^#import site$', 'import site' | Set-Content -LiteralPath $pth -Encoding UTF8 }$\r$\n"
-    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\_extract.ps1' -Force$\r$\n"
-    FileClose $0
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\python\_extract.ps1"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path $INSTDIR\python\python-embed.zip -DestinationPath $INSTDIR\python -Force"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "if (Test-Path $INSTDIR\python\python313._pth) { (Get-Content $INSTDIR\python\python313._pth) -replace ''^#import site$'', ''import site'' | Set-Content $INSTDIR\python\python313._pth -Encoding UTF8 }"'
+    nsExec::ExecToLog 'cmd.exe /C del /Q "$INSTDIR\python\python-embed.zip"'
 
     !insertmacro LogStep "Core: copy application source"
     ; Copy application source to $INSTDIR\app
@@ -182,26 +177,12 @@ Section "-Core" SEC_CORE
     ; install dependencies into the embedded Python's site-packages directly.
     SetOutPath "$INSTDIR\python"
     File "get-pip.py"
-    FileOpen $0 "$INSTDIR\python\_bootstrap_pip.ps1" w
-    FileWrite $0 "Set-Location -LiteralPath '$INSTDIR\python'$\r$\n"
-    FileWrite $0 "$INSTDIR\python\python.exe -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple$\r$\n"
-    FileWrite $0 "$INSTDIR\python\python.exe -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn$\r$\n"
-    FileWrite $0 "$INSTDIR\python\python.exe get-pip.py --no-warn-script-location 2>&1 | Tee-Object -FilePath '$INSTDIR\python\_bootstrap_pip.log'$\r$\n"
-    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\get-pip.py' -Force -ErrorAction SilentlyContinue$\r$\n"
-    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\_bootstrap_pip.ps1' -Force$\r$\n"
-    FileClose $0
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\python\_bootstrap_pip.ps1"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location $INSTDIR\python; & $INSTDIR\python\python.exe -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple; & $INSTDIR\python\python.exe -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn; & $INSTDIR\python\python.exe get-pip.py --no-warn-script-location 2>&1 | Out-File -FilePath $INSTDIR\python\_bootstrap_pip.log; Remove-Item -LiteralPath $INSTDIR\python\get-pip.py -Force -ErrorAction SilentlyContinue"'
 
     !insertmacro LogStep "Core: install dependencies"
     ; Install dependencies into the embedded Python's site-packages.
     DetailPrint "正在安装 Python 依赖 (使用国内镜像源)..."
-    SetOutPath "$INSTDIR\python"
-    FileOpen $0 "$INSTDIR\python\_install_deps.ps1" w
-    FileWrite $0 "Set-Location -LiteralPath '$INSTDIR\python'$\r$\n"
-    FileWrite $0 "$INSTDIR\python\python.exe -m pip install -e $INSTDIR\app --no-warn-script-location 2>&1 | Tee-Object -FilePath '$INSTDIR\python\_install_deps.log'$\r$\n"
-    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\_install_deps.ps1' -Force$\r$\n"
-    FileClose $0
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\python\_install_deps.ps1"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "Set-Location $INSTDIR\python; & $INSTDIR\python\python.exe -m pip install -e $INSTDIR\app --no-warn-script-location 2>&1 | Out-File -FilePath $INSTDIR\python\_install_deps.log"'
 
     !insertmacro LogStep "Core: write shortcuts"
     ; Shortcuts

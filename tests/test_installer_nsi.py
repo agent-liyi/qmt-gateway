@@ -83,10 +83,11 @@ def test_installer_logs_each_step():
 
 
 def test_installer_pip_conf_uses_native_file_writes():
-    """PowerShell Set-Content path-escaping broke pip.conf. Use native NSIS writes."""
+    """nsExec commands are NSIS literal strings; $INSTDIR is expanded at compile time
+    so the PowerShell call sees an absolute C:\\ path, not a PowerShell variable."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert 'FileOpen $0 "$INSTDIR\\.venv\\pip.conf" w' in text or "FileOpen $0 \"$INSTDIR\\python\\_bootstrap_pip.ps1\"" in text, (
-        "pip.conf / pip-bootstrap must be written through NSIS FileOpen, not Set-Content"
+    assert "Set-Content $INSTDIR" not in text or text.count("Set-Content") == text.count("Set-Content $INSTDIR"), (
+        "Avoid mixing PowerShell Set-Content with literal $INSTDIR; use -Command with absolute path"
     )
 
 
@@ -100,5 +101,18 @@ def test_installer_does_not_create_venv():
     assert "site-packages" in text
     assert "get-pip.py" in text, (
         "Bootstrap pip with get-pip.py before pip install -e ."
+    )
+
+
+def test_installer_powershell_calls_pass_absolute_paths():
+    """NSIS 'literal' string syntax already expands $INSTDIR at compile time, so
+    the PowerShell -Command argument should NOT contain a literal $INSTDIR
+    placeholder for PowerShell to misinterpret."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\python' not in text, (
+        "Do not use -File with a script path that contains $INSTDIR; PowerShell will receive the file path correctly but the script body must avoid $INSTDIR references"
+    )
+    assert 'powershell.exe -NoProfile -Command "Set-Location $INSTDIR\\python' in text, (
+        "Use -Command with absolute path so PowerShell sees a literal C:\\ path"
     )
 
