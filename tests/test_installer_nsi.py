@@ -175,6 +175,17 @@ def test_installer_streams_detail_output_to_dedicated_temp_logs():
     assert 'Tee-Object -FilePath $$tempLog' not in text
 
 
+def test_installer_updates_python313_pth_without_utf8_bom():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "python313._pth" in text
+    assert "[System.IO.File]::WriteAllText($$p, $$content, [System.Text.UTF8Encoding]::new($false))" in text, (
+        "python313._pth must be written without a BOM so embedded Python can still import encodings"
+    )
+    assert "Set-Content -LiteralPath $$p -Encoding UTF8" not in text, (
+        "Do not rewrite python313._pth with PowerShell UTF8 in Windows PowerShell; it adds a BOM and breaks python313.zip lookup"
+    )
+
+
 def test_installer_logs_absolute_paths_in_log():
     """The installer must write the absolute install path into install.log *before*
     invoking PowerShell, so the log still contains the path even if every PowerShell
