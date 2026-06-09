@@ -105,14 +105,14 @@ def test_installer_does_not_create_venv():
 
 
 def test_installer_powershell_calls_pass_absolute_paths():
-    """NSIS quoted strings expand $INSTDIR at compile time. nsExec commands must use
-    the quoted-string form so PowerShell receives a literal absolute path."""
+    """The installer reads $INSTDIR via QT_INSTDIR_QMTGW env var so PowerShell never
+    has to deal with NSIS string encoding of CJK characters."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\python' not in text, (
         "Do not use -File with a script path that contains $INSTDIR"
     )
-    assert r'$\"$INSTDIR\python$\"' in text, (
-        "nsExec command must use the NSIS quoted-string form so $INSTDIR is replaced at compile time"
+    assert "$env:QT_INSTDIR_QMTGW" in text, (
+        "nsExec commands must read the install path from $env:QT_INSTDIR_QMTGW"
     )
 
 
@@ -121,8 +121,10 @@ def test_installer_logs_absolute_paths_in_log():
     invoking PowerShell, so the log still contains the path even if every PowerShell
     call fails."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert 'FileWrite $0 "INSTDIR=$INSTDIR$\\r$\\n"' in text, (
-        "Must write INSTDIR=... into install.log before any PowerShell call"
+    assert "SetEnvironmentVariableW" in text and "QT_INSTDIR_QMTGW" in text, (
+        "Must export QT_INSTDIR_QMTGW env var so PowerShell can read the path without going through NSIS string encoding"
     )
-    assert 'FileWrite $0 "PYTHON_ZIP=$INSTDIR\\python\\python-embed.zip$\\r$\\n"' in text
+    assert "Add-Content -LiteralPath" in text and "install.log" in text, (
+        "install.log must be written by PowerShell with explicit UTF-8 encoding"
+    )
 
