@@ -106,7 +106,6 @@ Section "-Core" SEC_CORE
     SectionIn RO
     SetOverwrite on
     SetOutPath "$INSTDIR"
-    LogSet on
 
     !insertmacro LogInit
     !insertmacro LogStep "Core: create directories"
@@ -170,14 +169,12 @@ Section "-Core" SEC_CORE
 SectionEnd
 
 Section "Autostart" SEC_AUTOSTART
-    LogSet on
     !insertmacro LogStep "Autostart: register scheduled task"
     DetailPrint "正在注册开机自启任务..."
     nsExec::ExecToLog 'schtasks /create /tn "QMT Gateway" /tr "wscript.exe \"$INSTDIR\start-silent.vbs\"" /sc onlogon /rl limited /f'
 SectionEnd
 
 Section "Firewall" SEC_FIREWALL
-    LogSet on
     !insertmacro LogStep "Firewall: add inbound rule"
     DetailPrint "正在添加防火墙入站规则..."
     nsExec::ExecToLog 'netsh advfirewall firewall add rule name="QMT Gateway" dir=in action=allow protocol=tcp localport=8130 profile=private enable=yes'
