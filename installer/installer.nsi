@@ -24,6 +24,32 @@ SetCompress off
 !include "LogicLib.nsh"
 !include "x64.nsh"
 
+
+!macro LogInit
+    FileOpen $0 "$INSTDIR\install.log" w
+    FileWrite $0 "[Install]$\r$\n"
+    FileWrite $0 "Started: $\r$\n"
+    FileClose $0
+!macroend
+
+
+!macro LogLine TEXT
+    FileOpen $0 "$INSTDIR\install.log" a
+    FileWrite $0 "${TEXT}$\r$\n"
+    FileClose $0
+!macroend
+
+
+!macro LogStep LABEL
+    Push $0
+    Push $1
+    FileOpen $0 "$INSTDIR\install.log" a
+    FileWrite $0 "==== ${LABEL} ====$\r$\n"
+    FileClose $0
+    Pop $1
+    Pop $0
+!macroend
+
 ; MUI Settings
 !define MUI_ABORTWARNING
 ; Icon and bitmap are optional - comment out if files not available
@@ -197,32 +223,6 @@ LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN a
 Function OpenBrowser
     ExecShell "open" "http://localhost:8130"
 FunctionEnd
-
-
-!macro LogInit
-    FileOpen $0 "$INSTDIR\install.log" w
-    FileWrite $0 "[Install]$\r$\n"
-    FileWrite $0 "Started: $\r$\n"
-    FileClose $0
-!macroend
-
-
-!macro LogLine TEXT
-    FileOpen $0 "$INSTDIR\install.log" a
-    FileWrite $0 "${TEXT}$\r$\n"
-    FileClose $0
-!macroend
-
-
-!macro LogStep LABEL
-    Push $0
-    Push $1
-    FileOpen $0 "$INSTDIR\install.log" a
-    FileWrite $0 "==== ${LABEL} ====$\r$\n"
-    FileClose $0
-    Pop $1
-    Pop $0
-!macroend
 
 
 Function SaveInstallLog
