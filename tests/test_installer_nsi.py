@@ -21,8 +21,9 @@ def test_installer_finish_page_does_not_define_conflicting_readme_macro():
     assert "!define MUI_FINISHPAGE_SHOWREADME_FUNCTION" not in text, (
         "MUI_FINISHPAGE_SHOWREADME_FUNCTION is not a real NSIS macro and breaks MUI"
     )
-    assert 'MUI_FINISHPAGE_SHOWREADME "$INSTDIR\\install.log"' in text, (
-        "Finish page must wire the '查看安装日志' checkbox to $INSTDIR\\install.log"
+    assert '!define INSTALL_LOG_NAME "install.log"' in text
+    assert 'MUI_FINISHPAGE_SHOWREADME "$INSTDIR\\${INSTALL_LOG_NAME}"' in text, (
+        "Finish page must wire the '查看安装日志' checkbox to the installer log in $INSTDIR"
     )
 
 
@@ -79,6 +80,7 @@ def test_installer_logs_each_step():
     assert '!insertmacro LogInit' in text
     assert '!insertmacro LogStep' in text
     assert 'install.log' in text
+    assert 'qmt-gateway-installer.log' in text
     assert '查看安装日志' in text
 
 
@@ -121,7 +123,7 @@ def test_installer_powershell_calls_pass_absolute_paths():
 
 
 def test_installer_powershell_uses_escaped_dollar():
-    """In NSIS literal strings (single-quoted), $$ produces a literal '$' so
+    """In NSIS command strings, $$ produces a literal '$' so
     PowerShell receives intact $-variables. Bare $name would be expanded by NSIS
     to empty (or the NSIS register value), corrupting the PowerShell script and
     causing 'MissingEndParenthesisInExpression' errors at runtime."""
@@ -129,6 +131,48 @@ def test_installer_powershell_uses_escaped_dollar():
     assert "$$base" in text, (
         "PowerShell variables in NSIS literal strings must be escaped as $$name"
     )
+
+
+def test_installer_powershell_commands_use_normal_single_quotes():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    powershell_lines = [line for line in text.splitlines() if "powershell.exe" in line]
+    assert powershell_lines, "Expected installer.nsi to contain PowerShell commands"
+    assert all("''" not in line for line in powershell_lines), (
+        "Wrap -Command with NSIS $\\\"...$\\\" so PowerShell can keep plain single-quoted literals"
+    )
+
+
+def test_installer_aborts_on_critical_exec_failures():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert '!macro AbortOnExecFailure LABEL' in text, (
+        "Critical nsExec steps must check and react to child-process exit codes"
+    )
+    assert text.count('!insertmacro AbortOnExecFailure "') >= 6, (
+        "Core extraction/bootstrap/install steps must stop the installer when a child process fails"
+    )
+
+
+def test_installer_preserves_temp_log_for_failed_runs():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert '!define TEMP_INSTALL_LOG_BASENAME "qmt-gateway-installer.log"' in text
+    assert '!define TEMP_INSTALL_LOG_PATH "$TEMP\\${TEMP_INSTALL_LOG_BASENAME}"' in text, (
+        "Installer must mirror logs to a stable temp file so failed installs leave diagnostics"
+    )
+    assert "Join-Path $$env:TEMP '${TEMP_INSTALL_LOG_BASENAME}'" in text, (
+        "PowerShell child processes must append diagnostics to the temp install log"
+    )
+    assert 'Function .onInstFailed' in text and 'INSTALL_FAILED_LOG_MESSAGE' in text, (
+        "Failed installs must surface the preserved temp log path to the user"
+    )
+
+
+def test_installer_streams_detail_output_to_dedicated_temp_logs():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert 'qmt-gateway-extract.log' in text
+    assert 'qmt-gateway-bootstrap-pip.log' in text
+    assert 'qmt-gateway-install-deps.log' in text
+    assert 'Tee-Object -FilePath $$log' not in text
+    assert 'Tee-Object -FilePath $$tempLog' not in text
 
 
 def test_installer_logs_absolute_paths_in_log():

@@ -19,6 +19,13 @@ SetCompress off
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 !define PRODUCT_UNINST_ROOT_KEY "HKLM"
 !define PRODUCT_STARTMENU_REGVAL "NSIS:StartMenuDir"
+!define INSTALL_LOG_NAME "install.log"
+!define TEMP_INSTALL_LOG_BASENAME "qmt-gateway-installer.log"
+!define TEMP_INSTALL_LOG_PATH "$TEMP\${TEMP_INSTALL_LOG_BASENAME}"
+!define TEMP_EXTRACT_LOG_BASENAME "qmt-gateway-extract.log"
+!define TEMP_BOOTSTRAP_LOG_BASENAME "qmt-gateway-bootstrap-pip.log"
+!define TEMP_INSTALL_DEPS_LOG_BASENAME "qmt-gateway-install-deps.log"
+!define PS_UNINSTALL_REG_PATH "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -26,15 +33,26 @@ SetCompress off
 
 
 !macro LogInit
-    FileOpen $0 "$INSTDIR\install.log" w
+    FileOpen $0 "${TEMP_INSTALL_LOG_PATH}" w
     FileWrite $0 "[Install]$\r$\n"
     FileWrite $0 "Started: $\r$\n"
+    FileWrite $0 "InstallDir=$INSTDIR$\r$\n"
+    FileWrite $0 "TempLog=${TEMP_INSTALL_LOG_PATH}$\r$\n"
+    FileClose $0
+    FileOpen $0 "$INSTDIR\${INSTALL_LOG_NAME}" w
+    FileWrite $0 "[Install]$\r$\n"
+    FileWrite $0 "Started: $\r$\n"
+    FileWrite $0 "InstallDir=$INSTDIR$\r$\n"
+    FileWrite $0 "TempLog=${TEMP_INSTALL_LOG_PATH}$\r$\n"
     FileClose $0
 !macroend
 
 
 !macro LogLine TEXT
-    FileOpen $0 "$INSTDIR\install.log" a
+    FileOpen $0 "${TEMP_INSTALL_LOG_PATH}" a
+    FileWrite $0 "${TEXT}$\r$\n"
+    FileClose $0
+    FileOpen $0 "$INSTDIR\${INSTALL_LOG_NAME}" a
     FileWrite $0 "${TEXT}$\r$\n"
     FileClose $0
 !macroend
@@ -43,11 +61,23 @@ SetCompress off
 !macro LogStep LABEL
     Push $0
     Push $1
-    FileOpen $0 "$INSTDIR\install.log" a
+    FileOpen $0 "${TEMP_INSTALL_LOG_PATH}" a
+    FileWrite $0 "==== ${LABEL} ====$\r$\n"
+    FileClose $0
+    FileOpen $0 "$INSTDIR\${INSTALL_LOG_NAME}" a
     FileWrite $0 "==== ${LABEL} ====$\r$\n"
     FileClose $0
     Pop $1
     Pop $0
+!macroend
+
+
+!macro AbortOnExecFailure LABEL
+    Pop $1
+    ${If} $1 != "0"
+        !insertmacro LogLine "ERROR: ${LABEL} failed with exit code $1"
+        Abort "${LABEL} failed"
+    ${EndIf}
 !macroend
 
 ; MUI Settings
@@ -86,7 +116,7 @@ var ICONS_GROUP
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "查看安装日志"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
-!define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\install.log"
+!define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\${INSTALL_LOG_NAME}"
 !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
 !insertmacro MUI_PAGE_FINISH
 
@@ -116,6 +146,10 @@ LangString WELCOME_TEXT ${LANG_ENGLISH} \
     "This software requires the Xuntou QMT trading client. If you haven't installed QMT, \
      please download it from your broker's website first.$\n$\n\
      The QMT installation path will be configured in the initialization wizard."
+LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_SIMPCHINESE} \
+    "安装失败。排查日志已保留到：$\n${TEMP_INSTALL_LOG_PATH}"
+LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_ENGLISH} \
+    "Installation failed. Diagnostic log has been preserved at:$\n${TEMP_INSTALL_LOG_PATH}"
 
 Function .onInit
     !insertmacro MUI_LANGDLL_DISPLAY
@@ -127,15 +161,19 @@ Function .onInit
     ${EndIf}
 FunctionEnd
 
+Function .onInstFailed
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(INSTALL_FAILED_LOG_MESSAGE)"
+FunctionEnd
+
 ; Components - use English section names (NSIS limitation), descriptions are localized
 Section "-Core" SEC_CORE
     SectionIn RO
     SetOverwrite on
     SetOutPath "$INSTDIR"
 
-    !insertmacro LogStep "Core: create install dir"
     CreateDirectory "$INSTDIR"
     !insertmacro LogInit
+    !insertmacro LogStep "Core: create install dir"
     !insertmacro LogStep "Core: write uninstall registry"
     ; Publish InstallLocation immediately so PowerShell child processes can
     ; recover the install path from the registry without going through NSIS
@@ -159,12 +197,16 @@ Section "-Core" SEC_CORE
     ; PowerShell reads the install path from the uninstall registry entry that
     ; the installer itself writes early in the Core section. That avoids passing
     ; CJK strings through the NSIS string encoder, which would mangle the bytes
-    ; under the system ANSI code page. Note: in NSIS literal strings, $$ is a
-    ; literal '$' for PowerShell, and '' is a literal single quote.
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $$log = Join-Path $$base ''install.log''; $$py = Join-Path $$base ''python''; Add-Content -LiteralPath $$log -Encoding UTF8 -Value (''INSTDIR='' + $$base); Add-Content -LiteralPath $$log -Encoding UTF8 -Value (''PYTHON_DIR='' + $$py); Add-Content -LiteralPath $$log -Encoding UTF8 -Value (''APP_DIR='' + (Join-Path $$base ''app''))"'
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $$py = Join-Path $$base ''python''; $$zip = Join-Path $$py ''python-embed.zip''; Expand-Archive -Path $$zip -DestinationPath $$py -Force 2>&1 | Out-File -FilePath (Join-Path $$py ''_extract.log'') -Append -Encoding UTF8"'
-    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "$$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $$p = Join-Path (Join-Path $$base ''python'') ''python313._pth''; if (Test-Path -LiteralPath $$p) { (Get-Content -LiteralPath $$p) -replace ''^#import site$'', ''import site'' | Set-Content -LiteralPath $$p -Encoding UTF8 }"'
-    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "$$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; Remove-Item -LiteralPath (Join-Path (Join-Path $$base ''python'') ''python-embed.zip'') -Force -ErrorAction SilentlyContinue"'
+    ; under the system ANSI code page. Use an NSIS double-quoted literal so
+    ; PowerShell can keep its normal single-quoted strings.
+    nsExec::ExecToLog "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = Join-Path $$env:TEMP '${TEMP_INSTALL_LOG_BASENAME}'; $$py = Join-Path $$base 'python'; foreach ($$line in @('INSTDIR=' + $$base, 'TEMP_LOG=' + $$tempLog, 'PYTHON_DIR=' + $$py, 'APP_DIR=' + (Join-Path $$base 'app'))) { Add-Content -LiteralPath $$log -Encoding UTF8 -Value $$line; Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value $$line }$\""
+    !insertmacro AbortOnExecFailure "Core metadata logging"
+    nsExec::ExecToLog "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$py = Join-Path $$base 'python'; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = Join-Path $$env:TEMP '${TEMP_INSTALL_LOG_BASENAME}'; $$zip = Join-Path $$py 'python-embed.zip'; $$detailLog = Join-Path $$py '_extract.log'; $$tempDetailLog = Join-Path $$env:TEMP '${TEMP_EXTRACT_LOG_BASENAME}'; foreach ($$line in @('EXTRACT_LOG=' + $$detailLog, 'TEMP_EXTRACT_LOG=' + $$tempDetailLog)) { Add-Content -LiteralPath $$log -Encoding UTF8 -Value $$line; Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value $$line }; Expand-Archive -Path $$zip -DestinationPath $$py -Force *>&1 | Tee-Object -FilePath $$detailLog -Append | Tee-Object -FilePath $$tempDetailLog -Append$\""
+    !insertmacro AbortOnExecFailure "Extract embedded Python"
+    nsExec::ExecToLog "powershell.exe -NoProfile -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = Join-Path $$env:TEMP '${TEMP_INSTALL_LOG_BASENAME}'; $$p = Join-Path (Join-Path $$base 'python') 'python313._pth'; if (Test-Path -LiteralPath $$p) { (Get-Content -LiteralPath $$p) -replace '^#import site$$', 'import site' | Set-Content -LiteralPath $$p -Encoding UTF8; Add-Content -LiteralPath $$log -Encoding UTF8 -Value ('UPDATED_PTH=' + $$p); Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value ('UPDATED_PTH=' + $$p) }$\""
+    !insertmacro AbortOnExecFailure "Enable import site in python313._pth"
+    nsExec::ExecToLog "powershell.exe -NoProfile -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = Join-Path $$env:TEMP '${TEMP_INSTALL_LOG_BASENAME}'; $$target = Join-Path (Join-Path $$base 'python') 'python-embed.zip'; Remove-Item -LiteralPath $$target -Force -ErrorAction SilentlyContinue; Add-Content -LiteralPath $$log -Encoding UTF8 -Value ('REMOVED=' + $$target); Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value ('REMOVED=' + $$target)$\""
+    !insertmacro AbortOnExecFailure "Remove embedded Python zip"
 
     !insertmacro LogStep "Core: copy application source"
     ; Copy application source to $INSTDIR\app
@@ -187,12 +229,14 @@ Section "-Core" SEC_CORE
     ; install dependencies into the embedded Python's site-packages directly.
     SetOutPath "$INSTDIR\python"
     File "get-pip.py"
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $$py = Join-Path $$base ''python''; $$log = Join-Path $$base ''install.log''; Add-Content -LiteralPath $$log -Encoding UTF8 -Value ''PIP_BOOTSTRAP_START''; $$pythonExe = Join-Path $$py ''python.exe''; Set-Location $$py; & $$pythonExe -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple; & $$pythonExe -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn; & $$pythonExe (Join-Path $$py ''get-pip.py'') --no-warn-script-location 2>&1 | Out-File -FilePath (Join-Path $$py ''_bootstrap_pip.log'') -Append -Encoding UTF8; Remove-Item -LiteralPath (Join-Path $$py ''get-pip.py'') -Force -ErrorAction SilentlyContinue"'
+    nsExec::ExecToLog "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$py = Join-Path $$base 'python'; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = Join-Path $$env:TEMP '${TEMP_INSTALL_LOG_BASENAME}'; $$detailLog = Join-Path $$py '_bootstrap_pip.log'; $$tempDetailLog = Join-Path $$env:TEMP '${TEMP_BOOTSTRAP_LOG_BASENAME}'; foreach ($$line in @('PIP_BOOTSTRAP_START', 'BOOTSTRAP_LOG=' + $$detailLog, 'TEMP_BOOTSTRAP_LOG=' + $$tempDetailLog)) { Add-Content -LiteralPath $$log -Encoding UTF8 -Value $$line; Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value $$line }; $$pythonExe = Join-Path $$py 'python.exe'; Set-Location $$py; & $$pythonExe -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple 2>&1 | Tee-Object -FilePath $$detailLog -Append | Tee-Object -FilePath $$tempDetailLog -Append; if ($$LASTEXITCODE) { exit $$LASTEXITCODE }; & $$pythonExe -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn 2>&1 | Tee-Object -FilePath $$detailLog -Append | Tee-Object -FilePath $$tempDetailLog -Append; if ($$LASTEXITCODE) { exit $$LASTEXITCODE }; & $$pythonExe (Join-Path $$py 'get-pip.py') --no-warn-script-location 2>&1 | Tee-Object -FilePath $$detailLog -Append | Tee-Object -FilePath $$tempDetailLog -Append; if ($$LASTEXITCODE) { exit $$LASTEXITCODE }; Remove-Item -LiteralPath (Join-Path $$py 'get-pip.py') -Force -ErrorAction SilentlyContinue$\""
+    !insertmacro AbortOnExecFailure "Bootstrap pip"
 
     !insertmacro LogStep "Core: install dependencies"
     ; Install dependencies into the embedded Python's site-packages.
     DetailPrint "正在安装 Python 依赖 (使用国内镜像源)..."
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $$py = Join-Path $$base ''python''; $$app = Join-Path $$base ''app''; $$log = Join-Path $$base ''install.log''; Add-Content -LiteralPath $$log -Encoding UTF8 -Value ''PIP_INSTALL_START''; $$pythonExe = Join-Path $$py ''python.exe''; Set-Location $$py; & $$pythonExe -m pip install -e $$app --no-warn-script-location 2>&1 | Out-File -FilePath (Join-Path $$py ''_install_deps.log'') -Append -Encoding UTF8"'
+    nsExec::ExecToLog "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$py = Join-Path $$base 'python'; $$app = Join-Path $$base 'app'; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = Join-Path $$env:TEMP '${TEMP_INSTALL_LOG_BASENAME}'; $$detailLog = Join-Path $$py '_install_deps.log'; $$tempDetailLog = Join-Path $$env:TEMP '${TEMP_INSTALL_DEPS_LOG_BASENAME}'; foreach ($$line in @('PIP_INSTALL_START', 'INSTALL_DEPS_LOG=' + $$detailLog, 'TEMP_INSTALL_DEPS_LOG=' + $$tempDetailLog)) { Add-Content -LiteralPath $$log -Encoding UTF8 -Value $$line; Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value $$line }; $$pythonExe = Join-Path $$py 'python.exe'; Set-Location $$py; & $$pythonExe -m pip install -e $$app --no-warn-script-location 2>&1 | Tee-Object -FilePath $$detailLog -Append | Tee-Object -FilePath $$tempDetailLog -Append; if ($$LASTEXITCODE) { exit $$LASTEXITCODE }$\""
+    !insertmacro AbortOnExecFailure "Install Python dependencies"
 
     !insertmacro LogStep "Core: write shortcuts"
     ; Shortcuts
