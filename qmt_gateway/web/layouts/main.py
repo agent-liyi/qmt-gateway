@@ -379,6 +379,7 @@ def ChangePasswordModal():
                     type="button",
                     id="tab-login-password",
                     cls="tab tab-bordered tab-active",
+                    style="color: #D13527; border-color: #D13527;",
                     onclick="switchPasswordTab('login')",
                 ),
                 Button(
@@ -386,6 +387,7 @@ def ChangePasswordModal():
                     type="button",
                     id="tab-qmt-password",
                     cls="tab tab-bordered",
+                    style="color: #6b7280;",
                     onclick="switchPasswordTab('qmt')",
                 ),
                 cls="tabs tabs-boxed mb-4",
@@ -503,13 +505,29 @@ def ChangePasswordModalScript():
             }
 
             if (tab === 'login') {
-                if (loginTab) loginTab.classList.add('tab-active');
-                if (qmtTab) qmtTab.classList.remove('tab-active');
+                if (loginTab) {
+                    loginTab.classList.add('tab-active');
+                    loginTab.style.color = '#D13527';
+                    loginTab.style.borderColor = '#D13527';
+                }
+                if (qmtTab) {
+                    qmtTab.classList.remove('tab-active');
+                    qmtTab.style.color = '#6b7280';
+                    qmtTab.style.borderColor = '';
+                }
                 if (loginForm) loginForm.classList.remove('hidden');
                 if (qmtForm) qmtForm.classList.add('hidden');
             } else {
-                if (loginTab) loginTab.classList.remove('tab-active');
-                if (qmtTab) qmtTab.classList.add('tab-active');
+                if (loginTab) {
+                    loginTab.classList.remove('tab-active');
+                    loginTab.style.color = '#6b7280';
+                    loginTab.style.borderColor = '';
+                }
+                if (qmtTab) {
+                    qmtTab.classList.add('tab-active');
+                    qmtTab.style.color = '#D13527';
+                    qmtTab.style.borderColor = '#D13527';
+                }
                 if (loginForm) loginForm.classList.add('hidden');
                 if (qmtForm) qmtForm.classList.remove('hidden');
             }

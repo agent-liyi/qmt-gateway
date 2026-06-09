@@ -63,6 +63,21 @@ def test_main_layout_change_password_modal_renders_input_fields():
     assert 'children="' not in login_html
 
 
+def test_change_password_active_tab_uses_brand_color():
+    from qmt_gateway.web.layouts.main import MainLayout
+
+    html = to_xml(MainLayout("x", user={"username": "admin"}, active_menu="trading"))
+    login_tab = html[html.index('id="tab-login-password"'):html.index('id="tab-login-password"') + 200]
+    qmt_tab = html[html.index('id="tab-qmt-password"'):html.index('id="tab-qmt-password"') + 200]
+
+    assert "tab-active" in login_tab
+    assert "#D13527" in login_tab
+
+    script_html = to_xml(ChangePasswordModalScript())
+    assert "'#D13527'" in script_html or '"#D13527"' in script_html
+    assert "loginTab.style.color" in script_html
+
+
 def test_change_password_qmt_submit_sends_confirm_equal_new():
     html = to_xml(ChangePasswordModalScript())
     assert "new_qmt_password_confirm: newPassword" in html
