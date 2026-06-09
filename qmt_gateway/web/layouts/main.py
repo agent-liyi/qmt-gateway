@@ -392,78 +392,74 @@ def ChangePasswordModal():
             ),
             # 登录密码表单
             Div(
+                P(
+                    "修改登录密码后，当前会话将立即失效，需要重新登录。",
+                    cls="mb-4 text-sm text-gray-600",
+                ),
+                Div(
+                    Label("原密码", cls="label"),
+                    Input(
+                        type="password",
+                        id="change-password-old",
+                        placeholder="请输入当前密码",
+                        cls="input input-bordered w-full",
+                        autocomplete="current-password",
+                    ),
+                    cls="mb-3",
+                ),
+                Div(
+                    Label("新密码", cls="label"),
+                    Input(
+                        type="password",
+                        id="change-password-new",
+                        placeholder="请输入新密码",
+                        cls="input input-bordered w-full",
+                        autocomplete="new-password",
+                    ),
+                    cls="mb-3",
+                ),
+                Div(
+                    Label("再次输入新密码", cls="label"),
+                    Input(
+                        type="password",
+                        id="change-password-confirm",
+                        placeholder="请再次输入新密码",
+                        cls="input input-bordered w-full",
+                        autocomplete="new-password",
+                    ),
+                    cls="mb-3",
+                ),
                 id="login-password-form",
-                children=[
-                    P(
-                        "修改登录密码后，当前会话将立即失效，需要重新登录。",
-                        cls="mb-4 text-sm text-gray-600",
-                    ),
-                    Div(
-                        Label("原密码", cls="label"),
-                        Input(
-                            type="password",
-                            id="change-password-old",
-                            placeholder="请输入当前密码",
-                            cls="input input-bordered w-full",
-                            autocomplete="current-password",
-                        ),
-                        cls="mb-3",
-                    ),
-                    Div(
-                        Label("新密码", cls="label"),
-                        Input(
-                            type="password",
-                            id="change-password-new",
-                            placeholder="请输入新密码",
-                            cls="input input-bordered w-full",
-                            autocomplete="new-password",
-                        ),
-                        cls="mb-3",
-                    ),
-                    Div(
-                        Label("再次输入新密码", cls="label"),
-                        Input(
-                            type="password",
-                            id="change-password-confirm",
-                            placeholder="请再次输入新密码",
-                            cls="input input-bordered w-full",
-                            autocomplete="new-password",
-                        ),
-                        cls="mb-3",
-                    ),
-                ],
             ),
             # QMT 交易密码表单
             Div(
+                P(
+                    "修改 QMT 交易密码后，下次重启 QMT 时将自动使用新密码登录。",
+                    cls="mb-4 text-sm text-gray-600",
+                ),
+                Div(
+                    Label("登录密码", cls="label"),
+                    Input(
+                        type="password",
+                        id="change-qmt-login-password",
+                        placeholder="请输入登录密码以验证身份",
+                        cls="input input-bordered w-full",
+                        autocomplete="current-password",
+                    ),
+                    cls="mb-3",
+                ),
+                Div(
+                    Label("新交易密码", cls="label"),
+                    Input(
+                        type="password",
+                        id="change-qmt-new-password",
+                        placeholder="请输入新的交易密码",
+                        cls="input input-bordered w-full",
+                    ),
+                    cls="mb-3",
+                ),
                 id="qmt-password-form",
                 cls="hidden",
-                children=[
-                    P(
-                        "修改 QMT 交易密码后，下次重启 QMT 时将自动使用新密码登录。",
-                        cls="mb-4 text-sm text-gray-600",
-                    ),
-                    Div(
-                        Label("登录密码", cls="label"),
-                        Input(
-                            type="password",
-                            id="change-qmt-login-password",
-                            placeholder="请输入登录密码以验证身份",
-                            cls="input input-bordered w-full",
-                            autocomplete="current-password",
-                        ),
-                        cls="mb-3",
-                    ),
-                    Div(
-                        Label("新交易密码", cls="label"),
-                        Input(
-                            type="password",
-                            id="change-qmt-new-password",
-                            placeholder="请输入新的交易密码",
-                            cls="input input-bordered w-full",
-                        ),
-                        cls="mb-3",
-                    ),
-                ],
             ),
             Div(id="change-password-message", cls="hidden text-sm mb-4"),
             Div(

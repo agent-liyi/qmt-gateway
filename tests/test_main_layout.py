@@ -44,6 +44,25 @@ def test_main_layout_renders_new_change_password_dialog():
     assert "再次输入新的 QMT 交易密码" not in html
 
 
+def test_main_layout_change_password_modal_renders_input_fields():
+    from qmt_gateway.web.layouts.main import MainLayout
+
+    html = to_xml(MainLayout("x", user={"username": "admin"}, active_menu="trading"))
+    login_section_start = html.index('id="login-password-form"')
+    login_section_end = html.index('id="qmt-password-form"')
+    login_html = html[login_section_start:login_section_end]
+    assert 'id="change-password-old"' in login_html
+    assert 'id="change-password-new"' in login_html
+    assert 'id="change-password-confirm"' in login_html
+
+    qmt_section_end = html.index('id="change-password-message"')
+    qmt_html = html[login_section_end:qmt_section_end]
+    assert 'id="change-qmt-login-password"' in qmt_html
+    assert 'id="change-qmt-new-password"' in qmt_html
+    assert 'children="' not in qmt_html
+    assert 'children="' not in login_html
+
+
 def test_change_password_qmt_submit_sends_confirm_equal_new():
     html = to_xml(ChangePasswordModalScript())
     assert "new_qmt_password_confirm: newPassword" in html
