@@ -120,6 +120,17 @@ def test_installer_powershell_calls_pass_absolute_paths():
     )
 
 
+def test_installer_powershell_uses_escaped_dollar():
+    """In NSIS literal strings (single-quoted), $$ produces a literal '$' so
+    PowerShell receives intact $-variables. Bare $name would be expanded by NSIS
+    to empty (or the NSIS register value), corrupting the PowerShell script and
+    causing 'MissingEndParenthesisInExpression' errors at runtime."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "$$base" in text, (
+        "PowerShell variables in NSIS literal strings must be escaped as $$name"
+    )
+
+
 def test_installer_logs_absolute_paths_in_log():
     """The installer must write the absolute install path into install.log *before*
     invoking PowerShell, so the log still contains the path even if every PowerShell
