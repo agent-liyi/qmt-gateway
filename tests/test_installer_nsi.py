@@ -105,24 +105,29 @@ def test_installer_does_not_create_venv():
 
 
 def test_installer_powershell_calls_pass_absolute_paths():
-    """The installer reads $INSTDIR via QT_INSTDIR_QMTGW env var so PowerShell never
-    has to deal with NSIS string encoding of CJK characters."""
+    """The installer reads $INSTDIR from the Windows registry so PowerShell never
+    has to deal with NSIS string encoding of CJK characters. The registry key is
+    written early in the Core section so all subsequent nsExec calls can read it."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\python' not in text, (
         "Do not use -File with a script path that contains $INSTDIR"
     )
-    assert "$env:QT_INSTDIR_QMTGW" in text, (
-        "nsExec commands must read the install path from $env:QT_INSTDIR_QMTGW"
+    assert "Get-ItemProperty" in text and "InstallLocation" in text, (
+        "nsExec commands must read the install path from the Windows registry via Get-ItemProperty"
+    )
+    assert "HKLM" in text and "Uninstall" in text, (
+        "Registry key must be under HKLM Uninstall path"
     )
 
 
 def test_installer_logs_absolute_paths_in_log():
     """The installer must write the absolute install path into install.log *before*
     invoking PowerShell, so the log still contains the path even if every PowerShell
-    call fails."""
+    call fails. The path is passed via Windows registry (WriteRegStr + Get-ItemProperty)
+    rather than env vars, to avoid NSIS ANSI code page corruption of CJK characters."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "SetEnvironmentVariableW" in text and "QT_INSTDIR_QMTGW" in text, (
-        "Must export QT_INSTDIR_QMTGW env var so PowerShell can read the path without going through NSIS string encoding"
+    assert "WriteRegStr" in text and "InstallLocation" in text, (
+        "Must write InstallLocation to registry early so PowerShell can read it"
     )
     assert "Add-Content -LiteralPath" in text and "install.log" in text, (
         "install.log must be written by PowerShell with explicit UTF-8 encoding"

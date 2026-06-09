@@ -136,13 +136,11 @@ Section "-Core" SEC_CORE
     !insertmacro LogStep "Core: create install dir"
     CreateDirectory "$INSTDIR"
     !insertmacro LogInit
-    !insertmacro LogStep "Core: export env vars"
-    ; Stash the absolute install path as environment variables so PowerShell
-    ; can read them without having to round-trip through the NSIS string
-    ; encoder. Avoids the GBK-vs-Unicode mishap we saw in the previous build.
-    System::Call 'Kernel32::SetEnvironmentVariableW(w "QT_INSTDIR_QMTGW", w R"$INSTDIR$\") i.r0'
-    System::Call 'Kernel32::SetEnvironmentVariableW(w "QT_INSTDIR_PYTHON", w R"$INSTDIR$\python\") i.r0'
-    System::Call 'Kernel32::SetEnvironmentVariableW(w "QT_INSTDIR_APP", w R"$INSTDIR$\app\") i.r0'
+    !insertmacro LogStep "Core: write uninstall registry"
+    ; Publish InstallLocation immediately so PowerShell child processes can
+    ; recover the install path from the registry without going through NSIS
+    ; string expansion (which corrupts CJK under the system ANSI code page).
+    WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "InstallLocation" "$INSTDIR"
     !insertmacro LogStep "Core: create directories"
 
     ; Create directories
@@ -155,18 +153,17 @@ Section "-Core" SEC_CORE
     DetailPrint "正在释放内嵌 Python 3.13..."
     SetOutPath "$INSTDIR\python"
     File "python-embed.zip"
-    FileClose $0
 
     !insertmacro LogStep "Core: extract embedded Python"
     SetOutPath "$INSTDIR\python"
-    ; PowerShell writes the absolute paths into install.log with explicit UTF-8
-    ; encoding. NSIS FileWrite under Unicode True still emits ANSI for 'literal'
-    ; forms when the source string contains a variable expansion, so we route
-    ; every Chinese path through PowerShell where UTF-8 round-trips cleanly.
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$log = Join-Path $env:QT_INSTDIR_QMTGW ''install.log''; Add-Content -LiteralPath $log -Encoding UTF8 -Value (''INSTDIR='' + $env:QT_INSTDIR_QMTGW); Add-Content -LiteralPath $log -Encoding UTF8 -Value (''PYTHON_ZIP='' + (Join-Path $env:QT_INSTDIR_PYTHON ''python-embed.zip'')); Add-Content -LiteralPath $log -Encoding UTF8 -Value (''PYTHON_DIR='' + $env:QT_INSTDIR_PYTHON)"'
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path (Join-Path $env:QT_INSTDIR_PYTHON ''python-embed.zip'') -DestinationPath $env:QT_INSTDIR_PYTHON -Force 2>&1 | Out-File -FilePath (Join-Path $env:QT_INSTDIR_PYTHON ''_extract.log'') -Append -Encoding UTF8"'
-    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "$p = Join-Path $env:QT_INSTDIR_PYTHON ''python313._pth''; if (Test-Path -LiteralPath $p) { (Get-Content -LiteralPath $p) -replace ''^#import site$'', ''import site'' | Set-Content -LiteralPath $p -Encoding UTF8 }"'
-    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "Remove-Item -LiteralPath (Join-Path $env:QT_INSTDIR_PYTHON ''python-embed.zip'') -Force -ErrorAction SilentlyContinue"'
+    ; PowerShell reads the install path from the uninstall registry entry that
+    ; the installer itself writes in Section -Post. That avoids passing CJK
+    ; strings through the NSIS string encoder, which would mangle the bytes
+    ; under the system ANSI code page.
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $log = Join-Path $base ''install.log''; $py = Join-Path $base ''python''; Add-Content -LiteralPath $log -Encoding UTF8 -Value (''INSTDIR='' + $base); Add-Content -LiteralPath $log -Encoding UTF8 -Value (''PYTHON_DIR='' + $py); Add-Content -LiteralPath $log -Encoding UTF8 -Value (''APP_DIR='' + (Join-Path $base ''app''))"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $py = Join-Path $base ''python''; $zip = Join-Path $py ''python-embed.zip''; Expand-Archive -Path $zip -DestinationPath $py -Force 2>&1 | Out-File -FilePath (Join-Path $py ''_extract.log'') -Append -Encoding UTF8"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $p = Join-Path (Join-Path $base ''python'') ''python313._pth''; if (Test-Path -LiteralPath $p) { (Get-Content -LiteralPath $p) -replace ''^#import site$'', ''import site'' | Set-Content -LiteralPath $p -Encoding UTF8 }"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; Remove-Item -LiteralPath (Join-Path (Join-Path $base ''python'') ''python-embed.zip'') -Force -ErrorAction SilentlyContinue"'
 
     !insertmacro LogStep "Core: copy application source"
     ; Copy application source to $INSTDIR\app
@@ -189,12 +186,12 @@ Section "-Core" SEC_CORE
     ; install dependencies into the embedded Python's site-packages directly.
     SetOutPath "$INSTDIR\python"
     File "get-pip.py"
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Content -LiteralPath (Join-Path $env:QT_INSTDIR_QMTGW ''install.log'') -Encoding UTF8 -Value ''PIP_BOOTSTRAP_CMD=python\\python.exe get-pip.py''; $pythonExe = Join-Path $env:QT_INSTDIR_PYTHON ''python.exe''; Set-Location $env:QT_INSTDIR_PYTHON; & $pythonExe -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple; & $pythonExe -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn; & $pythonExe (Join-Path $env:QT_INSTDIR_PYTHON ''get-pip.py'') --no-warn-script-location 2>&1 | Out-File -FilePath (Join-Path $env:QT_INSTDIR_PYTHON ''_bootstrap_pip.log'') -Append -Encoding UTF8; Remove-Item -LiteralPath (Join-Path $env:QT_INSTDIR_PYTHON ''get-pip.py'') -Force -ErrorAction SilentlyContinue"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $py = Join-Path $base ''python''; $log = Join-Path $base ''install.log''; Add-Content -LiteralPath $log -Encoding UTF8 -Value ''PIP_BOOTSTRAP_START''; $pythonExe = Join-Path $py ''python.exe''; Set-Location $py; & $pythonExe -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple; & $pythonExe -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn; & $pythonExe (Join-Path $py ''get-pip.py'') --no-warn-script-location 2>&1 | Out-File -FilePath (Join-Path $py ''_bootstrap_pip.log'') -Append -Encoding UTF8; Remove-Item -LiteralPath (Join-Path $py ''get-pip.py'') -Force -ErrorAction SilentlyContinue"'
 
     !insertmacro LogStep "Core: install dependencies"
     ; Install dependencies into the embedded Python's site-packages.
     DetailPrint "正在安装 Python 依赖 (使用国内镜像源)..."
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Add-Content -LiteralPath (Join-Path $env:QT_INSTDIR_QMTGW ''install.log'') -Encoding UTF8 -Value ''PIP_INSTALL_CMD=python\\python.exe -m pip install -e app''; $pythonExe = Join-Path $env:QT_INSTDIR_PYTHON ''python.exe''; Set-Location $env:QT_INSTDIR_PYTHON; & $pythonExe -m pip install -e $env:QT_INSTDIR_APP --no-warn-script-location 2>&1 | Out-File -FilePath (Join-Path $env:QT_INSTDIR_PYTHON ''_install_deps.log'') -Append -Encoding UTF8"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$base = (Get-ItemProperty -LiteralPath ''HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\迅投 QMT 交易网关'').InstallLocation; $py = Join-Path $base ''python''; $app = Join-Path $base ''app''; $log = Join-Path $base ''install.log''; Add-Content -LiteralPath $log -Encoding UTF8 -Value ''PIP_INSTALL_START''; $pythonExe = Join-Path $py ''python.exe''; Set-Location $py; & $pythonExe -m pip install -e $app --no-warn-script-location 2>&1 | Out-File -FilePath (Join-Path $py ''_install_deps.log'') -Append -Encoding UTF8"'
 
     !insertmacro LogStep "Core: write shortcuts"
     ; Shortcuts
@@ -237,6 +234,7 @@ LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN a
 Function OpenBrowser
     ExecShell "open" "http://localhost:8130"
 FunctionEnd
+
 
 Section -AdditionalIcons
     !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
