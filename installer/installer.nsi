@@ -3,7 +3,7 @@
 ;
 ; Prerequisites:
 ;   - NSIS 3.x installed (makensis in PATH)
-;   - Python 3.13 embeddable package downloaded to installer\python-3.13-embed-amd64.zip
+;   - Python 3.13 embeddable package downloaded to installer\python-embed.zip
 ;
 ; Build: makensis /INPUTCHARSET UTF8 installer\installer.nsi
 
@@ -145,8 +145,8 @@ Section "-Core" SEC_CORE
     ; Copy embedded Python distribution
     DetailPrint "正在释放内嵌 Python 3.13..."
     SetOutPath "$INSTDIR\python"
-    File "python-3.13-embed-amd64.zip"
-    nsExec::ExecToLog 'cmd.exe /C "tar -xf "$INSTDIR\python\python-3.13-embed-amd64.zip" -C "$INSTDIR\python""'
+    File "python-embed.zip"
+    nsExec::ExecToLog 'cmd.exe /C "tar -xf "$INSTDIR\python\python-embed.zip" -C "$INSTDIR\python""'
 
     !insertmacro LogStep "Core: copy application source"
     ; Copy application source to $INSTDIR\app

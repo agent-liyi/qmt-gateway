@@ -52,10 +52,10 @@ def test_installer_does_not_persist_install_dir_registry():
 
 def test_installer_bundles_python_embed_zip():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "python-3.13-embed-amd64.zip" in text, (
+    assert "python-embed.zip" in text, (
         "installer must include the embedded Python zip so venv creation can succeed"
     )
-    assert "File \"python-3.13-embed-amd64.zip\"" in text
+    assert "File \"python-embed.zip\"" in text
 
 
 def test_installer_section_starts_with_setoutpath_instdir():
