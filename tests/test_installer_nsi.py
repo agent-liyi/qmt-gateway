@@ -38,11 +38,36 @@ def test_installer_components_section_descriptions_present():
     assert "LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE}" in text
 
 
-def test_ci_workflow_writes_nsi_with_bom():
-    workflow = (
-        Path(__file__).resolve().parents[1] / ".github" / "workflows" / "build-installer.yml"
+def test_installer_does_not_persist_install_dir_registry():
+    """MUI_DIRECTORY pre-fills $INSTDIR from InstallDirRegKey. Persisting the
+    install path (or anything nested) breaks subsequent reinstalls (#61)."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "InstallDirRegKey" not in text, (
+        "Do not pre-fill $INSTDIR from registry - previous broken path may persist"
     )
-    text = workflow.read_text(encoding="utf-8")
-    assert "New-Object System.Text.UTF8Encoding $true" in text, (
-        "CI must write installer.nsi with UTF-8 BOM so mui2 langfile is read correctly"
+    assert 'WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}"' not in text, (
+        "Do not write App Paths entry from installer - it stores a derived path"
     )
+
+
+def test_installer_bundles_python_embed_zip():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "python-3.13-embed-amd64.zip" in text, (
+        "installer must include the embedded Python zip so venv creation can succeed"
+    )
+    assert "File \"python-3.13-embed-amd64.zip\"" in text
+
+
+def test_installer_section_starts_with_setoutpath_instdir():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    core_idx = text.index("Section \"!Core\" SEC_CORE")
+    next_section = text.index("Section \"Autostart\"", core_idx)
+    core_body = text[core_idx:next_section]
+    setoutpath_lines = [
+        line.strip() for line in core_body.splitlines()
+        if line.strip().startswith("SetOutPath")
+    ]
+    assert setoutpath_lines[0] == 'SetOutPath "$INSTDIR"', (
+        "Core section must explicitly reset SetOutPath to $INSTDIR at the top"
+    )
+

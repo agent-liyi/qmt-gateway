@@ -15,6 +15,7 @@ SetCompress off
 !define PRODUCT_PUBLISHER "quantclaws"
 !define PRODUCT_WEB_SITE "https://github.com/quantclaws/qmt-gateway"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\qmt-gateway.exe"
+!define PRODUCT_DIR_REGKEY_WOW "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\qmt-gateway.exe"
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 !define PRODUCT_UNINST_ROOT_KEY "HKLM"
 !define PRODUCT_STARTMENU_REGVAL "NSIS:StartMenuDir"
@@ -76,7 +77,6 @@ var ICONS_GROUP
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 OutFile "QMT-Gateway-Setup-${PRODUCT_VERSION}-build${BUILD_NUMBER}.exe"
 InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
-InstallDirRegKey HKLM "${PRODUCT_DIR_REGKEY}" ""
 ShowInstDetails show
 ShowUnInstDetails show
 RequestExecutionLevel admin
@@ -103,22 +103,19 @@ FunctionEnd
 ; Components - use English section names (NSIS limitation), descriptions are localized
 Section "!Core" SEC_CORE
     SectionIn RO
-    SetOutPath "$INSTDIR"
     SetOverwrite on
+    SetOutPath "$INSTDIR"
 
     ; Create directories
     CreateDirectory "$INSTDIR\python"
     CreateDirectory "$INSTDIR\app"
     CreateDirectory "$INSTDIR\data"
 
-    ; Extract embedded Python
-    DetailPrint "正在解压内嵌 Python 3.13..."
-    nsExec::ExecToLog '"$INSTDIR\python\python.exe" --version'
-    ${If} ${Errors}
-        ; Need to extract Python embeddable package
-        DetailPrint "解压 python-3.13-embed-amd64.zip..."
-        nsExec::ExecToLog 'powershell -Command "Expand-Archive -Path \'$INSTDIR\python-embed.zip\' -DestinationPath \'$INSTDIR\python\' -Force"'
-    ${EndIf}
+    ; Copy embedded Python distribution
+    DetailPrint "正在释放内嵌 Python 3.13..."
+    SetOutPath "$INSTDIR\python"
+    File "python-3.13-embed-amd64.zip"
+    nsExec::ExecToLog 'powershell -NoProfile -Command "Expand-Archive -Path $INSTDIR\python\python-3.13-embed-amd64.zip -DestinationPath $INSTDIR\python -Force"'
 
     ; Copy application source to $INSTDIR\app
     SetOutPath "$INSTDIR\app"
@@ -128,9 +125,6 @@ Section "!Core" SEC_CORE
          "..\pyproject.toml"
     File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
          "..\README.md"
-    ; LICENSE file - include only if available
-    ; File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
-    ;      "..\LICENSE"
     SetOutPath "$INSTDIR"
 
     ; Copy startup scripts
@@ -139,15 +133,16 @@ Section "!Core" SEC_CORE
 
     ; Create venv
     DetailPrint "正在创建 Python 虚拟环境..."
+    SetOutPath "$INSTDIR"
     nsExec::ExecToLog '"$INSTDIR\python\python.exe" -m venv "$INSTDIR\.venv"'
 
     ; Write pip.conf (国内镜像源)
     DetailPrint "正在配置 pip 国内镜像源..."
-    nsExec::ExecToLog 'powershell -Command "Set-Content -Path \'$INSTDIR\.venv\pip.conf\' -Value \'[global]$\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple$\ntrusted-host = pypi.tuna.tsinghua.edu.cn\' -Encoding UTF8"'
+    nsExec::ExecToLog 'powershell -NoProfile -Command "Set-Content -Path $INSTDIR\.venv\pip.conf -Value ([Environment]::NewLine + ''[global]'' + [Environment]::NewLine + ''index-url = https://pypi.tuna.tsinghua.edu.cn/simple'' + [Environment]::NewLine + ''trusted-host = pypi.tuna.tsinghua.edu.cn'') -Encoding UTF8"'
 
     ; Install dependencies
     DetailPrint "正在安装 Python 依赖 (使用国内镜像源)..."
-    nsExec::ExecToLog '"$INSTDIR\.venv\Scripts\pip.exe" install -e "$INSTDIR\app" -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn'
+    nsExec::ExecToLog '"$INSTDIR\.venv\Scripts\python.exe" -m pip install -e "$INSTDIR\app" -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn'
 
     ; Shortcuts
     !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
@@ -196,7 +191,6 @@ SectionEnd
 
 Section -Post
     WriteUninstaller "$INSTDIR\uninstall.exe"
-    WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "" "$INSTDIR\.venv\Scripts\qmt-gateway.exe"
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "DisplayName" "$(^Name)"
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "UninstallString" "$INSTDIR\uninstall.exe"
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
@@ -277,5 +271,6 @@ Section Uninstall
     ; Remove registry keys
     DeleteRegKey ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}"
     DeleteRegKey HKLM "${PRODUCT_DIR_REGKEY}"
+    DeleteRegKey HKLM "${PRODUCT_DIR_REGKEY_WOW}"
     SetAutoClose true
 SectionEnd
