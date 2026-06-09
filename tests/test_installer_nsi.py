@@ -105,14 +105,24 @@ def test_installer_does_not_create_venv():
 
 
 def test_installer_powershell_calls_pass_absolute_paths():
-    """NSIS 'literal' string syntax already expands $INSTDIR at compile time, so
-    the PowerShell -Command argument should NOT contain a literal $INSTDIR
-    placeholder for PowerShell to misinterpret."""
+    """NSIS quoted strings expand $INSTDIR at compile time. nsExec commands must use
+    the quoted-string form so PowerShell receives a literal absolute path."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\python' not in text, (
-        "Do not use -File with a script path that contains $INSTDIR; PowerShell will receive the file path correctly but the script body must avoid $INSTDIR references"
+        "Do not use -File with a script path that contains $INSTDIR"
     )
-    assert 'powershell.exe -NoProfile -Command "Set-Location $INSTDIR\\python' in text, (
-        "Use -Command with absolute path so PowerShell sees a literal C:\\ path"
+    assert r'$\"$INSTDIR\python$\"' in text, (
+        "nsExec command must use the NSIS quoted-string form so $INSTDIR is replaced at compile time"
     )
+
+
+def test_installer_logs_absolute_paths_in_log():
+    """The installer must write the absolute install path into install.log *before*
+    invoking PowerShell, so the log still contains the path even if every PowerShell
+    call fails."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert 'FileWrite $0 "INSTDIR=$INSTDIR$\\r$\\n"' in text, (
+        "Must write INSTDIR=... into install.log before any PowerShell call"
+    )
+    assert 'FileWrite $0 "PYTHON_ZIP=$INSTDIR\\python\\python-embed.zip$\\r$\\n"' in text
 

@@ -152,8 +152,15 @@ Section "-Core" SEC_CORE
 
     !insertmacro LogStep "Core: extract embedded Python"
     SetOutPath "$INSTDIR\python"
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path $INSTDIR\python\python-embed.zip -DestinationPath $INSTDIR\python -Force"'
-    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "if (Test-Path $INSTDIR\python\python313._pth) { (Get-Content $INSTDIR\python\python313._pth) -replace ''^#import site$'', ''import site'' | Set-Content $INSTDIR\python\python313._pth -Encoding UTF8 }"'
+    ; First write the absolute path into install.log so it survives even if every
+    ; subsequent PowerShell call fails.
+    FileOpen $0 "$INSTDIR\install.log" a
+    FileWrite $0 "INSTDIR=$INSTDIR$\r$\n"
+    FileWrite $0 "PYTHON_ZIP=$INSTDIR\python\python-embed.zip$\r$\n"
+    FileWrite $0 "PYTHON_DIR=$INSTDIR\python$\r$\n"
+    FileClose $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Path $\"$INSTDIR\python\python-embed.zip$\" -DestinationPath $\"$INSTDIR\python$\" -Force 2>&1 | Out-File -FilePath $\"$INSTDIR\python\_extract.log$\" -Append"'
+    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "if (Test-Path $\"$INSTDIR\python\python313._pth$\") { (Get-Content $\"$INSTDIR\python\python313._pth$\") -replace ''^#import site$'', ''import site'' | Set-Content $\"$INSTDIR\python\python313._pth$\" -Encoding UTF8 }"'
     nsExec::ExecToLog 'cmd.exe /C del /Q "$INSTDIR\python\python-embed.zip"'
 
     !insertmacro LogStep "Core: copy application source"
@@ -177,12 +184,18 @@ Section "-Core" SEC_CORE
     ; install dependencies into the embedded Python's site-packages directly.
     SetOutPath "$INSTDIR\python"
     File "get-pip.py"
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location $INSTDIR\python; & $INSTDIR\python\python.exe -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple; & $INSTDIR\python\python.exe -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn; & $INSTDIR\python\python.exe get-pip.py --no-warn-script-location 2>&1 | Out-File -FilePath $INSTDIR\python\_bootstrap_pip.log; Remove-Item -LiteralPath $INSTDIR\python\get-pip.py -Force -ErrorAction SilentlyContinue"'
+    FileOpen $0 "$INSTDIR\install.log" a
+    FileWrite $0 "PIP_BOOTSTRAP_CMD=$\"$INSTDIR\python\python.exe$\" get-pip.py$\r$\n"
+    FileClose $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Set-Location $\"$INSTDIR\python$\"; & $\"$INSTDIR\python\python.exe$\" -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple; & $\"$INSTDIR\python\python.exe$\" -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn; & $\"$INSTDIR\python\python.exe$\" get-pip.py --no-warn-script-location 2>&1 | Out-File -FilePath $\"$INSTDIR\python\_bootstrap_pip.log$\" -Append; Remove-Item -LiteralPath $\"$INSTDIR\python\get-pip.py$\" -Force -ErrorAction SilentlyContinue"'
 
     !insertmacro LogStep "Core: install dependencies"
     ; Install dependencies into the embedded Python's site-packages.
     DetailPrint "正在安装 Python 依赖 (使用国内镜像源)..."
-    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "Set-Location $INSTDIR\python; & $INSTDIR\python\python.exe -m pip install -e $INSTDIR\app --no-warn-script-location 2>&1 | Out-File -FilePath $INSTDIR\python\_install_deps.log"'
+    FileOpen $0 "$INSTDIR\install.log" a
+    FileWrite $0 "PIP_INSTALL_CMD=$\"$INSTDIR\python\python.exe$\" -m pip install -e $\"$INSTDIR\app$\"$\r$\n"
+    FileClose $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -Command "Set-Location $\"$INSTDIR\python$\"; & $\"$INSTDIR\python\python.exe$\" -m pip install -e $\"$INSTDIR\app$\" --no-warn-script-location 2>&1 | Out-File -FilePath $\"$INSTDIR\python\_install_deps.log$\" -Append"'
 
     !insertmacro LogStep "Core: write shortcuts"
     ; Shortcuts
