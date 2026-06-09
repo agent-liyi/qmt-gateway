@@ -133,6 +133,8 @@ Section "-Core" SEC_CORE
     SetOverwrite on
     SetOutPath "$INSTDIR"
 
+    !insertmacro LogStep "Core: create install dir"
+    CreateDirectory "$INSTDIR"
     !insertmacro LogInit
     !insertmacro LogStep "Core: create directories"
 
@@ -146,7 +148,16 @@ Section "-Core" SEC_CORE
     DetailPrint "正在释放内嵌 Python 3.13..."
     SetOutPath "$INSTDIR\python"
     File "python-embed.zip"
-    nsExec::ExecToLog 'cmd.exe /C "tar -xf "$INSTDIR\python\python-embed.zip" -C "$INSTDIR\python""'
+    FileClose $0
+
+    !insertmacro LogStep "Core: extract embedded Python"
+    SetOutPath "$INSTDIR\python"
+    FileOpen $0 "$INSTDIR\python\_extract.ps1" w
+    FileWrite $0 "Expand-Archive -Path '$INSTDIR\python\python-embed.zip' -DestinationPath '$INSTDIR\python' -Force$\r$\n"
+    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\python-embed.zip' -Force$\r$\n"
+    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\_extract.ps1' -Force$\r$\n"
+    FileClose $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\python\_extract.ps1"'
 
     !insertmacro LogStep "Core: copy application source"
     ; Copy application source to $INSTDIR\app
@@ -172,7 +183,6 @@ Section "-Core" SEC_CORE
 
     !insertmacro LogStep "Core: write pip.conf"
     ; Write pip.conf (国内镜像源)
-    DetailPrint "正在配置 pip 国内镜像源..."
     FileOpen $0 "$INSTDIR\.venv\pip.conf" w
     FileWrite $0 "[global]$$\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple$$\ntrusted-host = pypi.tuna.tsinghua.edu.cn"
     FileClose $0
