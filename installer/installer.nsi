@@ -57,10 +57,11 @@ var ICONS_GROUP
 
 ; Finish page - text strings inline (Unicode mode handles UTF-8 encoding)
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "在浏览器中打开 Web 界面"
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "保存安装日志（$INSTDIR\install.log）"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
-!define MUI_FINISHPAGE_SHOWREADME_FUNCTION "OpenBrowser"
+!define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
+!define MUI_FINISHPAGE_SHOWREADME_FUNCTION "SaveInstallLog"
 !insertmacro MUI_PAGE_FINISH
 
 ; Uninstaller pages
@@ -101,22 +102,28 @@ Function .onInit
 FunctionEnd
 
 ; Components - use English section names (NSIS limitation), descriptions are localized
-Section "!Core" SEC_CORE
+Section "-Core" SEC_CORE
     SectionIn RO
     SetOverwrite on
     SetOutPath "$INSTDIR"
+    LogSet on
+
+    !insertmacro LogInit
+    !insertmacro LogStep "Core: create directories"
 
     ; Create directories
     CreateDirectory "$INSTDIR\python"
     CreateDirectory "$INSTDIR\app"
     CreateDirectory "$INSTDIR\data"
 
+    !insertmacro LogStep "Core: copy embedded Python"
     ; Copy embedded Python distribution
     DetailPrint "正在释放内嵌 Python 3.13..."
     SetOutPath "$INSTDIR\python"
     File "python-3.13-embed-amd64.zip"
-    nsExec::ExecToLog 'powershell -NoProfile -Command "Expand-Archive -Path $INSTDIR\python\python-3.13-embed-amd64.zip -DestinationPath $INSTDIR\python -Force"'
+    nsExec::ExecToLog 'cmd.exe /C "tar -xf "$INSTDIR\python\python-3.13-embed-amd64.zip" -C "$INSTDIR\python""'
 
+    !insertmacro LogStep "Core: copy application source"
     ; Copy application source to $INSTDIR\app
     SetOutPath "$INSTDIR\app"
     File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
@@ -127,23 +134,30 @@ Section "!Core" SEC_CORE
          "..\README.md"
     SetOutPath "$INSTDIR"
 
+    !insertmacro LogStep "Core: copy startup scripts"
     ; Copy startup scripts
     File "start.bat"
     File "start-silent.vbs"
 
+    !insertmacro LogStep "Core: create venv"
     ; Create venv
     DetailPrint "正在创建 Python 虚拟环境..."
     SetOutPath "$INSTDIR"
     nsExec::ExecToLog '"$INSTDIR\python\python.exe" -m venv "$INSTDIR\.venv"'
 
+    !insertmacro LogStep "Core: write pip.conf"
     ; Write pip.conf (国内镜像源)
     DetailPrint "正在配置 pip 国内镜像源..."
-    nsExec::ExecToLog 'powershell -NoProfile -Command "Set-Content -Path $INSTDIR\.venv\pip.conf -Value ([Environment]::NewLine + ''[global]'' + [Environment]::NewLine + ''index-url = https://pypi.tuna.tsinghua.edu.cn/simple'' + [Environment]::NewLine + ''trusted-host = pypi.tuna.tsinghua.edu.cn'') -Encoding UTF8"'
+    FileOpen $0 "$INSTDIR\.venv\pip.conf" w
+    FileWrite $0 "[global]$$\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple$$\ntrusted-host = pypi.tuna.tsinghua.edu.cn"
+    FileClose $0
 
+    !insertmacro LogStep "Core: install dependencies"
     ; Install dependencies
     DetailPrint "正在安装 Python 依赖 (使用国内镜像源)..."
     nsExec::ExecToLog '"$INSTDIR\.venv\Scripts\python.exe" -m pip install -e "$INSTDIR\app" -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn'
 
+    !insertmacro LogStep "Core: write shortcuts"
     ; Shortcuts
     !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     CreateDirectory "$SMPROGRAMS\$ICONS_GROUP"
@@ -151,14 +165,20 @@ Section "!Core" SEC_CORE
     CreateShortCut "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME} (静默启动).lnk" "$INSTDIR\start-silent.vbs"
     CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\start-silent.vbs"
     !insertmacro MUI_STARTMENU_WRITE_END
+
+    !insertmacro LogStep "Core: done"
 SectionEnd
 
 Section "Autostart" SEC_AUTOSTART
+    LogSet on
+    !insertmacro LogStep "Autostart: register scheduled task"
     DetailPrint "正在注册开机自启任务..."
     nsExec::ExecToLog 'schtasks /create /tn "QMT Gateway" /tr "wscript.exe \"$INSTDIR\start-silent.vbs\"" /sc onlogon /rl limited /f'
 SectionEnd
 
 Section "Firewall" SEC_FIREWALL
+    LogSet on
+    !insertmacro LogStep "Firewall: add inbound rule"
     DetailPrint "正在添加防火墙入站规则..."
     nsExec::ExecToLog 'netsh advfirewall firewall add rule name="QMT Gateway" dir=in action=allow protocol=tcp localport=8130 profile=private enable=yes'
 SectionEnd
@@ -179,6 +199,49 @@ LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN a
 
 Function OpenBrowser
     ExecShell "open" "http://localhost:8130"
+FunctionEnd
+
+
+!macro LogInit
+    FileOpen $0 "$INSTDIR\install.log" w
+    FileWrite $0 "[Install]$\r$\n"
+    FileWrite $0 "Started: $\r$\n"
+    FileClose $0
+!macroend
+
+
+!macro LogLine TEXT
+    FileOpen $0 "$INSTDIR\install.log" a
+    FileWrite $0 "${TEXT}$\r$\n"
+    FileClose $0
+!macroend
+
+
+!macro LogStep LABEL
+    Push $0
+    Push $1
+    FileOpen $0 "$INSTDIR\install.log" a
+    FileWrite $0 "==== ${LABEL} ====$\r$\n"
+    FileClose $0
+    Pop $1
+    Pop $0
+!macroend
+
+
+Function SaveInstallLog
+    Push $0
+    Push $1
+    Push $2
+    StrCpy $0 "$INSTDIR\install.log"
+    IfFileExists "$0" 0 save_log_skip
+    System::Call 'shell32::ShellExecute(i 0, t "open", t "explorer.exe", t "/select,$\"$INSTDIR\install.log$\"", t "$INSTDIR", i 1) i.s'
+    Goto save_log_done
+    save_log_skip:
+    MessageBox MB_OK|MB_ICONINFORMATION "未找到安装日志：$0"
+    save_log_done:
+    Pop $2
+    Pop $1
+    Pop $0
 FunctionEnd
 
 Section -AdditionalIcons

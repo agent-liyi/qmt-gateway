@@ -60,7 +60,7 @@ def test_installer_bundles_python_embed_zip():
 
 def test_installer_section_starts_with_setoutpath_instdir():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    core_idx = text.index("Section \"!Core\" SEC_CORE")
+    core_idx = text.index('Section "-Core" SEC_CORE')
     next_section = text.index("Section \"Autostart\"", core_idx)
     core_body = text[core_idx:next_section]
     setoutpath_lines = [
@@ -70,4 +70,21 @@ def test_installer_section_starts_with_setoutpath_instdir():
     assert setoutpath_lines[0] == 'SetOutPath "$INSTDIR"', (
         "Core section must explicitly reset SetOutPath to $INSTDIR at the top"
     )
+
+
+def test_installer_logs_each_step():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert '!insertmacro LogInit' in text
+    assert '!insertmacro LogStep' in text
+    assert 'install.log' in text
+    assert 'MUI_FINISHPAGE_SHOWREADME_FUNCTION "SaveInstallLog"' in text
+
+
+def test_installer_pip_conf_uses_native_file_writes():
+    """PowerShell Set-Content path-escaping broke pip.conf. Use native NSIS writes."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "Set-Content" not in text, (
+        "Avoid PowerShell Set-Content - escaping $INSTDIR inside NSIS strings is fragile"
+    )
+    assert 'FileOpen $0 "$INSTDIR\\.venv\\pip.conf" w' in text
 
