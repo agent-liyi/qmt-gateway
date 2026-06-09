@@ -18,9 +18,11 @@ def test_installer_nsi_uses_unicode_and_utf8_bom():
 
 def test_installer_finish_page_does_not_define_conflicting_readme_macro():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "!define MUI_FINISHPAGE_SHOWREADME_FUNCTION" in text
-    assert 'MUI_FINISHPAGE_SHOWREADME "' not in text, (
-        "MUI_FINISHPAGE_SHOWREADME and MUI_FINISHPAGE_SHOWREADME_FUNCTION are mutually exclusive"
+    assert "!define MUI_FINISHPAGE_SHOWREADME_FUNCTION" not in text, (
+        "MUI_FINISHPAGE_SHOWREADME_FUNCTION is not a real NSIS macro and breaks MUI"
+    )
+    assert 'MUI_FINISHPAGE_SHOWREADME "$INSTDIR\\install.log"' in text, (
+        "Finish page must wire the '查看安装日志' checkbox to $INSTDIR\\install.log"
     )
 
 
@@ -77,7 +79,7 @@ def test_installer_logs_each_step():
     assert '!insertmacro LogInit' in text
     assert '!insertmacro LogStep' in text
     assert 'install.log' in text
-    assert 'MUI_FINISHPAGE_SHOWREADME_FUNCTION "SaveInstallLog"' in text
+    assert '查看安装日志' in text
 
 
 def test_installer_pip_conf_uses_native_file_writes():

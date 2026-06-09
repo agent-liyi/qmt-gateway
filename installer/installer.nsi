@@ -83,11 +83,11 @@ var ICONS_GROUP
 
 ; Finish page - text strings inline (Unicode mode handles UTF-8 encoding)
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "保存安装日志（$INSTDIR\install.log）"
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "查看安装日志"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
+!define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\install.log"
 !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
-!define MUI_FINISHPAGE_SHOWREADME_FUNCTION "SaveInstallLog"
 !insertmacro MUI_PAGE_FINISH
 
 ; Uninstaller pages
@@ -222,23 +222,6 @@ LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN a
 
 Function OpenBrowser
     ExecShell "open" "http://localhost:8130"
-FunctionEnd
-
-
-Function SaveInstallLog
-    Push $0
-    Push $1
-    Push $2
-    StrCpy $0 "$INSTDIR\install.log"
-    IfFileExists "$0" 0 save_log_skip
-    System::Call 'shell32::ShellExecute(i 0, t "open", t "explorer.exe", t "/select,$\"$INSTDIR\install.log$\"", t "$INSTDIR", i 1) i.s'
-    Goto save_log_done
-    save_log_skip:
-    MessageBox MB_OK|MB_ICONINFORMATION "未找到安装日志：$0"
-    save_log_done:
-    Pop $2
-    Pop $1
-    Pop $0
 FunctionEnd
 
 Section -AdditionalIcons
