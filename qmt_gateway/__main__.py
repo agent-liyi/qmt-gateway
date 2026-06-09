@@ -4,32 +4,16 @@
 """
 
 import argparse
-import logging
 import sys
 
 from loguru import logger
 
+from qmt_gateway.access_log import configure_access_log
 from qmt_gateway.config import config
 from qmt_gateway.db import db
 from qmt_gateway.runtime import runtime
 from qmt_gateway.services.pip_mirror import ensure_pip_conf
 from qmt_gateway.services.port import find_available_port
-
-
-class _DebugAccessEndpointFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        message = record.getMessage()
-        if (
-            "GET /api/trade/connection-status" in message
-            or "GET /api/trade/positions?view=table" in message
-        ):
-            record.levelno = logging.DEBUG
-            record.levelname = "DEBUG"
-        return True
-
-
-def configure_access_log_levels() -> None:
-    logging.getLogger("uvicorn.access").addFilter(_DebugAccessEndpointFilter())
 
 
 def main():
@@ -104,7 +88,7 @@ def main():
 
     import uvicorn
 
-    configure_access_log_levels()
+    configure_access_log(config.log_path)
 
     uvicorn.run(
         "qmt_gateway.app:app",

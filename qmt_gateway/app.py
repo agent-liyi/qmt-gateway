@@ -11,6 +11,7 @@ from pathlib import Path
 from fastcore.xml import to_xml
 from fasthtml.common import *
 from loguru import logger
+from qmt_gateway.access_log import configure_access_log
 from qmt_gateway.apis import (
     login_required,
     quote_ws,
@@ -310,6 +311,7 @@ def create_app():
 
     # 初始化运行时
     runtime.init()
+    configure_access_log(config.log_path)
 
     # 创建 FastHTML 应用
     app = FastHTML(
@@ -1118,5 +1120,5 @@ def create_app():
     return app
 
 
-# 创建应用实例
 app = create_app()
+

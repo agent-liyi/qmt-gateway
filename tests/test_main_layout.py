@@ -29,7 +29,19 @@ def test_change_password_qmt_tab_only_two_fields():
     assert "change-qmt-login-password" in html
     assert "change-qmt-new-password" in html
     assert "change-qmt-confirm-password" not in html
-    assert "再次输入" not in html or "change-qmt-confirm-password" not in html
+    assert "再次输入新的 QMT 交易密码" not in html
+
+
+def test_main_layout_renders_new_change_password_dialog():
+    from qmt_gateway.web.layouts.main import MainLayout
+
+    html = to_xml(MainLayout("x", user={"username": "admin"}, active_menu="trading"))
+    assert "tab-login-password" in html
+    assert "tab-qmt-password" in html
+    assert "change-qmt-login-password" in html
+    assert "change-qmt-new-password" in html
+    assert "change-qmt-confirm-password" not in html
+    assert "再次输入新的 QMT 交易密码" not in html
 
 
 def test_change_password_qmt_submit_sends_confirm_equal_new():

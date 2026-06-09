@@ -136,33 +136,29 @@ def test_trade_disconnect_uses_critical_level(monkeypatch):
     assert not _messages(fake_logger.records, "WARNING")
 
 
-def test_access_log_filter_lowers_connection_status_to_debug():
-    """GET /api/trade/connection-status 和 positions?view=table 的访问日志应降级为 DEBUG (issue #54)"""
-    from qmt_gateway.__main__ import _DebugAccessEndpointFilter
+def test_uvicorn_access_log_console_warning_and_file_info(tmp_path):
+    """Uvicorn access logs should not spam console INFO but remain in access.log."""
+    from qmt_gateway.access_log import configure_access_log
 
-    filt = _DebugAccessEndpointFilter()
+    access_logger = logging.getLogger("uvicorn.access")
+    original_handlers = list(access_logger.handlers)
+    original_level = access_logger.level
+    original_propagate = access_logger.propagate
+    stream = logging.StreamHandler()
+    stream.setLevel(logging.INFO)
+    access_logger.handlers = [stream]
 
-    conn_record = logging.LogRecord(
-        name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
-        msg='GET /api/trade/connection-status HTTP/1.1" 200 OK',
-        args=(), exc_info=None,
-    )
-    pos_record = logging.LogRecord(
-        name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
-        msg='GET /api/trade/positions?view=table HTTP/1.1" 200 OK',
-        args=(), exc_info=None,
-    )
-    other_record = logging.LogRecord(
-        name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
-        msg='GET /api/trade/asset HTTP/1.1" 200 OK',
-        args=(), exc_info=None,
-    )
+    try:
+        path = configure_access_log(tmp_path)
+        access_logger.info('192.168.0.100:53041 - "GET /api/trade/positions?view=table HTTP/1.1" 200 OK')
 
-    assert filt.filter(conn_record) is True
-    assert conn_record.levelno == logging.DEBUG
-
-    assert filt.filter(pos_record) is True
-    assert pos_record.levelno == logging.DEBUG
-
-    assert filt.filter(other_record) is True
-    assert other_record.levelno == logging.INFO
+        assert stream.level == logging.WARNING
+        assert path == tmp_path / "access.log"
+        assert "GET /api/trade/positions?view=table" in path.read_text(encoding="utf-8")
+    finally:
+        for handler in access_logger.handlers:
+            if handler not in original_handlers:
+                handler.close()
+        access_logger.handlers = original_handlers
+        access_logger.setLevel(original_level)
+        access_logger.propagate = original_propagate
