@@ -155,6 +155,8 @@ Section "-Core" SEC_CORE
     FileOpen $0 "$INSTDIR\python\_extract.ps1" w
     FileWrite $0 "Expand-Archive -Path '$INSTDIR\python\python-embed.zip' -DestinationPath '$INSTDIR\python' -Force$\r$\n"
     FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\python-embed.zip' -Force$\r$\n"
+    FileWrite $0 "$pth = Join-Path '$INSTDIR\python' 'python313._pth'$\r$\n"
+    FileWrite $0 "if (Test-Path -LiteralPath $pth) { (Get-Content -LiteralPath $pth) -replace '^#import site$', 'import site' | Set-Content -LiteralPath $pth -Encoding UTF8 }$\r$\n"
     FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\_extract.ps1' -Force$\r$\n"
     FileClose $0
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\python\_extract.ps1"'
@@ -175,22 +177,31 @@ Section "-Core" SEC_CORE
     File "start.bat"
     File "start-silent.vbs"
 
-    !insertmacro LogStep "Core: create venv"
-    ; Create venv
-    DetailPrint "正在创建 Python 虚拟环境..."
-    SetOutPath "$INSTDIR"
-    nsExec::ExecToLog '"$INSTDIR\python\python.exe" -m venv "$INSTDIR\.venv"'
-
-    !insertmacro LogStep "Core: write pip.conf"
-    ; Write pip.conf (国内镜像源)
-    FileOpen $0 "$INSTDIR\.venv\pip.conf" w
-    FileWrite $0 "[global]$$\nindex-url = https://pypi.tuna.tsinghua.edu.cn/simple$$\ntrusted-host = pypi.tuna.tsinghua.edu.cn"
+    !insertmacro LogStep "Core: bootstrap pip"
+    ; Embed Python does not ship with venv/pip. Bootstrap pip with get-pip.py and
+    ; install dependencies into the embedded Python's site-packages directly.
+    SetOutPath "$INSTDIR\python"
+    File "get-pip.py"
+    FileOpen $0 "$INSTDIR\python\_bootstrap_pip.ps1" w
+    FileWrite $0 "Set-Location -LiteralPath '$INSTDIR\python'$\r$\n"
+    FileWrite $0 "$INSTDIR\python\python.exe -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple$\r$\n"
+    FileWrite $0 "$INSTDIR\python\python.exe -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn$\r$\n"
+    FileWrite $0 "$INSTDIR\python\python.exe get-pip.py --no-warn-script-location 2>&1 | Tee-Object -FilePath '$INSTDIR\python\_bootstrap_pip.log'$\r$\n"
+    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\get-pip.py' -Force -ErrorAction SilentlyContinue$\r$\n"
+    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\_bootstrap_pip.ps1' -Force$\r$\n"
     FileClose $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\python\_bootstrap_pip.ps1"'
 
     !insertmacro LogStep "Core: install dependencies"
-    ; Install dependencies
+    ; Install dependencies into the embedded Python's site-packages.
     DetailPrint "正在安装 Python 依赖 (使用国内镜像源)..."
-    nsExec::ExecToLog '"$INSTDIR\.venv\Scripts\python.exe" -m pip install -e "$INSTDIR\app" -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn'
+    SetOutPath "$INSTDIR\python"
+    FileOpen $0 "$INSTDIR\python\_install_deps.ps1" w
+    FileWrite $0 "Set-Location -LiteralPath '$INSTDIR\python'$\r$\n"
+    FileWrite $0 "$INSTDIR\python\python.exe -m pip install -e $INSTDIR\app --no-warn-script-location 2>&1 | Tee-Object -FilePath '$INSTDIR\python\_install_deps.log'$\r$\n"
+    FileWrite $0 "Remove-Item -LiteralPath '$INSTDIR\python\_install_deps.ps1' -Force$\r$\n"
+    FileClose $0
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\python\_install_deps.ps1"'
 
     !insertmacro LogStep "Core: write shortcuts"
     ; Shortcuts

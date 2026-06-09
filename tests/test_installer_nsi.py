@@ -85,8 +85,20 @@ def test_installer_logs_each_step():
 def test_installer_pip_conf_uses_native_file_writes():
     """PowerShell Set-Content path-escaping broke pip.conf. Use native NSIS writes."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "Set-Content" not in text, (
-        "Avoid PowerShell Set-Content - escaping $INSTDIR inside NSIS strings is fragile"
+    assert 'FileOpen $0 "$INSTDIR\\.venv\\pip.conf" w' in text or "FileOpen $0 \"$INSTDIR\\python\\_bootstrap_pip.ps1\"" in text, (
+        "pip.conf / pip-bootstrap must be written through NSIS FileOpen, not Set-Content"
     )
-    assert 'FileOpen $0 "$INSTDIR\\.venv\\pip.conf" w' in text
+
+
+def test_installer_does_not_create_venv():
+    """Embedded Python does not ship venv. Installer must pip-install into the
+    embedded site-packages instead of creating a .venv directory."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "-m venv" not in text, (
+        "Embedded Python 3.13 zip does not include the venv module; pip-install into python\\Lib\\site-packages instead"
+    )
+    assert "site-packages" in text
+    assert "get-pip.py" in text, (
+        "Bootstrap pip with get-pip.py before pip install -e ."
+    )
 
