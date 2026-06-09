@@ -4,6 +4,7 @@
 """
 
 import argparse
+import logging
 import sys
 
 from loguru import logger
@@ -13,6 +14,22 @@ from qmt_gateway.db import db
 from qmt_gateway.runtime import runtime
 from qmt_gateway.services.pip_mirror import ensure_pip_conf
 from qmt_gateway.services.port import find_available_port
+
+
+class _DebugAccessEndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        if (
+            "GET /api/trade/connection-status" in message
+            or "GET /api/trade/positions?view=table" in message
+        ):
+            record.levelno = logging.DEBUG
+            record.levelname = "DEBUG"
+        return True
+
+
+def configure_access_log_levels() -> None:
+    logging.getLogger("uvicorn.access").addFilter(_DebugAccessEndpointFilter())
 
 
 def main():
@@ -85,10 +102,9 @@ def main():
     # 启动服务器
     logger.info(f"启动 QMT Gateway 服务器: http://{args.host}:{port}")
 
-    import logging
     import uvicorn
 
-    logging.getLogger("uvicorn.access").setLevel(logging.DEBUG)
+    configure_access_log_levels()
 
     uvicorn.run(
         "qmt_gateway.app:app",

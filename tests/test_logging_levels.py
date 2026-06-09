@@ -2,6 +2,7 @@
 
 import datetime
 import importlib
+import logging
 
 import qmt_gateway.apis.trade as trade_api
 from qmt_gateway.db.models import Asset, Stock
@@ -133,3 +134,35 @@ def test_trade_disconnect_uses_critical_level(monkeypatch):
     assert any("交易接口连接断开" in message for message in critical_messages)
     assert service.get_connection_status()["connected"] is False
     assert not _messages(fake_logger.records, "WARNING")
+
+
+def test_access_log_filter_lowers_connection_status_to_debug():
+    """GET /api/trade/connection-status 和 positions?view=table 的访问日志应降级为 DEBUG (issue #54)"""
+    from qmt_gateway.__main__ import _DebugAccessEndpointFilter
+
+    filt = _DebugAccessEndpointFilter()
+
+    conn_record = logging.LogRecord(
+        name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
+        msg='GET /api/trade/connection-status HTTP/1.1" 200 OK',
+        args=(), exc_info=None,
+    )
+    pos_record = logging.LogRecord(
+        name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
+        msg='GET /api/trade/positions?view=table HTTP/1.1" 200 OK',
+        args=(), exc_info=None,
+    )
+    other_record = logging.LogRecord(
+        name="uvicorn.access", level=logging.INFO, pathname="", lineno=0,
+        msg='GET /api/trade/asset HTTP/1.1" 200 OK',
+        args=(), exc_info=None,
+    )
+
+    assert filt.filter(conn_record) is True
+    assert conn_record.levelno == logging.DEBUG
+
+    assert filt.filter(pos_record) is True
+    assert pos_record.levelno == logging.DEBUG
+
+    assert filt.filter(other_record) is True
+    assert other_record.levelno == logging.INFO

@@ -87,6 +87,30 @@ def test_trade_service_connection_status_tracks_disconnect():
     assert disconnected["message"] == "交易接口连接断开"
 
 
+def test_mark_disconnected_schedules_auto_reconnect_when_enabled(monkeypatch):
+    service = TradeService()
+    service._account_id = "123456"
+    service._qmt_path = r"C:\qmt\userdata_mini"
+    scheduled = []
+
+    def fake_config_get(key, default=None):
+        if key == "auto_start_qmt":
+            return True
+        return getattr(trade_service_module.config, "_cache", {}).get(key, default)
+
+    monkeypatch.setattr(trade_service_module.config, "get", fake_config_get)
+    monkeypatch.setattr(
+        service,
+        "_schedule_auto_reconnect",
+        lambda: scheduled.append(True) or True,
+    )
+
+    message = service.mark_disconnected("交易接口连接断开")
+
+    assert message == "交易接口连接断开"
+    assert scheduled == [True]
+
+
 def test_connect_uses_unique_session_id_and_safe_cleanup(monkeypatch):
     service = TradeService()
     session_ids = []
@@ -112,7 +136,7 @@ def test_connect_uses_unique_session_id_and_safe_cleanup(monkeypatch):
         stop = None
 
     def fake_get_xtquant(name):
-        if name == "XtMiniQmt":
+        if name == "XtQuantTrader":
             return FakeTrader
         if name == "StockAccount":
             return FakeStockAccount

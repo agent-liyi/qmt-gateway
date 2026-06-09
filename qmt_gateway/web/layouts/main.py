@@ -382,7 +382,7 @@ def ChangePasswordModal():
                     onclick="switchPasswordTab('login')",
                 ),
                 Button(
-                    "QMT 交易密码",
+                    "交易密码",
                     type="button",
                     id="tab-qmt-password",
                     cls="tab tab-bordered",
@@ -454,21 +454,11 @@ def ChangePasswordModal():
                         cls="mb-3",
                     ),
                     Div(
-                        Label("新的 QMT 交易密码", cls="label"),
+                        Label("新交易密码", cls="label"),
                         Input(
                             type="password",
                             id="change-qmt-new-password",
-                            placeholder="请输入新的 QMT 交易密码",
-                            cls="input input-bordered w-full",
-                        ),
-                        cls="mb-3",
-                    ),
-                    Div(
-                        Label("再次输入新的 QMT 交易密码", cls="label"),
-                        Input(
-                            type="password",
-                            id="change-qmt-confirm-password",
-                            placeholder="请再次输入新的 QMT 交易密码",
+                            placeholder="请输入新的交易密码",
                             cls="input input-bordered w-full",
                         ),
                         cls="mb-3",
@@ -533,7 +523,7 @@ def ChangePasswordModalScript():
             var modal = document.getElementById('change-password-modal');
             if (!modal) return;
             ['change-password-old', 'change-password-new', 'change-password-confirm',
-             'change-qmt-login-password', 'change-qmt-new-password', 'change-qmt-confirm-password'].forEach(function(id) {
+             'change-qmt-login-password', 'change-qmt-new-password'].forEach(function(id) {
                 var el = document.getElementById(id);
                 if (el) el.value = '';
             });
@@ -633,17 +623,11 @@ def ChangePasswordModalScript():
         async function submitQmtPassword(submit) {
             var loginPwEl = document.getElementById('change-qmt-login-password');
             var newPwEl = document.getElementById('change-qmt-new-password');
-            var confirmPwEl = document.getElementById('change-qmt-confirm-password');
             var loginPassword = loginPwEl ? loginPwEl.value : '';
             var newPassword = newPwEl ? newPwEl.value : '';
-            var confirmPassword = confirmPwEl ? confirmPwEl.value : '';
 
-            if (!loginPassword || !newPassword || !confirmPassword) {
-                showChangePasswordMessage('请完整填写登录密码和新的 QMT 交易密码', false);
-                return;
-            }
-            if (newPassword !== confirmPassword) {
-                showChangePasswordMessage('两次输入的 QMT 交易密码不一致', false);
+            if (!loginPassword || !newPassword) {
+                showChangePasswordMessage('请完整填写登录密码和新交易密码', false);
                 return;
             }
             if (submit) {
@@ -660,7 +644,7 @@ def ChangePasswordModalScript():
                     body: new URLSearchParams({
                         login_password: loginPassword,
                         new_qmt_password: newPassword,
-                        new_qmt_password_confirm: confirmPassword,
+                        new_qmt_password_confirm: newPassword,
                     }).toString(),
                 });
                 var result = await response.json().catch(function() { return {}; });

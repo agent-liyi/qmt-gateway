@@ -204,6 +204,8 @@ class TradeService:
         self._restart_password_token_ttl_sec = 120.0
         self._restart_password_tokens: dict[str, dict[str, object]] = {}
         self._auto_start_max_retries = 2
+        self._auto_reconnect_lock = threading.Lock()
+        self._auto_reconnect_running = False
 
     def _set_connection_state(self, connected: bool, message: str) -> str:
         self._connected = connected
@@ -226,7 +228,37 @@ class TradeService:
             stop()
 
     def mark_disconnected(self, message: str = "交易接口连接断开") -> str:
-        return self._set_connection_state(False, message)
+        state_message = self._set_connection_state(False, message)
+        if config.auto_start_qmt:
+            self._schedule_auto_reconnect()
+        return state_message
+
+    def _schedule_auto_reconnect(self) -> bool:
+        account_id = str(self._account_id or config.qmt_account_id or "").strip()
+        qmt_path = str(self._qmt_path or config.qmt_path or "").strip()
+        if not account_id or not qmt_path:
+            logger.warning("auto_start_qmt: QMT 账号或路径未配置，跳过断线自动重启")
+            return False
+        with self._auto_reconnect_lock:
+            if self._auto_reconnect_running:
+                logger.info("auto_start_qmt: 断线自动重启任务已在运行，跳过重复调度")
+                return False
+            self._auto_reconnect_running = True
+        thread = threading.Thread(
+            target=self._run_auto_reconnect,
+            args=(qmt_path, account_id),
+            daemon=True,
+        )
+        thread.start()
+        return True
+
+    def _run_auto_reconnect(self, qmt_path: str, account_id: str) -> None:
+        try:
+            logger.warning("auto_start_qmt: 检测到交易接口断线，开始自动重启 QMT")
+            self.try_auto_start_qmt(qmt_path=qmt_path, account_id=account_id)
+        finally:
+            with self._auto_reconnect_lock:
+                self._auto_reconnect_running = False
 
     def get_connection_status(self) -> dict:
         return {

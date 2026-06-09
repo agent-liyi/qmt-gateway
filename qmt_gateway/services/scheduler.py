@@ -7,6 +7,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from loguru import logger
 
+from qmt_gateway.config import config
 from qmt_gateway.services.stock_service import stock_service
 
 
@@ -39,6 +40,16 @@ class TaskScheduler:
             name="检查版本更新",
             replace_existing=True,
         )
+
+        # 每天早上 8:45 自动初始化 QMT（开盘前重启并登录）
+        if config.auto_start_qmt:
+            self.scheduler.add_job(
+                func=self._daily_init_qmt,
+                trigger=CronTrigger(hour=8, minute=45),
+                id="daily_init_qmt",
+                name="QMT 每日自动初始化",
+                replace_existing=True,
+            )
 
         # 启动时立即更新一次
         self._update_stock_list()
@@ -77,6 +88,24 @@ class TaskScheduler:
                 logger.debug(f"当前已是最新版本: {info.current_version}")
         except Exception as e:
             logger.error(f"版本检查异常：{e}")
+
+    def _daily_init_qmt(self):
+        """每日自动初始化 QMT：重启并登录，确保开盘前就绪"""
+        logger.info("开始执行定时任务：QMT 每日自动初始化")
+        try:
+            from qmt_gateway.services.trade_service import trade_service
+            account_id = str(trade_service._account_id or config.qmt_account_id or "").strip()
+            qmt_path = str(trade_service._qmt_path or config.qmt_path or "").strip()
+            if not account_id or not qmt_path:
+                logger.warning("QMT 每日自动初始化：账号或路径未配置，跳过")
+                return
+            result = trade_service.try_auto_start_qmt(qmt_path=qmt_path, account_id=account_id)
+            if result:
+                logger.info("QMT 每日自动初始化：成功")
+            else:
+                logger.warning("QMT 每日自动初始化：失败")
+        except Exception as e:
+            logger.error(f"QMT 每日自动初始化异常：{e}")
 
     def stop(self):
         """停止调度器"""

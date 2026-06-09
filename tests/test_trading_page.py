@@ -281,6 +281,15 @@ def test_get_latest_asset_data_computes_profit_ratio(monkeypatch):
     assert result["profit_ratio"] == -5.0
 
 
+def test_position_table_omits_realized_sell_profit_column():
+    from qmt_gateway.web.pages.trading import PositionTable
+
+    html = to_xml(PositionTable([{"symbol": "601398.SH", "name": "工商银行", "avail": 100}]))
+
+    assert "卖出盈亏" not in html
+    assert "realized" not in html.lower()
+
+
 def test_position_table_exposes_avail_map_for_set_position_ratio():
     """PositionTable 应在脚本中暴露 _positionAvailBySymbol，供 setPositionRatio 卖出时使用 (#40)"""
     from qmt_gateway.web.pages.trading import PositionTable
