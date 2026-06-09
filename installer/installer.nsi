@@ -5,9 +5,10 @@
 ;   - NSIS 3.x installed (makensis in PATH)
 ;   - Python 3.13 embeddable package downloaded to installer\python-3.13-embed-amd64.zip
 ;
-; Build: makensis installer\installer.nsi
+; Build: makensis /INPUTCHARSET UTF8 installer\installer.nsi
 
 Unicode True
+SetCompress off
 !define PRODUCT_NAME "迅投 QMT 交易网关"
 !define PRODUCT_VERSION "0.1.0"
 !define BUILD_NUMBER "0"  ; Replaced by CI with github.run_number
@@ -54,11 +55,10 @@ var ICONS_GROUP
 !insertmacro MUI_PAGE_INSTFILES
 
 ; Finish page - text strings inline (Unicode mode handles UTF-8 encoding)
-!define MUI_FINISHPAGE_RUN_TEXT "立即启动 ${PRODUCT_NAME}"
-!define MUI_FINISHPAGE_SHOWREADME_TEXT "在浏览器中打开 ${PRODUCT_NAME}"
+!define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
+!define MUI_FINISHPAGE_SHOWREADME_TEXT "在浏览器中打开 Web 界面"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
-!define MUI_FINISHPAGE_SHOWREADME ""
 !define MUI_FINISHPAGE_SHOWREADME_FUNCTION "OpenBrowser"
 !insertmacro MUI_PAGE_FINISH
 
@@ -75,7 +75,7 @@ var ICONS_GROUP
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 OutFile "QMT-Gateway-Setup-${PRODUCT_VERSION}-build${BUILD_NUMBER}.exe"
-InstallDir "$PROGRAMFILES\${PRODUCT_NAME}"
+InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
 InstallDirRegKey HKLM "${PRODUCT_DIR_REGKEY}" ""
 ShowInstDetails show
 ShowUnInstDetails show
