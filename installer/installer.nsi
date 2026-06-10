@@ -57,7 +57,6 @@ ReserveFile "${CONTACT_US_REFRESH_SCRIPT_NAME}"
 !define WM_GETCLIENTRECT "0x0083"
 !define GW_CHILD "5"
 !define GW_HWNDNEXT "2"
-!define SW_HIDE "0"
 
 Var WelcomeQrHandle
 Var WelcomeQrBitmapHandle
