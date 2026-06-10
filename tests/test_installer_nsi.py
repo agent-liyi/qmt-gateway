@@ -1,5 +1,6 @@
 """NSIS installer script regression tests."""
 
+import re
 from pathlib import Path
 
 INSTALLER_NSI = Path(__file__).resolve().parents[1] / "installer" / "installer.nsi"
@@ -183,11 +184,25 @@ def test_installer_streams_detail_output_to_dedicated_temp_logs():
 def test_installer_updates_python313_pth_without_utf8_bom():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert "python313._pth" in text
-    assert "[System.IO.File]::WriteAllText($$p, $$content, [System.Text.UTF8Encoding]::new($false))" in text, (
+    assert "[System.IO.File]::WriteAllText($$p, $$content, [System.Text.UTF8Encoding]::new($$false))" in text, (
         "python313._pth must be written without a BOM so embedded Python can still import encodings"
+    )
+    assert "(?m)^#import site$$" in text, (
+        "Regex end anchors inside NSIS command strings must escape $ as $$"
     )
     assert "Set-Content -LiteralPath $$p -Encoding UTF8" not in text, (
         "Do not rewrite python313._pth with PowerShell UTF8 in Windows PowerShell; it adds a BOM and breaks python313.zip lookup"
+    )
+
+
+def test_installer_powershell_does_not_leave_bare_dollars():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    powershell_lines = [line for line in text.splitlines() if "powershell.exe" in line]
+    assert all(not re.search(r"(?<!\$)\$false", line) for line in powershell_lines), (
+        "PowerShell $false must be written as $$false inside NSIS command strings"
+    )
+    assert all("(?m)^#import site$'" not in line for line in powershell_lines), (
+        "PowerShell regex end anchors must be written as $$ inside NSIS command strings"
     )
 
 
