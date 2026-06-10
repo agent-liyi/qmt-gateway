@@ -34,6 +34,10 @@ SetCompress off
 !define TEMP_EXTRACT_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_EXTRACT_LOG_BASENAME}"
 !define TEMP_BOOTSTRAP_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_BOOTSTRAP_LOG_BASENAME}"
 !define TEMP_INSTALL_DEPS_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_INSTALL_DEPS_LOG_BASENAME}"
+!define REQUIREMENTS_NAME "requirements.txt"
+!define REQUIREMENTS_PATH "${__FILEDIR__}\${REQUIREMENTS_NAME}"
+
+!system 'python "${__FILEDIR__}\generate-requirements.py" "${__FILEDIR__}\..\pyproject.toml" "${REQUIREMENTS_PATH}"' = 0
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -214,6 +218,7 @@ Section "-Core" SEC_CORE
         SetOutPath "$INSTDIR\app"
         File "..\pyproject.toml"
         File "..\README.md"
+        File "requirements.txt"
     SetOutPath "$INSTDIR"
 
     !insertmacro LogStep "Core: copy startup scripts"
