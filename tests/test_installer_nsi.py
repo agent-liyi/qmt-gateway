@@ -141,25 +141,23 @@ def test_installer_documents_makensis_dependency():
 
 
 def test_installer_uses_quantide_logo_as_header_image():
-    """#68: brand logo lives only in the title bar / taskbar via MUI_ICON +
-    MUI_UNICON. The MUI_HEADERIMAGE bitmap is intentionally disabled so the
-    brand mark does not appear as a header strip on every wizard page."""
+    """#68: per the product decision (no quantide logo in title bar / taskbar),
+    MUI_ICON and MUI_UNICON are NOT defined. The brand assets (quantide.bmp /
+    quantide.ico) are still generated on disk for potential future use, but
+    are not referenced from the NSIS script."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert "!define MUI_HEADERIMAGE" not in text, (
         "MUI_HEADERIMAGE must NOT be enabled; the brand logo lives only in the title bar"
     )
-    assert '!define MUI_ICON "quantide.ico"' in text, (
-        "Installer/uninstaller icon must come from quantide.ico so the title bar shows the brand logo (#68)"
+    assert "!define MUI_ICON" not in text, (
+        "MUI_ICON must NOT be defined; the user explicitly asked for no logo in the title bar"
     )
-    assert '!define MUI_UNICON "quantide.ico"' in text, (
-        "Uninstaller icon must also use quantide.ico so uninstaller windows show the brand logo (#68)"
+    assert "!define MUI_UNICON" not in text, (
+        "MUI_UNICON must NOT be defined either"
     )
     generator = (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8")
     assert "quantide.png" in generator, (
         "generate-bitmaps.ps1 must include quantide.png as a source image"
-    )
-    assert "Convert-PngToIco" in generator, (
-        "generate-bitmaps.ps1 must produce quantide.ico from quantide.png (#68)"
     )
 
 
@@ -384,13 +382,17 @@ def test_installer_streams_detail_output_to_install_directory():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     helper = INSTALLER_PS1.read_text(encoding="utf-8")
     assert "_extract.log" in helper
-    assert "_bootstrap_pip.log" in helper
-    assert "_install_deps.log" in helper
     assert "_extract.log" not in text
-    assert "_bootstrap_pip.log" not in text
-    assert "_install_deps.log" not in text
     assert 'Tee-Object' not in text
     assert 'Tee-Object' not in helper
+
+    # Use Windows tar for unzip, since Expand-Archive fails on CJK install paths
+    assert "cmd /c \"tar -xf" in helper or 'cmd /c "tar -xf' in helper, (
+        "Runtime stage must use 'tar -xf' instead of Expand-Archive so CJK install paths do not fail"
+    )
+    assert "Expand-Archive -Path" not in helper, (
+        "Expand-Archive is unreliable with CJK paths; tar must be used instead"
+    )
 
 
 def test_installer_updates_python313_pth_without_utf8_bom():

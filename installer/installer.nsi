@@ -81,13 +81,21 @@ ReserveFile "contact-us.bmp"
 
 ; MUI Settings
 !define MUI_ABORTWARNING
-; #68: use quantide.ico as the installer / uninstaller application icon.
-; The source quantide.png is converted to quantide.ico at build time by
-; installer\generate-bitmaps.ps1. We intentionally do NOT enable
-; MUI_HEADERIMAGE here so the brand logo only appears in the title bar and
-; taskbar, not as a header bitmap on every wizard page.
-!define MUI_ICON "quantide.ico"
-!define MUI_UNICON "quantide.ico"
+; The product is shipped without an application icon: the user explicitly
+; requested no quantide logo in the title bar or taskbar. NSIS falls back
+; to its default install icon. quantide.bmp / quantide.ico are still
+; generated on disk for potential future use, but are not referenced.
+;
+; #68: header image disabled - brand logo lives only in the title bar / taskbar
+; via MUI_ICON and MUI_UNICON. The welcome page custom layout is built with
+; nsDialogs (see show_welcome_dialog) so we have full control over the
+; left-text / right-bitmap layout.
+;
+; #67: contact-us QR code shown on the welcome page. The source lives at
+; https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg
+; We ship a local copy in installer\contact-us.jpg; generate-bitmaps.ps1
+; converts it to 280x280 installer\contact-us.bmp at build time so it
+; stays sharp when displayed on the welcome page.
 ; !define MUI_WELCOMEFINISHPAGE_BITMAP "installer\welcome.bmp"
 
 ; #68: header image disabled - brand logo shows only in title bar / taskbar
@@ -150,20 +158,49 @@ Function show_welcome_dialog
         Abort
     ${EndIf}
 
-    ; The MUI inner page client area is approximately 300pt high x 450pt wide
-    ; (in dialog units). Lay out the prompt on the left (~60% of the width)
-    ; and the QR code on the right (~40% of the width).
+    ; Measure the dialog's client area so we can place the QR code without
+    ; cropping. nsDialogs exposes the parent HWND via the value popped from
+    ; nsDialogs::Create; SendMessage with WM_GETCLIENTRECT fills a RECT in
+    ; screen coordinates of the parent.
+    System::Alloc 16
+    Pop $1
+    SendMessage $0 ${WM_GETCLIENTRECT} 0 $1
+    System::Call "*$1(i.r2, i.r3, i.r4, i.r5)"  ; left, top, right, bottom
+    System::Free $1
+    ; $2 = left, $3 = top, $4 = right, $5 = bottom (all in dialog units)
+    IntOp $4 $4 - $2
+    IntOp $5 $5 - $3
+    ; $4 = width, $5 = height
+
+    ; Lay out the prompt on the left (~60% of the width) and the QR on the
+    ; right (~40% of the width). The label reserves the entire right column
+    ; so the prompt text never overlaps the bitmap, even if it wraps.
     ${NSD_CreateLabel} 0 0 60% 100% "$(WELCOME_TEXT)"
     Pop $1
-    ; Force a readable font: the default 9pt Tahoma renders the long CJK
-    ; paragraph too small on a high-DPI display.
-    CreateFont $0 "$(^Font)" "10" "600"
+    CreateFont $0 "$(^Font)" "10" "400"
     SendMessage $1 ${WM_SETFONT} $0 0
 
-    ${NSD_CreateBitmap} 60% 0 40% 100% ""
+    ; The QR is square. Compute the largest square that fits the right 40%
+    ; column AND the dialog's inner height, then offset it from the top so
+    ; the QR sits roughly in the middle of the column. nsDialogs' Create*
+    ; coordinates are in dialog units, but SetWindowPos works in pixels
+    ; relative to the parent client area, so we re-issue a SetWindowPos to
+    ; resize the control to that exact square.
+    IntOp $6 $4 * 40 / 100            ; right column width
+    IntOp $7 $6                        ; square = min(column, height)
+    IntCmp $7 $5 0 0 +1
+    IntOp $7 $5                        ; clamp to height
+    ; 60% of the dialog width = left column width. The bitmap's top-left
+    ; x is that value; the bitmap is left at 0 so it stays at the top of
+    ; the right column.
+    IntOp $8 $4 * 60 / 100
+    ${NSD_CreateBitmap} $8 0 $6 $7 ""
     Pop $2
-    ; contact-us.bmp was produced at 280x280 by generate-bitmaps.ps1.
     ${NSD_SetImage} $2 "$PLUGINSDIR\contact-us.bmp" $3
+    ; Center the bitmap vertically inside the right column.
+    IntOp $9 $5 - $7
+    IntOp $9 $9 / 2
+    System::Call "User32::SetWindowPos(i r2, i 0, i $8, i $9, i $6, i $7, i 0x40)"
 
     nsDialogs::Show
 FunctionEnd
