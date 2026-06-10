@@ -45,7 +45,7 @@ ReserveFile "contact-us.bmp"
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "nsDialogs.nsh"
-!include "WinMessages.nsh"
+!define WM_GETCLIENTRECT "0x0083"
 
 
 !macro LogInit
@@ -189,7 +189,7 @@ Function show_welcome_dialog
     ; resize the control to that exact square.
     IntOp $6 $4 * 40
     IntOp $6 $6 / 100                  ; right column width
-    IntOp $7 $6                        ; square = min(column, height)
+    StrCpy $7 $6                        ; square starts as column width
     ${If} $7 > $5
         IntOp $7 $5
     ${EndIf}
