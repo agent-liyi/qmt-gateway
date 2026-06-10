@@ -191,6 +191,19 @@ def test_installer_updates_python313_pth_without_utf8_bom():
     )
 
 
+def test_installer_bootstraps_pip_before_using_it():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "-m pip config set" not in text, (
+        "Installer must not invoke pip config before get-pip.py has installed pip"
+    )
+    assert "get-pip.py') --no-warn-script-location -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST}" in text, (
+        "Bootstrap pip by running get-pip.py directly with mirror arguments"
+    )
+    assert "-m pip install -e $$app --no-warn-script-location -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST}" in text, (
+        "Dependency installation should use explicit mirror flags instead of relying on preconfigured pip state"
+    )
+
+
 def test_installer_logs_absolute_paths_in_log():
     """The installer must write the absolute install path into install.log *before*
     invoking PowerShell, so the log still contains the path even if every PowerShell
