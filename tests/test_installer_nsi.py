@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_NSI = ROOT / "installer" / "installer.nsi"
 INSTALLER_PS1 = ROOT / "installer" / "install-python.ps1"
+REFRESH_CONTACT_PS1 = ROOT / "installer" / "refresh-contact-bmp.ps1"
 
 
 def test_installer_nsi_exists():
@@ -43,8 +44,9 @@ def test_installer_finish_page_renders_title_text_and_bitmap():
     assert '!define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"' in text, (
         "Finish page must override MUI_FINISHPAGE_TEXT with the success description (#69)"
     )
-    assert '!define MUI_FINISHPAGE_BITMAP "contact-us.bmp"' in text, (
-        "Finish page must render the left-side decorative bitmap (#69)"
+    assert '!define CONTACT_US_FINISH_BMP_NAME "contact-us-finish.bmp"' in text
+    assert '!define MUI_FINISHPAGE_BITMAP "${CONTACT_US_FINISH_BMP_NAME}"' in text, (
+        "Finish page must render the dedicated left-side decorative bitmap (#69)"
     )
     finish_title_idx = text.find("LangString FINISH_TITLE ${LANG_SIMPCHINESE}")
     finish_text_idx = text.find("LangString FINISH_TEXT ${LANG_SIMPCHINESE}")
@@ -160,6 +162,9 @@ def test_installer_uses_quantide_brand_icon():
     assert "Convert-PngToIco" in generator, (
         "generate-bitmaps.ps1 must produce quantide.ico from quantide.png (#68)"
     )
+    assert 'Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us-finish.bmp" -Width 164 -Height 314' in generator, (
+        "generate-bitmaps.ps1 must produce the finish-page bitmap from contact-us.jpg (#69)"
+    )
 
 
 def test_installer_bitmap_generation_runs_before_reservefile():
@@ -169,9 +174,9 @@ def test_installer_bitmap_generation_runs_before_reservefile():
     'ReserveFile: no files found'."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     generate_idx = text.find("generate-bitmaps.ps1")
-    reserve_idx = text.find('ReserveFile "contact-us.bmp"')
+    reserve_idx = text.find('ReserveFile "${CONTACT_US_QR_BMP_NAME}"')
     assert generate_idx != -1, "generate-bitmaps.ps1 must be invoked by the NSI preprocessor"
-    assert reserve_idx != -1, "contact-us.bmp must be reserved so it is available to Page callbacks"
+    assert reserve_idx != -1, "The welcome QR BMP must be reserved so it is available to Page callbacks"
     assert generate_idx < reserve_idx, (
         "generate-bitmaps.ps1 must run BEFORE ReserveFile so the bitmap exists on disk"
     )
@@ -181,9 +186,9 @@ def test_installer_bitmap_generation_runs_before_reservefile():
     'ReserveFile: no files found'."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     generate_idx = text.find("generate-bitmaps.ps1")
-    reserve_idx = text.find('ReserveFile "contact-us.bmp"')
+    reserve_idx = text.find('ReserveFile "${CONTACT_US_QR_BMP_NAME}"')
     assert generate_idx != -1, "generate-bitmaps.ps1 must be invoked by the NSI preprocessor"
-    assert reserve_idx != -1, "contact-us.bmp must be reserved so it is available to Page callbacks"
+    assert reserve_idx != -1, "The welcome QR BMP must be reserved so it is available to Page callbacks"
     assert generate_idx < reserve_idx, (
         "generate-bitmaps.ps1 must run BEFORE ReserveFile so the bitmap exists on disk"
     )
@@ -202,20 +207,54 @@ def test_installer_welcome_page_uses_nsdialogs_with_qr_on_the_right():
     assert "!include \"nsDialogs.nsh\"" in text, (
         "nsDialogs include is required for the custom welcome page (#67)"
     )
-    assert 'ReserveFile "contact-us.bmp"' in text, (
-        "contact-us.bmp must be reserved so it is available in $PLUGINSDIR (#67)"
+    assert 'ReserveFile "${CONTACT_US_QR_BMP_NAME}"' in text, (
+        "The local QR BMP must be reserved so it is available in $PLUGINSDIR (#67)"
     )
-    assert 'File "contact-us.bmp"' in text, (
-        "contact-us.bmp must be extracted into $PLUGINSDIR by the page callback (#67)"
+    assert 'ReserveFile "${CONTACT_US_JPG_NAME}"' in text, (
+        "The bundled QR JPG must be reserved so the welcome page can show a local image immediately (#67)"
+    )
+    assert 'ReserveFile "${CONTACT_US_REFRESH_SCRIPT_NAME}"' in text, (
+        "The refresh helper must be reserved so the welcome page can fetch a newer QR in the background (#67)"
+    )
+    assert 'File /oname=${CONTACT_US_QR_BMP_NAME} "${CONTACT_US_QR_BMP_NAME}"' in text, (
+        "The local QR BMP must be extracted into $PLUGINSDIR by the page callback (#67)"
+    )
+    assert 'File /oname=${CONTACT_US_JPG_NAME} "${CONTACT_US_JPG_NAME}"' in text, (
+        "The bundled QR JPG must be staged into $PLUGINSDIR as the refresh helper fallback (#67)"
+    )
+    assert 'File /oname=${CONTACT_US_REFRESH_SCRIPT_NAME} "${CONTACT_US_REFRESH_SCRIPT_NAME}"' in text, (
+        "The refresh helper script must be staged into $PLUGINSDIR by the welcome page (#67)"
     )
     assert "${NSD_CreateLabel}" in text and "${NSD_CreateBitmap}" in text, (
         "Custom welcome page must contain a label and a bitmap control (#67)"
     )
-    assert '"$PLUGINSDIR\\contact-us.bmp"' in text, (
-        "Custom welcome page must set the bitmap from $PLUGINSDIR\\contact-us.bmp (#67)"
+    assert '${NSD_SetStretchedBitmap} $WelcomeQrHandle "$PLUGINSDIR\\${CONTACT_US_QR_BMP_NAME}" $WelcomeQrBitmapHandle' in text, (
+        "Custom welcome page must stretch the staged local QR BMP into the right column (#67)"
     )
-    assert "%" in text, (
-        "Bitmap control should use percentage coordinates to keep the QR on the right (#67)"
+    assert '${CONTACT_US_REFRESH_SCRIPT_NAME}" -PluginDir "$PLUGINSDIR"' in text, (
+        "Welcome page must launch the refresh helper in the background (#67)"
+    )
+    assert '${NSD_CreateTimer} welcome_qr_refresh_tick 400' in text, (
+        "Welcome page must poll for the refreshed QR and replace it automatically (#67)"
+    )
+    assert 'Call hide_welcome_header_brand' in text, (
+        "Welcome page must hide the default top-right header brand mark (#67/#68)"
+    )
+    assert 'ShowWindow $5 ${SW_HIDE}' in text, (
+        "The built-in top-right header controls should be hidden before the QR is shown (#67/#68)"
+    )
+    assert '63% 12u 33% 120u' in text, (
+        "Bitmap control should use a fixed right-column layout so the QR renders reliably (#67)"
+    )
+
+
+def test_installer_refresh_contact_helper_writes_ready_flag_and_sizes_bitmap():
+    helper = REFRESH_CONTACT_PS1.read_text(encoding="utf-8")
+    assert "$ReadyFlagName = 'contact-us.ready'" in helper
+    assert "$BmpWidth = 280" in helper and "$BmpHeight = 280" in helper
+    assert "$readyFlagPath = Join-Path $pluginDir $ReadyFlagName" in helper
+    assert "Set-Content -LiteralPath $readyFlagPath -Encoding ASCII" in helper, (
+        "Refresh helper must signal the welcome page when the QR BMP is ready to reload"
     )
 
 

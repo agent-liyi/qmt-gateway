@@ -28,6 +28,12 @@ SetCompress off
 !define INSTALL_LOG_NAME "install.log"
 !define REQUIREMENTS_NAME "requirements.txt"
 !define REQUIREMENTS_PATH "${__FILEDIR__}\${REQUIREMENTS_NAME}"
+!define CONTACT_US_JPG_NAME "contact-us.jpg"
+!define CONTACT_US_QR_BMP_NAME "contact-us.bmp"
+!define CONTACT_US_FINISH_BMP_NAME "contact-us-finish.bmp"
+!define CONTACT_US_REFRESH_SCRIPT_NAME "refresh-contact-bmp.ps1"
+!define CONTACT_US_READY_FLAG_NAME "contact-us.ready"
+!define CONTACT_US_CDN_URL "https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg"
 
 ; #67 / #68: build-time preprocessor steps. Run BEFORE ReserveFile so the
 ; generated bitmaps are present on disk.
@@ -38,14 +44,24 @@ SetCompress off
 !system 'python ".\generate-requirements.py" "..\pyproject.toml" ".\requirements.txt"' = 0
 !system 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\generate-bitmaps.ps1"' = 0
 
-; Reserve contact-us.bmp so it is available to every custom Page callback.
-ReserveFile "contact-us.bmp"
+; Reserve the welcome/finish assets so they are available before any page is shown.
+ReserveFile "${CONTACT_US_QR_BMP_NAME}"
+ReserveFile "${CONTACT_US_FINISH_BMP_NAME}"
+ReserveFile "${CONTACT_US_JPG_NAME}"
+ReserveFile "${CONTACT_US_REFRESH_SCRIPT_NAME}"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "nsDialogs.nsh"
 !define WM_GETCLIENTRECT "0x0083"
+!define GW_CHILD "5"
+!define GW_HWNDNEXT "2"
+!define SW_HIDE "0"
+
+Var WelcomeQrHandle
+Var WelcomeQrBitmapHandle
+Var WelcomeQrReadyFlagPath
 
 
 !macro LogInit
@@ -82,11 +98,9 @@ ReserveFile "contact-us.bmp"
 
 ; MUI Settings
 !define MUI_ABORTWARNING
-; #68: use the quantide brand icon for the installer and uninstaller
-; (this is the logo the user explicitly asked for in the title bar and
-; taskbar). Without MUI_ICON / MUI_UNICON NSIS falls back to its default
-; globe-and-arrow icon, which is NOT our brand. quantide.png is converted
-; to quantide.ico at build time by installer\generate-bitmaps.ps1.
+; #68: use the quantide brand icon for the installer and uninstaller.
+; Windows title bars and taskbars require ICO resources, so page artwork uses
+; BMP while the shell icon remains quantide.ico.
 !define MUI_ICON "quantide.ico"
 !define MUI_UNICON "quantide.ico"
 ;
@@ -95,11 +109,9 @@ ReserveFile "contact-us.bmp"
 ; is built with nsDialogs (see show_welcome_dialog) so we have full control
 ; over the left-text / right-bitmap layout.
 ;
-; #67: contact-us QR code shown on the welcome page. The source lives at
-; https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg
-; We ship a local copy in installer\contact-us.jpg; generate-bitmaps.ps1
-; converts it to 280x280 installer\contact-us.bmp at build time so it
-; stays sharp when displayed on the welcome page.
+; #67: the welcome page shows a local BMP derived from contact-us.jpg
+; immediately, then asks refresh-contact-bmp.ps1 to fetch the latest QR from
+; the CDN and overwrite the staged BMP once the download completes.
 ; !define MUI_WELCOMEFINISHPAGE_BITMAP "installer\welcome.bmp"
 
 ; #68: header image disabled - brand logo shows only in title bar / taskbar
@@ -107,11 +119,8 @@ ReserveFile "contact-us.bmp"
 ; nsDialogs (see show_welcome_dialog) so we have full control over the
 ; left-text / right-bitmap layout.
 ;
-; #67: contact-us QR code shown on the welcome page. The source lives at
-; https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg
-; We ship a local copy in installer\contact-us.jpg; generate-bitmaps.ps1
-; converts it to 280x280 installer\contact-us.bmp at build time so it
-; stays sharp when displayed on the welcome page.
+; #69: the finish page uses a dedicated 164x314 BMP derived from contact-us.jpg
+; so the built-in MUI left bitmap area is always filled.
 
 ; IMPORTANT: register language tables and define every LangString BEFORE the
 ; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
@@ -148,13 +157,18 @@ LangString FINISH_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机
 Page custom show_welcome_dialog leave_welcome_dialog "$(WELCOME_TITLE)"
 
 Function show_welcome_dialog
-    ; Make sure $PLUGINSDIR exists, then stage contact-us.bmp from the
-    ; installer payload into it. The File directive inside this function is
-    ; a compile-time payload addition that extracts at runtime when the
-    ; function is called.
+    ; Stage the local QR assets immediately so the page is never blank, then
+    ; refresh them from the CDN in the background.
     InitPluginsDir
     SetOutPath $PLUGINSDIR
-    File "contact-us.bmp"
+    File /oname=${CONTACT_US_QR_BMP_NAME} "${CONTACT_US_QR_BMP_NAME}"
+    File /oname=${CONTACT_US_JPG_NAME} "${CONTACT_US_JPG_NAME}"
+    File /oname=${CONTACT_US_REFRESH_SCRIPT_NAME} "${CONTACT_US_REFRESH_SCRIPT_NAME}"
+
+    StrCpy $WelcomeQrHandle ""
+    StrCpy $WelcomeQrBitmapHandle ""
+    StrCpy $WelcomeQrReadyFlagPath "$PLUGINSDIR\${CONTACT_US_READY_FLAG_NAME}"
+    Delete "$WelcomeQrReadyFlagPath"
 
     nsDialogs::Create 1018
     Pop $0
@@ -162,57 +176,104 @@ Function show_welcome_dialog
         Abort
     ${EndIf}
 
-    ; Measure the dialog's client area so we can place the QR code without
-    ; cropping. nsDialogs exposes the parent HWND via the value popped from
-    ; nsDialogs::Create; SendMessage with WM_GETCLIENTRECT fills a RECT in
-    ; screen coordinates of the parent.
-    System::Alloc 16
-    Pop $1
-    SendMessage $0 ${WM_GETCLIENTRECT} 0 $1
-    System::Call "*$1(i.r2, i.r3, i.r4, i.r5)"  ; left, top, right, bottom
-    System::Free $1
-    ; $2 = left, $3 = top, $4 = right, $5 = bottom (all in dialog units)
-    IntOp $4 $4 - $2
-    IntOp $5 $5 - $3
-    ; $4 = width, $5 = height
+    !insertmacro MUI_HEADER_TEXT "$(WELCOME_TITLE)" ""
+    Call hide_welcome_header_brand
 
-    ; Lay out the prompt on the left (~60% of the width) and the QR on the
-    ; right (~40% of the width). The label reserves the entire right column
-    ; so the prompt text never overlaps the bitmap, even if it wraps.
-    ${NSD_CreateLabel} 0 0 60% 100% "$(WELCOME_TEXT)"
+    ${NSD_CreateLabel} 0 10u 58% 118u "$(WELCOME_TEXT)"
     Pop $1
-    CreateFont $0 "$(^Font)" "10" "400"
-    SendMessage $1 ${WM_SETFONT} $0 0
+    CreateFont $2 "$(^Font)" "10" "400"
+    SendMessage $1 ${WM_SETFONT} $2 0
 
-    ; The QR is square. Compute the largest square that fits the right 40%
-    ; column AND the dialog's inner height, then offset it from the top so
-    ; the QR sits roughly in the middle of the column. nsDialogs' Create*
-    ; coordinates are in dialog units, but SetWindowPos works in pixels
-    ; relative to the parent client area, so we re-issue a SetWindowPos to
-    ; resize the control to that exact square.
-    IntOp $6 $4 * 40
-    IntOp $6 $6 / 100                  ; right column width
-    StrCpy $7 $6                        ; square starts as column width
-    ${If} $7 > $5
-        StrCpy $7 $5                     ; clamp to height
-    ${EndIf}
-    ; 60% of the dialog width = left column width. The bitmap's top-left
-    ; x is that value; the bitmap is left at 0 so it stays at the top of
-    ; the right column.
-    IntOp $8 $4 * 60
-    IntOp $8 $8 / 100
-    ${NSD_CreateBitmap} $8 0 $6 $7 ""
-    Pop $2
-    ${NSD_SetBitmap} $2 "$PLUGINSDIR\contact-us.bmp" $3
-    ; Center the bitmap vertically inside the right column.
-    IntOp $9 $5 - $7
-    IntOp $9 $9 / 2
-    System::Call "User32::SetWindowPos(i r2, i 0, i $8, i $9, i $6, i $7, i 0x40)"
+    ${NSD_CreateBitmap} 63% 12u 33% 120u ""
+    Pop $WelcomeQrHandle
+    ${NSD_SetStretchedBitmap} $WelcomeQrHandle "$PLUGINSDIR\${CONTACT_US_QR_BMP_NAME}" $WelcomeQrBitmapHandle
+
+    Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\${CONTACT_US_REFRESH_SCRIPT_NAME}" -PluginDir "$PLUGINSDIR" -BmpName "${CONTACT_US_QR_BMP_NAME}" -JpgName "${CONTACT_US_JPG_NAME}" -CdnUrl "${CONTACT_US_CDN_URL}" -ReadyFlagName "${CONTACT_US_READY_FLAG_NAME}" -BmpWidth 280 -BmpHeight 280'
+    ${NSD_CreateTimer} welcome_qr_refresh_tick 400
 
     nsDialogs::Show
 FunctionEnd
 
+Function hide_welcome_header_brand
+    Push $0
+    Push $1
+    Push $2
+    Push $3
+    Push $4
+    Push $5
+    Push $6
+    Push $7
+    Push $8
+    Push $9
+
+    System::Alloc 16
+    Pop $0
+    System::Call "User32::GetWindowRect(i $HWNDPARENT, p r0)"
+    System::Call "*$0(i.r1, i.r2, i.r3, i.r4)"
+    System::Free $0
+
+    IntOp $3 $3 - $1
+    IntOp $4 $3 * 60
+    IntOp $4 $4 / 100
+
+    System::Call "User32::GetWindow(i $HWNDPARENT, i ${GW_CHILD}) i .r5"
+
+hide_welcome_header_brand_loop:
+    ${If} $5 == 0
+        Goto hide_welcome_header_brand_done
+    ${EndIf}
+
+    System::Alloc 16
+    Pop $0
+    System::Call "User32::GetWindowRect(i r5, p r0)"
+    System::Call "*$0(i.r6, i.r7, i.r8, i.r9)"
+    System::Free $0
+
+    IntOp $6 $6 - $1
+    IntOp $7 $7 - $2
+
+    ${If} $6 >= $4
+    ${AndIf} $7 < 72
+        ShowWindow $5 ${SW_HIDE}
+    ${EndIf}
+
+    System::Call "User32::GetWindow(i r5, i ${GW_HWNDNEXT}) i .r5"
+    Goto hide_welcome_header_brand_loop
+
+hide_welcome_header_brand_done:
+    Pop $9
+    Pop $8
+    Pop $7
+    Pop $6
+    Pop $5
+    Pop $4
+    Pop $3
+    Pop $2
+    Pop $1
+    Pop $0
+FunctionEnd
+
+Function welcome_qr_refresh_tick
+    IfFileExists "$WelcomeQrReadyFlagPath" 0 done
+
+    ${If} $WelcomeQrBitmapHandle != ""
+        ${NSD_FreeBitmap} $WelcomeQrBitmapHandle
+        StrCpy $WelcomeQrBitmapHandle ""
+    ${EndIf}
+
+    ${NSD_SetStretchedBitmap} $WelcomeQrHandle "$PLUGINSDIR\${CONTACT_US_QR_BMP_NAME}" $WelcomeQrBitmapHandle
+    Delete "$WelcomeQrReadyFlagPath"
+    ${NSD_KillTimer} welcome_qr_refresh_tick
+
+done:
+FunctionEnd
+
 Function leave_welcome_dialog
+    ${NSD_KillTimer} welcome_qr_refresh_tick
+    ${If} $WelcomeQrBitmapHandle != ""
+        ${NSD_FreeBitmap} $WelcomeQrBitmapHandle
+        StrCpy $WelcomeQrBitmapHandle ""
+    ${EndIf}
 FunctionEnd
 
 ; License page
@@ -239,7 +300,7 @@ var ICONS_GROUP
 ; Finish page - title/text/bitmap inline (#69)
 !define MUI_FINISHPAGE_TITLE "$(FINISH_TITLE)"
 !define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"
-!define MUI_FINISHPAGE_BITMAP "contact-us.bmp"
+!define MUI_FINISHPAGE_BITMAP "${CONTACT_US_FINISH_BMP_NAME}"
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "查看安装日志"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"

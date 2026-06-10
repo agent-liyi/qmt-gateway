@@ -21,6 +21,15 @@ function Convert-ImageToBmp {
         if ($Width -le 0) { $Width = $original.Width }
         if ($Height -le 0) { $Height = $original.Height }
 
+        $scale = [Math]::Min(
+            [double]$Width / [double]$original.Width,
+            [double]$Height / [double]$original.Height
+        )
+        $drawWidth = [Math]::Max(1, [int][Math]::Round($original.Width * $scale))
+        $drawHeight = [Math]::Max(1, [int][Math]::Round($original.Height * $scale))
+        $offsetX = [int][Math]::Floor(($Width - $drawWidth) / 2)
+        $offsetY = [int][Math]::Floor(($Height - $drawHeight) / 2)
+
         $bmp = New-Object System.Drawing.Bitmap($Width, $Height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
         $graphics = [System.Drawing.Graphics]::FromImage($bmp)
         try {
@@ -28,7 +37,7 @@ function Convert-ImageToBmp {
             $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
             $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
             $graphics.Clear([System.Drawing.Color]::White)
-            $graphics.DrawImage($original, 0, 0, $Width, $Height)
+            $graphics.DrawImage($original, $offsetX, $offsetY, $drawWidth, $drawHeight)
         } finally {
             $graphics.Dispose()
         }
@@ -136,4 +145,5 @@ function Convert-PngToIco {
 
 Convert-ImageToBmp -Source "quantide.png" -Destination "quantide.bmp" -Width 0 -Height 0
 Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us.bmp" -Width 280 -Height 280
+Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us-finish.bmp" -Width 164 -Height 314
 Convert-PngToIco -Source "quantide.png" -Destination "quantide.ico"
