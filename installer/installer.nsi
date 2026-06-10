@@ -200,7 +200,7 @@ Function show_welcome_dialog
     IntOp $8 $8 / 100
     ${NSD_CreateBitmap} $8 0 $6 $7 ""
     Pop $2
-    ${NSD_SetImage} $2 "$PLUGINSDIR\contact-us.bmp" $3
+    ${NSD_SetBitmap} $2 "$PLUGINSDIR\contact-us.bmp" $3
     ; Center the bitmap vertically inside the right column.
     IntOp $9 $5 - $7
     IntOp $9 $9 / 2
@@ -261,6 +261,23 @@ RequestExecutionLevel admin
 
 Function .onInit
     ; Chinese only - no language picker.
+
+    ; Per the latest product decision the installer should not show any
+    ; quantide logo in its title bar or taskbar. MUI_ICON and MUI_UNICON
+    ; are intentionally undefined, but the installer EXE itself still
+    ; embeds a default NSIS icon resource. We clear both the big and small
+    ; icon for every top-level window the installer creates.
+    ; WM_SETICON (0x0080) with NULL hicon drops the icon entirely.
+    System::Call "User32::FindWindowW(w '#32770', w 0) i.r0"
+    ${If} $0 != 0
+        System::Call "User32::SendMessageW(i r0, i 0x0080, i 0, i 0)"
+        System::Call "User32::SendMessageW(i r0, i 0x0080, i 1, i 0)"
+    ${EndIf}
+    System::Call "User32::GetForegroundWindow() i.r1"
+    ${If} $1 != 0
+        System::Call "User32::SendMessageW(i r1, i 0x0080, i 0, i 0)"
+        System::Call "User32::SendMessageW(i r1, i 0x0080, i 1, i 0)"
+    ${EndIf}
 FunctionEnd
 
 Function .onInstFailed

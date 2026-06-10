@@ -161,7 +161,37 @@ def test_installer_uses_quantide_logo_as_header_image():
     )
 
 
+def test_installer_clears_default_window_icon():
+    """The installer EXE still embeds a default NSIS icon even when MUI_ICON
+    is not defined. The .onInit function must explicitly clear both the
+    big and small window icons via WM_SETICON so the installer / uninstaller
+    title bar and taskbar show no logo at all (per the user's product
+    decision)."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    oninit_start = text.index("Function .onInit")
+    oninit_end = text.index("FunctionEnd", oninit_start)
+    oninit_body = text[oninit_start:oninit_end]
+    assert "WM_SETICON" in oninit_body or "0x0080" in oninit_body, (
+        ".onInit must clear both the big and small window icons via WM_SETICON"
+    )
+    assert "FindWindowW" in oninit_body or "FindWindow(" in oninit_body, (
+        ".onInit must look up the installer window before sending WM_SETICON"
+    )
+
+
 def test_installer_bitmap_generation_runs_before_reservefile():
+    """contact-us.bmp must exist on disk by the time ReserveFile references
+    it. generate-bitmaps.ps1 therefore has to run in the NSI preprocessor
+    BEFORE the ReserveFile directive; otherwise makensis aborts with
+    'ReserveFile: no files found'."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    generate_idx = text.find("generate-bitmaps.ps1")
+    reserve_idx = text.find('ReserveFile "contact-us.bmp"')
+    assert generate_idx != -1, "generate-bitmaps.ps1 must be invoked by the NSI preprocessor"
+    assert reserve_idx != -1, "contact-us.bmp must be reserved so it is available to Page callbacks"
+    assert generate_idx < reserve_idx, (
+        "generate-bitmaps.ps1 must run BEFORE ReserveFile so the bitmap exists on disk"
+    )
     """contact-us.bmp must exist on disk by the time ReserveFile references
     it. generate-bitmaps.ps1 therefore has to run in the NSI preprocessor
     BEFORE the ReserveFile directive; otherwise makensis aborts with
@@ -386,12 +416,14 @@ def test_installer_streams_detail_output_to_install_directory():
     assert 'Tee-Object' not in text
     assert 'Tee-Object' not in helper
 
-    # Use Windows tar for unzip, since Expand-Archive fails on CJK install paths
-    assert "cmd /c \"tar -xf" in helper or 'cmd /c "tar -xf' in helper, (
-        "Runtime stage must use 'tar -xf' instead of Expand-Archive so CJK install paths do not fail"
+    # Runtime stage must use System.IO.Compression.ZipFile instead of
+    # Expand-Archive: the cmdlet intermittently fails with
+    # 'Cannot access path' under CJK install paths.
+    assert "[System.IO.Compression.ZipFile]::ExtractToDirectory" in helper, (
+        "Runtime stage must call ZipFile::ExtractToDirectory so CJK install paths do not fail"
     )
     assert "Expand-Archive -Path" not in helper, (
-        "Expand-Archive is unreliable with CJK paths; tar must be used instead"
+        "Expand-Archive is unreliable with CJK paths; ZipFile::ExtractToDirectory must be used instead"
     )
 
 

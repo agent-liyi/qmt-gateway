@@ -120,16 +120,17 @@ function Invoke-RuntimeStage {
         ('EXTRACT_LOG=' + $extractLog)
     )
 
-    # Expand-Archive is unreliable with CJK paths - 'Expand-Archive: cannot
-    # access path' shows up for users who install under 'C:\Program Files\匡醍
-    # QMT 交易网关'. Use Windows' built-in tar instead, which is happy with
-    # CJK. The .zip extension tells tar to pick the zip reader.
     $outputPath = Join-Path $PythonDir ([System.IO.Path]::GetRandomFileName())
-    Push-Location $PythonDir
     try {
-        cmd /c "tar -xf `"$zipPath`" --force-local" *> $outputPath 2>&1
-    } finally {
-        Pop-Location
+        # System.IO.Compression.ZipFile is happy with CJK paths, unlike
+        # the Expand-Archive cmdlet which intermittently fails with
+        # 'Cannot access path' for users who install under
+        # 'C:\Program Files\匡醍 QMT 交易网关'.
+        Add-Type -AssemblyName System.IO.Compression
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $PythonDir, $true)
+    } catch {
+        "ExtractToDirectory failed: $($_.Exception.Message)" | Out-File -LiteralPath $outputPath -Encoding UTF8
     }
     Add-DetailOutput -OutputPath $outputPath -DetailLog $extractLog
     Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
