@@ -116,8 +116,8 @@ Var WelcomeTitleFont
 ; nsDialogs (see show_welcome_dialog) so we have full control over the
 ; left-text / right-bitmap layout.
 ;
-; #69: the finish page uses a dedicated 164x314 BMP derived from contact-us.jpg
-; so the built-in MUI left bitmap area is always filled.
+; #69: the finish page uses the stock MUI wizard illustration, matching the
+; classic NSIS finish-page layout the user referenced.
 
 ; IMPORTANT: register language tables and define every LangString BEFORE the
 ; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
@@ -273,14 +273,74 @@ Function leave_welcome_dialog
     ${EndIf}
 FunctionEnd
 
+Function ApplyCompactStandardPageChrome
+    Push $0
+    Push $1
+    Push $2
+    Push $3
+    Push $4
+    Push $5
+    Push $6
+    Push $7
+    Push $8
+
+    LockWindow on
+
+    GetDlgItem $0 $HWNDPARENT 1036
+    ShowWindow $0 ${SW_HIDE}
+    GetDlgItem $0 $HWNDPARENT 1037
+    ShowWindow $0 ${SW_HIDE}
+    GetDlgItem $0 $HWNDPARENT 1038
+    ShowWindow $0 ${SW_HIDE}
+    GetDlgItem $0 $HWNDPARENT 1039
+    ShowWindow $0 ${SW_HIDE}
+
+    GetDlgItem $0 $HWNDPARENT 1018
+    System::Alloc 16
+    Pop $1
+    System::Call "User32::GetWindowRect(i r0, p r1)"
+    System::Call "*$1(i.r2, i.r3, i.r4, i.r5)"
+    System::Free $1
+
+    System::Alloc 16
+    Pop $1
+    System::Call "User32::GetWindowRect(i $HWNDPARENT, p r1)"
+    System::Call "*$1(i.r6, i.r7, i.r8, i.r5)"
+    System::Free $1
+
+    IntOp $2 $2 - $6
+    IntOp $3 $3 - $7
+    IntOp $4 $4 - $2 - $6
+    IntOp $5 $5 - $3 - $7
+
+    StrCpy $8 8
+    IntOp $5 $5 + $3
+    IntOp $5 $5 - $8
+    System::Call "User32::MoveWindow(i r0, i $2, i $8, i $4, i $5, i 1)"
+
+    LockWindow off
+
+    Pop $8
+    Pop $7
+    Pop $6
+    Pop $5
+    Pop $4
+    Pop $3
+    Pop $2
+    Pop $1
+    Pop $0
+FunctionEnd
+
 ; License page
 ; !insertmacro MUI_PAGE_LICENSE "LICENSE"
 
 ; Directory page
+!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_DIRECTORY
 
 ; Components / Options page
 !define MUI_COMPONENTSPAGE_SMALLDESC
+!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_COMPONENTS
 
 ; Start menu page
@@ -289,13 +349,15 @@ var ICONS_GROUP
 !define MUI_STARTMENUPAGE_REGISTRY_ROOT "${PRODUCT_UNINST_ROOT_KEY}"
 !define MUI_STARTMENUPAGE_REGISTRY_KEY "${PRODUCT_UNINST_KEY}"
 !define MUI_STARTMENUPAGE_REGISTRY_VALUENAME "${PRODUCT_STARTMENU_REGVAL}"
+!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_STARTMENU Application $ICONS_GROUP
 
 ; Instfiles page
+!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_INSTFILES
 
 ; Finish page - title/text/bitmap inline (#69)
-!define MUI_WELCOMEFINISHPAGE_BITMAP "${CONTACT_US_FINISH_BMP_NAME}"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${NSISDIR}\Contrib\Graphics\Wizard\win.bmp"
 !define MUI_FINISHPAGE_TITLE "$(FINISH_TITLE)"
 !define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"

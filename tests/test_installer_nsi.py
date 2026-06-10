@@ -44,9 +44,8 @@ def test_installer_finish_page_renders_title_text_and_bitmap():
     assert '!define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"' in text, (
         "Finish page must override MUI_FINISHPAGE_TEXT with the success description (#69)"
     )
-    assert '!define CONTACT_US_FINISH_BMP_NAME "contact-us-finish.bmp"' in text
-    assert '!define MUI_WELCOMEFINISHPAGE_BITMAP "${CONTACT_US_FINISH_BMP_NAME}"' in text, (
-        "Finish page must render the dedicated left-side decorative bitmap via the MUI2 welcome/finish bitmap macro (#69)"
+    assert '!define MUI_WELCOMEFINISHPAGE_BITMAP "${NSISDIR}\\Contrib\\Graphics\\Wizard\\win.bmp"' in text, (
+        "Finish page should use the visible stock wizard artwork the user referenced (#69)"
     )
     assert '!define MUI_FINISHPAGE_BITMAP' not in text, (
         "Do not use the unsupported MUI_FINISHPAGE_BITMAP macro; MUI2 expects MUI_WELCOMEFINISHPAGE_BITMAP"
@@ -165,9 +164,6 @@ def test_installer_uses_quantide_brand_icon():
     assert "Convert-PngToIco" in generator, (
         "generate-bitmaps.ps1 must produce quantide.ico from quantide.png (#68)"
     )
-    assert 'Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us-finish.bmp" -Width 164 -Height 314' in generator, (
-        "generate-bitmaps.ps1 must produce the finish-page bitmap from contact-us.jpg (#69)"
-    )
 
 
 def test_installer_bitmap_generation_runs_before_reservefile():
@@ -270,6 +266,22 @@ def test_installer_refresh_contact_helper_writes_ready_flag_and_sizes_bitmap():
     assert "$readyFlagPath = Join-Path $pluginDir $ReadyFlagName" in helper
     assert "Set-Content -LiteralPath $readyFlagPath -Encoding ASCII" in helper, (
         "Refresh helper must signal the welcome page when the QR BMP is ready to reload"
+    )
+
+
+def test_installer_compacts_standard_pages_and_hides_header_logo():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert 'Function ApplyCompactStandardPageChrome' in text, (
+        "Standard MUI pages should share a compact layout helper so the duplicate header logo is removed everywhere"
+    )
+    assert 'GetDlgItem $0 $HWNDPARENT 1039' in text and 'ShowWindow $0 ${SW_HIDE}' in text, (
+        "The Modern UI header icon control must be hidden on standard pages"
+    )
+    assert 'GetDlgItem $0 $HWNDPARENT 1018' in text and 'User32::MoveWindow' in text, (
+        "The standard page child rect must be moved upward so the oversized blank header area disappears"
+    )
+    assert text.count('!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome') >= 4, (
+        "Directory/components/startmenu/installfiles pages should all reuse the compact-page helper"
     )
 
 
