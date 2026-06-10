@@ -29,17 +29,20 @@ SetCompress off
 !define REQUIREMENTS_NAME "requirements.txt"
 !define REQUIREMENTS_PATH "${__FILEDIR__}\${REQUIREMENTS_NAME}"
 
+; Reserve contact-us.bmp so it is available to every custom Page callback.
+ReserveFile "contact-us.bmp"
+
 ; #67 / #68: build-time preprocessor steps.
 ;   - generate-requirements.py writes installer\requirements.txt from pyproject.toml.
 ;   - generate-bitmaps.ps1 converts quantide.png / contact-us.jpg to the BMP
-;     format that MUI2 requires for MUI_HEADERIMAGE_BITMAP and
-;     MUI_WELCOMEPAGE_BITMAP.
+;     format that MUI2 requires for MUI_WELCOMEPAGE_BITMAP.
 !system 'python ".\generate-requirements.py" "..\pyproject.toml" ".\requirements.txt"' = 0
 !system 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\generate-bitmaps.ps1"' = 0
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
+!include "nsDialogs.nsh"
 
 
 !macro LogInit
@@ -78,65 +81,93 @@ SetCompress off
 !define MUI_ABORTWARNING
 ; #68: use quantide.ico as the installer / uninstaller application icon.
 ; The source quantide.png is converted to quantide.ico at build time by
-; installer\generate-bitmaps.ps1.
+; installer\generate-bitmaps.ps1. We intentionally do NOT enable
+; MUI_HEADERIMAGE here so the brand logo only appears in the title bar and
+; taskbar, not as a header bitmap on every wizard page.
 !define MUI_ICON "quantide.ico"
 !define MUI_UNICON "quantide.ico"
 ; !define MUI_WELCOMEFINISHPAGE_BITMAP "installer\welcome.bmp"
 
-; #68: use quantide logo as the header image on every page. The source lives
-; in installer\quantide.png; installer\generate-bitmaps.ps1 converts it to
-; installer\quantide.bmp at build time.
-!define MUI_HEADERIMAGE
-!define MUI_HEADERIMAGE_BITMAP "quantide.bmp"
-!define MUI_HEADERIMAGE_UNBITMAP "quantide.bmp"
-
+; #68: header image disabled - brand logo shows only in title bar / taskbar
+; via MUI_ICON and MUI_UNICON. The welcome page custom layout is built with
+; nsDialogs (see show_welcome_dialog) so we have full control over the
+; left-text / right-bitmap layout.
+;
 ; #67: contact-us QR code shown on the welcome page. The source lives at
 ; https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg
 ; We ship a local copy in installer\contact-us.jpg; generate-bitmaps.ps1
-; converts it to 164x314 installer\contact-us.bmp at build time.
-!define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"
+; converts it to 280x280 installer\contact-us.bmp at build time so it
+; stays sharp when displayed on the welcome page.
 
 ; IMPORTANT: register language tables and define every LangString BEFORE the
 ; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
 ; to its numeric code (e.g. "1" or "1+2") and the component selection page
-; shows mojibake instead of the description (#51).
+; shows mojibake instead of the description (#51). Chinese only - the
+; installer ships only the SimpChinese language table; if the user is on
+; an English system, NSIS falls back to the OS language pack and the
+; built-in MUI strings still render in Chinese here.
 !insertmacro MUI_LANGUAGE "SimpChinese"
-!insertmacro MUI_LANGUAGE "English"
 
-; #67: pre-install prompt about QMT. The QR code on the right is rendered
-; from installer\contact-us.bmp via MUI_WELCOMEPAGE_BITMAP.
+; #67: pre-install prompt about QMT (Chinese only, per product decision). The
+; QR code on the right of the welcome page is rendered from
+; installer\contact-us.bmp inside a custom nsDialogs page (see show_welcome_dialog).
 LangString WELCOME_TEXT ${LANG_SIMPCHINESE} \
     "本软件需要配置迅投 QMT 交易客户端使用。在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获得 QMT 软件下载方式。您也可以联系我们获得协助。$\n$\n\
-     This software requires the Xuntou QMT trading client. QMT must be installed before running this installer. Please contact your broker for the official QMT download, or scan the QR code on the right to reach us for help."
-LangString WELCOME_TEXT ${LANG_ENGLISH} \
-    "This software requires the Xuntou QMT trading client. QMT must be installed before running this installer. Please contact your broker for the official QMT download, or scan the QR code on the right to reach us for help."
+     安装目录将由您在本向导下一步选择。"
 
 LangString WELCOME_TITLE ${LANG_SIMPCHINESE} "请先安装 QMT 交易客户端"
-LangString WELCOME_TITLE ${LANG_ENGLISH} "Install QMT first"
 LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_SIMPCHINESE} \
     "安装失败。请查看安装目录下的 ${INSTALL_LOG_NAME}。如果尚未选择安装目录，请截屏反馈。"
-LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_ENGLISH} \
-    "Installation failed. Check ${INSTALL_LOG_NAME} in the install directory. If no install directory was selected yet, please provide a screenshot."
 
 ; Section descriptions (must be defined before MUI_PAGE_COMPONENTS)
 LangString DESC_SEC_CORE ${LANG_SIMPCHINESE} "核心组件（必须安装）"
-LangString DESC_SEC_CORE ${LANG_ENGLISH} "Core components (required)"
 LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "开机自启（用户登录时自动启动）"
-LangString DESC_SEC_AUTOSTART ${LANG_ENGLISH} "Auto-start on login"
 LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "防火墙入站规则（允许局域网访问）"
-LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN access)"
 
 ; Finish page localized text (#69)
 LangString FINISH_TITLE ${LANG_SIMPCHINESE} "$(^Name) 安装程序结束"
-LangString FINISH_TITLE ${LANG_ENGLISH} "$(^Name) Setup Complete"
 LangString FINISH_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机。$\r$\n点击『完成(F)』关闭安装程序。"
-LangString FINISH_TEXT ${LANG_ENGLISH} "$(^Name) has been successfully installed on this computer.$\r$\nClick $\"Finish$\" to close the installer."
 
-; Welcome page - title/text defined as LangString earlier so MUI2 can resolve
-; the language table at compile time. The bitmap is the contact-us QR (#67).
-!define MUI_WELCOMEPAGE_TITLE "$(WELCOME_TITLE)"
-!define MUI_WELCOMEPAGE_TEXT "$(WELCOME_TEXT)"
-!insertmacro MUI_PAGE_WELCOME
+; Welcome page - custom nsDialogs page so the layout can be left-text /
+; right-bitmap (the built-in MUI_WELCOME page only supports a left-side
+; decorative strip, not a right-side QR code) (#67).
+Page custom show_welcome_dialog leave_welcome_dialog "" "$(WELCOME_TITLE)"
+
+Function show_welcome_dialog
+    ; Make sure $PLUGINSDIR exists, then stage contact-us.bmp from the
+    ; installer payload into it. The File directive inside this function is
+    ; a compile-time payload addition that extracts at runtime when the
+    ; function is called.
+    InitPluginsDir
+    SetOutPath $PLUGINSDIR
+    File "contact-us.bmp"
+
+    nsDialogs::Create 1018
+    Pop $0
+    ${If} $0 == error
+        Abort
+    ${EndIf}
+
+    ; The MUI inner page client area is approximately 300pt high x 450pt wide
+    ; (in dialog units). Lay out the prompt on the left (~60% of the width)
+    ; and the QR code on the right (~40% of the width).
+    ${NSD_CreateLabel} 0 0 60% 100% "$(WELCOME_TEXT)"
+    Pop $1
+    ; Force a readable font: the default 9pt Tahoma renders the long CJK
+    ; paragraph too small on a high-DPI display.
+    CreateFont $0 "$(^Font)" "10" "600"
+    SendMessage $1 ${WM_SETFONT} $0 0
+
+    ${NSD_CreateBitmap} 60% 0 40% 100% ""
+    Pop $2
+    ; contact-us.bmp was produced at 280x280 by generate-bitmaps.ps1.
+    ${NSD_SetImage} $2 "$PLUGINSDIR\contact-us.bmp" $3
+
+    nsDialogs::Show
+FunctionEnd
+
+Function leave_welcome_dialog
+FunctionEnd
 
 ; License page
 ; !insertmacro MUI_PAGE_LICENSE "LICENSE"
@@ -186,7 +217,7 @@ ShowUnInstDetails show
 RequestExecutionLevel admin
 
 Function .onInit
-    !insertmacro MUI_LANGDLL_DISPLAY
+    ; Chinese only - no language picker.
 FunctionEnd
 
 Function .onInstFailed

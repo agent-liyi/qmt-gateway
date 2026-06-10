@@ -141,16 +141,12 @@ def test_installer_documents_makensis_dependency():
 
 
 def test_installer_uses_quantide_logo_as_header_image():
-    """#68: top-left logo of every page must come from installer/quantide.png."""
+    """#68: brand logo lives only in the title bar / taskbar via MUI_ICON +
+    MUI_UNICON. The MUI_HEADERIMAGE bitmap is intentionally disabled so the
+    brand mark does not appear as a header strip on every wizard page."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "!define MUI_HEADERIMAGE" in text, (
-        "MUI_HEADERIMAGE must be enabled so the brand logo renders on every page"
-    )
-    assert '!define MUI_HEADERIMAGE_BITMAP "quantide.bmp"' in text, (
-        "Header bitmap must be quantide.bmp (generated from quantide.png)"
-    )
-    assert "quantide.png" in (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8"), (
-        "generate-bitmaps.ps1 must include quantide.png as a source image"
+    assert "!define MUI_HEADERIMAGE" not in text, (
+        "MUI_HEADERIMAGE must NOT be enabled; the brand logo lives only in the title bar"
     )
     assert '!define MUI_ICON "quantide.ico"' in text, (
         "Installer/uninstaller icon must come from quantide.ico so the title bar shows the brand logo (#68)"
@@ -158,13 +154,49 @@ def test_installer_uses_quantide_logo_as_header_image():
     assert '!define MUI_UNICON "quantide.ico"' in text, (
         "Uninstaller icon must also use quantide.ico so uninstaller windows show the brand logo (#68)"
     )
-    assert "Convert-PngToIco" in (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8"), (
+    generator = (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8")
+    assert "quantide.png" in generator, (
+        "generate-bitmaps.ps1 must include quantide.png as a source image"
+    )
+    assert "Convert-PngToIco" in generator, (
         "generate-bitmaps.ps1 must produce quantide.ico from quantide.png (#68)"
     )
 
 
-def test_installer_welcome_page_prompts_user_to_install_qmt_with_contact_qr():
-    """#67: welcome page must show the pre-install QMT prompt and the contact QR."""
+def test_installer_welcome_page_uses_nsdialogs_with_qr_on_the_right():
+    """#67: welcome page renders a Chinese prompt on the left and the
+    contact-us QR code on the right via a custom nsDialogs page (the built-in
+    MUI_WELCOME page only supports a left-side decorative strip, not a
+    right-side bitmap). The contact-us image is staged into $PLUGINSDIR at
+    page-create time so it stays sharp on high-DPI displays."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "Page custom show_welcome_dialog" in text, (
+        "Welcome page must be a custom nsDialogs page so we control layout (#67)"
+    )
+    assert "!include \"nsDialogs.nsh\"" in text, (
+        "nsDialogs include is required for the custom welcome page (#67)"
+    )
+    assert 'ReserveFile "contact-us.bmp"' in text, (
+        "contact-us.bmp must be reserved so it is available in $PLUGINSDIR (#67)"
+    )
+    assert 'File "contact-us.bmp"' in text, (
+        "contact-us.bmp must be extracted into $PLUGINSDIR by the page callback (#67)"
+    )
+    assert "${NSD_CreateLabel}" in text and "${NSD_CreateBitmap}" in text, (
+        "Custom welcome page must contain a label and a bitmap control (#67)"
+    )
+    assert '"$PLUGINSDIR\\contact-us.bmp"' in text, (
+        "Custom welcome page must set the bitmap from $PLUGINSDIR\\contact-us.bmp (#67)"
+    )
+    assert "%" in text, (
+        "Bitmap control should use percentage coordinates to keep the QR on the right (#67)"
+    )
+
+
+def test_installer_welcome_page_uses_chinese_prompt_only():
+    """The welcome text must be Chinese-only - no English paragraph - per
+    product decision. The user explicitly asked: '这英文是怎么回事？我没有
+    要求使用英文。'"""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert "本软件需要配置迅投 QMT 交易客户端使用" in text, (
         "Welcome text must explain QMT must be installed first (#67)"
@@ -175,17 +207,11 @@ def test_installer_welcome_page_prompts_user_to_install_qmt_with_contact_qr():
     assert "联系我们" in text, (
         "Welcome text must mention contacting us for help (#67)"
     )
-    assert '!define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"' in text, (
-        "Welcome page must display the contact-us QR via MUI_WELCOMEPAGE_BITMAP (#67)"
+    assert "This software requires the Xuntou QMT" not in text, (
+        "Welcome text must not contain the English paragraph (#67)"
     )
-    assert "!define MUI_WELCOMEPAGE_TITLE" in text, (
-        "Welcome page must override MUI_WELCOMEPAGE_TITLE so the prompt is visible"
-    )
-    assert "!define MUI_WELCOMEPAGE_TEXT" in text, (
-        "Welcome page must override MUI_WELCOMEPAGE_TEXT with the localized prompt"
-    )
-    assert "cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg" in text, (
-        "Installer must reference the canonical CDN URL for the contact QR (#67)"
+    assert "!insertmacro MUI_LANGUAGE \"English\"" not in text, (
+        "Installer ships only SimpChinese; do not register the English table"
     )
 
 

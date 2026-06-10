@@ -135,5 +135,5 @@ function Convert-PngToIco {
 }
 
 Convert-ImageToBmp -Source "quantide.png" -Destination "quantide.bmp" -Width 0 -Height 0
-Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us.bmp" -Width 164 -Height 314
+Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us.bmp" -Width 280 -Height 280
 Convert-PngToIco -Source "quantide.png" -Destination "quantide.ico"
