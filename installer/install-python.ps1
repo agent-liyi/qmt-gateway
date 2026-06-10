@@ -219,26 +219,47 @@ function Invoke-BootstrapPipStage {
 
 function Invoke-InstallDependenciesStage {
     $installDepsLog = Join-Path $PythonDir '_install_deps.log'
+    $pyprojectPath = Join-Path $AppDir 'pyproject.toml'
+    $requirementsPath = Join-Path $DiagnosticDir 'qmt-gateway-requirements.txt'
+    $depsScriptPath = Join-Path $DiagnosticDir 'qmt-gateway-read-deps.py'
 
     Add-InstallerLogLines @(
         'PIP_INSTALL_START',
         ('INSTALL_DEPS_LOG=' + $installDepsLog),
-        ('TEMP_INSTALL_DEPS_LOG=' + $TempInstallDepsLog)
+        ('TEMP_INSTALL_DEPS_LOG=' + $TempInstallDepsLog),
+        ('REQUIREMENTS=' + $requirementsPath)
     )
 
+    [System.IO.File]::WriteAllText($depsScriptPath, @'
+import pathlib
+import sys
+import tomllib
+
+data = tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+dependencies = data.get("project", {}).get("dependencies", [])
+pathlib.Path(sys.argv[2]).write_text("\n".join(dependencies) + "\n", encoding="utf-8")
+'@, [System.Text.UTF8Encoding]::new($false))
+
     $exitCode = Invoke-LoggedPython -Arguments @(
-        '-m',
-        'pip',
-        'install',
-        '-e',
-        $AppDir,
-        '--no-build-isolation',
-        '--no-warn-script-location',
-        '-i',
-        $PipIndexUrl,
-        '--trusted-host',
-        $PipTrustedHost
+        $depsScriptPath,
+        $pyprojectPath,
+        $requirementsPath
     ) -DetailLog $installDepsLog -TempDetailLog $TempInstallDepsLog
+
+    if ($exitCode -eq 0) {
+        $exitCode = Invoke-LoggedPython -Arguments @(
+            '-m',
+            'pip',
+            'install',
+            '-r',
+            $requirementsPath,
+            '--no-warn-script-location',
+            '-i',
+            $PipIndexUrl,
+            '--trusted-host',
+            $PipTrustedHost
+        ) -DetailLog $installDepsLog -TempDetailLog $TempInstallDepsLog
+    }
 
     exit $exitCode
 }

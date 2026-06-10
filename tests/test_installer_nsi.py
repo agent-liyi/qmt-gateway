@@ -246,10 +246,16 @@ def test_installer_bootstraps_pip_before_using_it():
         "Dependency installation should use explicit mirror flags instead of relying on preconfigured pip state"
     )
     assert "setuptools>=68" in helper and "'wheel'" in helper, (
-        "Installer must install setuptools/wheel after get-pip.py so pyproject editable install can import setuptools.build_meta"
+        "Installer must install setuptools/wheel after get-pip.py so pip can build/install dependencies if needed"
     )
-    assert "'--no-build-isolation'" in helper, (
-        "Installer should reuse the bootstrapped setuptools/wheel instead of creating an isolated build env in embedded Python"
+    assert "qmt-gateway-requirements.txt" in helper and "tomllib" in helper, (
+        "Installer should read third-party dependencies from pyproject.toml into a requirements file"
+    )
+    assert "'-r'" in helper and "$requirementsPath" in helper, (
+        "Installer should pip install third-party dependencies from the generated requirements file"
+    )
+    assert "'-e'" not in helper and "'--no-build-isolation'" not in helper, (
+        "Do not editable-install the app itself; embedded Python imports the copied package via python313._pth"
     )
 
 
