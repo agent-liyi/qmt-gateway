@@ -143,7 +143,63 @@ function Convert-PngToIco {
     Write-Output "Generated $Destination"
 }
 
+function New-FinishWizardBitmap {
+    param(
+        [string]$Destination,
+        [int]$Width = 164,
+        [int]$Height = 314
+    )
+
+    $bmp = New-Object System.Drawing.Bitmap($Width, $Height, [System.Drawing.Imaging.PixelFormat]::Format24bppRgb)
+    $graphics = [System.Drawing.Graphics]::FromImage($bmp)
+    try {
+        $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+
+        $backgroundBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(0, 18, 126))
+        $stripePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(0, 32, 150), 1)
+        $arrowPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(0, 44, 160), 8)
+        $arrowPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+        $iconFrameBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+        $iconFillBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(235, 238, 245))
+        $iconLinePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(30, 30, 35), 3)
+        try {
+            $graphics.FillRectangle($backgroundBrush, 0, 0, $Width, $Height)
+
+            for ($row = 0; $row -lt $Height; $row += 3) {
+                $graphics.DrawLine($stripePen, 0, $row, $Width, $row)
+            }
+
+            $graphics.DrawLine($arrowPen, 15, 186, 73, 128)
+            $graphics.DrawLine($arrowPen, 73, 128, 38, 128)
+            $graphics.DrawLine($arrowPen, 73, 128, 73, 92)
+            $graphics.DrawLine($arrowPen, 15, 245, 98, 245)
+            $graphics.DrawLine($arrowPen, 98, 245, 68, 215)
+            $graphics.DrawLine($arrowPen, 98, 245, 68, 275)
+
+            $graphics.FillRectangle($iconFrameBrush, 70, 20, 60, 60)
+            $graphics.FillRectangle($iconFillBrush, 76, 26, 48, 48)
+            $graphics.DrawRectangle($iconLinePen, 84, 42, 26, 20)
+            $graphics.DrawLine($iconLinePen, 84, 42, 97, 35)
+            $graphics.DrawLine($iconLinePen, 110, 42, 97, 35)
+            $graphics.DrawArc($iconLinePen, 82, 54, 32, 18, 20, 280)
+        } finally {
+            $backgroundBrush.Dispose()
+            $stripePen.Dispose()
+            $arrowPen.Dispose()
+            $iconFrameBrush.Dispose()
+            $iconFillBrush.Dispose()
+            $iconLinePen.Dispose()
+        }
+        $bmp.Save($Destination, [System.Drawing.Imaging.ImageFormat]::Bmp)
+    } finally {
+        $graphics.Dispose()
+        $bmp.Dispose()
+    }
+    Write-Output "Generated $Destination"
+}
+
 Convert-ImageToBmp -Source "quantide.png" -Destination "quantide.bmp" -Width 0 -Height 0
 Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us.bmp" -Width 280 -Height 280
-Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us-finish.bmp" -Width 164 -Height 314
+New-FinishWizardBitmap -Destination "finish-wizard.bmp" -Width 164 -Height 314
 Convert-PngToIco -Source "quantide.png" -Destination "quantide.ico"

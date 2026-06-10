@@ -30,7 +30,7 @@ SetCompress off
 !define REQUIREMENTS_PATH "${__FILEDIR__}\${REQUIREMENTS_NAME}"
 !define CONTACT_US_JPG_NAME "contact-us.jpg"
 !define CONTACT_US_QR_BMP_NAME "contact-us.bmp"
-!define CONTACT_US_FINISH_BMP_NAME "contact-us-finish.bmp"
+!define FINISH_WIZARD_BMP_NAME "finish-wizard.bmp"
 !define CONTACT_US_REFRESH_SCRIPT_NAME "refresh-contact-bmp.ps1"
 !define CONTACT_US_READY_FLAG_NAME "contact-us.ready"
 !define CONTACT_US_CDN_URL "https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg"
@@ -46,7 +46,7 @@ SetCompress off
 
 ; Reserve the welcome/finish assets so they are available before any page is shown.
 ReserveFile "${CONTACT_US_QR_BMP_NAME}"
-ReserveFile "${CONTACT_US_FINISH_BMP_NAME}"
+ReserveFile "${FINISH_WIZARD_BMP_NAME}"
 ReserveFile "${CONTACT_US_JPG_NAME}"
 ReserveFile "${CONTACT_US_REFRESH_SCRIPT_NAME}"
 
@@ -116,8 +116,10 @@ Var WelcomeTitleFont
 ; nsDialogs (see show_welcome_dialog) so we have full control over the
 ; left-text / right-bitmap layout.
 ;
-; #69: the finish page uses the stock MUI wizard illustration, matching the
-; classic NSIS finish-page layout the user referenced.
+; #69: the finish page uses a bundled dark-blue wizard illustration matching
+; the classic NSIS finish-page layout the user referenced. We generate it into
+; the repository at build time instead of referencing ${NSISDIR}, which keeps
+; the installer resource path ASCII/local and avoids finish-page mojibake.
 
 ; IMPORTANT: register language tables and define every LangString BEFORE the
 ; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
@@ -145,7 +147,7 @@ LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "开机自启（用户登录�
 LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "防火墙入站规则（允许局域网访问）"
 
 ; Finish page localized text (#69)
-LangString FINISH_TITLE ${LANG_SIMPCHINESE} "$(^Name) 安装程序结束"
+LangString FINISH_TITLE ${LANG_SIMPCHINESE} "安装完成"
 LangString FINISH_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机。$\r$\n点击『完成(F)』关闭安装程序。"
 
 ; Welcome page - custom nsDialogs page so the layout can be left-text /
@@ -280,8 +282,6 @@ Function ApplyCompactStandardPageChrome
     Push $3
     Push $4
     Push $5
-    Push $6
-    Push $7
     Push $8
 
     LockWindow on
@@ -299,32 +299,18 @@ Function ApplyCompactStandardPageChrome
     System::Alloc 16
     Pop $1
     System::Call "User32::GetWindowRect(i r0, p r1)"
+    System::Call "User32::MapWindowPoints(i 0, i $HWNDPARENT, p r1, i 2)"
     System::Call "*$1(i.r2, i.r3, i.r4, i.r5)"
     System::Free $1
 
-    System::Alloc 16
-    Pop $1
-    System::Call "User32::GetWindowRect(i $HWNDPARENT, p r1)"
-    System::Call "*$1(i.r6, i.r7, i.r8, i.r5)"
-    System::Free $1
-
-    IntOp $2 $2 - $6
-    IntOp $3 $3 - $7
-    IntOp $4 $4 - $6
     IntOp $4 $4 - $2
-    IntOp $5 $5 - $7
-    IntOp $5 $5 - $3
-
     StrCpy $8 8
-    IntOp $5 $5 + $3
     IntOp $5 $5 - $8
-    System::Call "User32::MoveWindow(i r0, i $2, i $8, i $4, i $5, i 1)"
+    System::Call "User32::MoveWindow(i r0, i r2, i r8, i r4, i r5, i 1)"
 
     LockWindow off
 
     Pop $8
-    Pop $7
-    Pop $6
     Pop $5
     Pop $4
     Pop $3
@@ -337,12 +323,12 @@ FunctionEnd
 ; !insertmacro MUI_PAGE_LICENSE "LICENSE"
 
 ; Directory page
-!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_DIRECTORY
 
 ; Components / Options page
 !define MUI_COMPONENTSPAGE_SMALLDESC
-!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_COMPONENTS
 
 ; Start menu page
@@ -351,18 +337,18 @@ var ICONS_GROUP
 !define MUI_STARTMENUPAGE_REGISTRY_ROOT "${PRODUCT_UNINST_ROOT_KEY}"
 !define MUI_STARTMENUPAGE_REGISTRY_KEY "${PRODUCT_UNINST_KEY}"
 !define MUI_STARTMENUPAGE_REGISTRY_VALUENAME "${PRODUCT_STARTMENU_REGVAL}"
-!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_STARTMENU Application $ICONS_GROUP
 
 ; Instfiles page
-!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_INSTFILES
 
 ; Finish page - title/text/bitmap inline (#69)
-!define MUI_WELCOMEFINISHPAGE_BITMAP "${NSISDIR}\Contrib\Graphics\Wizard\win.bmp"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${FINISH_WIZARD_BMP_NAME}"
 !define MUI_FINISHPAGE_TITLE "$(FINISH_TITLE)"
 !define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"
-!define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
+!define MUI_FINISHPAGE_RUN_TEXT "立即启动"
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "查看安装日志"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED

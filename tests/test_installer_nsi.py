@@ -44,8 +44,12 @@ def test_installer_finish_page_renders_title_text_and_bitmap():
     assert '!define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"' in text, (
         "Finish page must override MUI_FINISHPAGE_TEXT with the success description (#69)"
     )
-    assert '!define MUI_WELCOMEFINISHPAGE_BITMAP "${NSISDIR}\\Contrib\\Graphics\\Wizard\\win.bmp"' in text, (
-        "Finish page should use the visible stock wizard artwork the user referenced (#69)"
+    assert '!define FINISH_WIZARD_BMP_NAME "finish-wizard.bmp"' in text
+    assert '!define MUI_WELCOMEFINISHPAGE_BITMAP "${FINISH_WIZARD_BMP_NAME}"' in text, (
+        "Finish page should use the bundled dark-blue wizard artwork the user referenced (#69)"
+    )
+    assert "${NSISDIR}\\Contrib\\Graphics\\Wizard\\win.bmp" not in text, (
+        "Do not reference the machine-level NSIS stock bitmap directly; bundle a local generated BMP instead"
     )
     assert '!define MUI_FINISHPAGE_BITMAP' not in text, (
         "Do not use the unsupported MUI_FINISHPAGE_BITMAP macro; MUI2 expects MUI_WELCOMEFINISHPAGE_BITMAP"
@@ -59,11 +63,14 @@ def test_installer_finish_page_renders_title_text_and_bitmap():
     assert 0 < finish_text_idx < finish_page_idx, (
         "FINISH_TEXT LangString must be defined before MUI_PAGE_FINISH (#69/#51)"
     )
-    assert "$(^Name) 安装程序结束" in text, (
-        "Finish title must use the localized '安装程序结束' wording (#69)"
+    assert "安装完成" in text, (
+        "Finish title must be short enough to render cleanly beside the wizard bitmap (#69)"
     )
     assert "已经成功安装到本机" in text, (
         "Finish text must use the localized '已经成功安装到本机' wording (#69)"
+    )
+    assert '!define MUI_FINISHPAGE_RUN_TEXT "立即启动"' in text, (
+        "Finish-page checkbox labels must stay short so they do not overflow the content area"
     )
 
 
@@ -163,6 +170,9 @@ def test_installer_uses_quantide_brand_icon():
     generator = (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8")
     assert "Convert-PngToIco" in generator, (
         "generate-bitmaps.ps1 must produce quantide.ico from quantide.png (#68)"
+    )
+    assert "New-FinishWizardBitmap" in generator and "finish-wizard.bmp" in generator, (
+        "generate-bitmaps.ps1 must produce the bundled dark-blue finish-page wizard bitmap (#69)"
     )
 
 
@@ -280,8 +290,11 @@ def test_installer_compacts_standard_pages_and_hides_header_logo():
     assert 'GetDlgItem $0 $HWNDPARENT 1018' in text and 'User32::MoveWindow' in text, (
         "The standard page child rect must be moved upward so the oversized blank header area disappears"
     )
-    assert text.count('!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome') >= 4, (
-        "Directory/components/startmenu/installfiles pages should all reuse the compact-page helper"
+    assert text.count('!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome') >= 4, (
+        "Directory/components/startmenu/installfiles pages should all reuse the compact-page helper after controls exist"
+    )
+    assert '!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome' not in text, (
+        "PRE runs before standard-page child controls exist, so it cannot reliably shrink the header"
     )
 
 
