@@ -45,8 +45,11 @@ def test_installer_finish_page_renders_title_text_and_bitmap():
         "Finish page must override MUI_FINISHPAGE_TEXT with the success description (#69)"
     )
     assert '!define CONTACT_US_FINISH_BMP_NAME "contact-us-finish.bmp"' in text
-    assert '!define MUI_FINISHPAGE_BITMAP "${CONTACT_US_FINISH_BMP_NAME}"' in text, (
-        "Finish page must render the dedicated left-side decorative bitmap (#69)"
+    assert '!define MUI_WELCOMEFINISHPAGE_BITMAP "${CONTACT_US_FINISH_BMP_NAME}"' in text, (
+        "Finish page must render the dedicated left-side decorative bitmap via the MUI2 welcome/finish bitmap macro (#69)"
+    )
+    assert '!define MUI_FINISHPAGE_BITMAP' not in text, (
+        "Do not use the unsupported MUI_FINISHPAGE_BITMAP macro; MUI2 expects MUI_WELCOMEFINISHPAGE_BITMAP"
     )
     finish_title_idx = text.find("LangString FINISH_TITLE ${LANG_SIMPCHINESE}")
     finish_text_idx = text.find("LangString FINISH_TEXT ${LANG_SIMPCHINESE}")
@@ -201,8 +204,11 @@ def test_installer_welcome_page_uses_nsdialogs_with_qr_on_the_right():
     right-side bitmap). The contact-us image is staged into $PLUGINSDIR at
     page-create time so it stays sharp on high-DPI displays."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "Page custom show_welcome_dialog" in text, (
+    assert 'Page custom show_welcome_dialog leave_welcome_dialog' in text, (
         "Welcome page must be a custom nsDialogs page so we control layout (#67)"
+    )
+    assert 'Page custom show_welcome_dialog leave_welcome_dialog "$(WELCOME_TITLE)"' not in text, (
+        "Do not append the welcome title to the installer window caption; it should render inside the page content instead"
     )
     assert "!include \"nsDialogs.nsh\"" in text, (
         "nsDialogs include is required for the custom welcome page (#67)"
@@ -228,6 +234,15 @@ def test_installer_welcome_page_uses_nsdialogs_with_qr_on_the_right():
     assert "${NSD_CreateLabel}" in text and "${NSD_CreateBitmap}" in text, (
         "Custom welcome page must contain a label and a bitmap control (#67)"
     )
+    assert 'nsDialogs::Create 1044' in text, (
+        "Welcome page should use the welcome/finish-page template so there is no oversized built-in header band"
+    )
+    assert '${NSD_CreateLabel} 14u 14u 170u 18u "$(WELCOME_TITLE)"' in text, (
+        "Welcome title should be rendered as a bold content-area label, not in the window caption"
+    )
+    assert 'SendMessage $1 ${WM_SETFONT} $WelcomeTitleFont 0' in text, (
+        "Welcome title should use a larger bold font so it reads like a title"
+    )
     assert '${NSD_SetStretchedBitmap} $WelcomeQrHandle "$PLUGINSDIR\\${CONTACT_US_QR_BMP_NAME}" $WelcomeQrBitmapHandle' in text, (
         "Custom welcome page must stretch the staged local QR BMP into the right column (#67)"
     )
@@ -237,14 +252,14 @@ def test_installer_welcome_page_uses_nsdialogs_with_qr_on_the_right():
     assert '${NSD_CreateTimer} welcome_qr_refresh_tick 400' in text, (
         "Welcome page must poll for the refreshed QR and replace it automatically (#67)"
     )
-    assert 'Call hide_welcome_header_brand' in text, (
-        "Welcome page must hide the default top-right header brand mark (#67/#68)"
+    assert 'Call HideWelcomeChrome' in text and 'Call ShowWelcomeChrome' in text, (
+        "Welcome page must hide the built-in welcome-page chrome while the custom layout is shown (#67/#68)"
     )
-    assert 'ShowWindow $5 ${SW_HIDE}' in text, (
-        "The built-in top-right header controls should be hidden before the QR is shown (#67/#68)"
+    assert 'GetDlgItem $0 $HWNDPARENT 1028' in text and 'GetDlgItem $0 $HWNDPARENT 1045' in text, (
+        "Welcome page should hide the standard welcome controls and reveal the custom page area (#67/#68)"
     )
-    assert '63% 12u 33% 120u' in text, (
-        "Bitmap control should use a fixed right-column layout so the QR renders reliably (#67)"
+    assert '${NSD_CreateBitmap} 212u 28u 96u 96u ""' in text, (
+        "QR control should be square so the staged bitmap is not distorted (#67)"
     )
 
 

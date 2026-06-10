@@ -54,13 +54,11 @@ ReserveFile "${CONTACT_US_REFRESH_SCRIPT_NAME}"
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "nsDialogs.nsh"
-!define WM_GETCLIENTRECT "0x0083"
-!define GW_CHILD "5"
-!define GW_HWNDNEXT "2"
 
 Var WelcomeQrHandle
 Var WelcomeQrBitmapHandle
 Var WelcomeQrReadyFlagPath
+Var WelcomeTitleFont
 
 
 !macro LogInit
@@ -153,7 +151,7 @@ LangString FINISH_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机
 ; Welcome page - custom nsDialogs page so the layout can be left-text /
 ; right-bitmap (the built-in MUI_WELCOME page only supports a left-side
 ; decorative strip, not a right-side QR code) (#67).
-Page custom show_welcome_dialog leave_welcome_dialog "$(WELCOME_TITLE)"
+Page custom show_welcome_dialog leave_welcome_dialog
 
 Function show_welcome_dialog
     ; Stage the local QR assets immediately so the page is never blank, then
@@ -169,21 +167,25 @@ Function show_welcome_dialog
     StrCpy $WelcomeQrReadyFlagPath "$PLUGINSDIR\${CONTACT_US_READY_FLAG_NAME}"
     Delete "$WelcomeQrReadyFlagPath"
 
-    nsDialogs::Create 1018
+    nsDialogs::Create 1044
     Pop $0
     ${If} $0 == error
         Abort
     ${EndIf}
 
-    !insertmacro MUI_HEADER_TEXT "$(WELCOME_TITLE)" ""
-    Call hide_welcome_header_brand
+    SetCtlColors $0 0 0xffffff
+    Call HideWelcomeChrome
 
-    ${NSD_CreateLabel} 0 10u 58% 118u "$(WELCOME_TEXT)"
+    ${NSD_CreateLabel} 14u 14u 170u 18u "$(WELCOME_TITLE)"
     Pop $1
-    CreateFont $2 "$(^Font)" "10" "400"
-    SendMessage $1 ${WM_SETFONT} $2 0
+    SendMessage $1 ${WM_SETFONT} $WelcomeTitleFont 0
+    SetCtlColors $1 0 0xffffff
 
-    ${NSD_CreateBitmap} 63% 12u 33% 120u ""
+    ${NSD_CreateLabel} 14u 40u 180u 88u "$(WELCOME_TEXT)"
+    Pop $2
+    SetCtlColors $2 0 0xffffff
+
+    ${NSD_CreateBitmap} 212u 28u 96u 96u ""
     Pop $WelcomeQrHandle
     ${NSD_SetStretchedBitmap} $WelcomeQrHandle "$PLUGINSDIR\${CONTACT_US_QR_BMP_NAME}" $WelcomeQrBitmapHandle
 
@@ -191,64 +193,60 @@ Function show_welcome_dialog
     ${NSD_CreateTimer} welcome_qr_refresh_tick 400
 
     nsDialogs::Show
+    Call ShowWelcomeChrome
 FunctionEnd
 
-Function hide_welcome_header_brand
+Function HideWelcomeChrome
     Push $0
-    Push $1
-    Push $2
-    Push $3
-    Push $4
-    Push $5
-    Push $6
-    Push $7
-    Push $8
-    Push $9
+    LockWindow on
+    GetDlgItem $0 $HWNDPARENT 1028
+    ShowWindow $0 ${SW_HIDE}
 
-    System::Alloc 16
+    GetDlgItem $0 $HWNDPARENT 1256
+    ShowWindow $0 ${SW_HIDE}
+
+    GetDlgItem $0 $HWNDPARENT 1035
+    ShowWindow $0 ${SW_HIDE}
+
+    GetDlgItem $0 $HWNDPARENT 1037
+    ShowWindow $0 ${SW_HIDE}
+
+    GetDlgItem $0 $HWNDPARENT 1038
+    ShowWindow $0 ${SW_HIDE}
+
+    GetDlgItem $0 $HWNDPARENT 1039
+    ShowWindow $0 ${SW_HIDE}
+
+    GetDlgItem $0 $HWNDPARENT 1045
+    ShowWindow $0 ${SW_NORMAL}
+    LockWindow off
     Pop $0
-    System::Call "User32::GetWindowRect(i $HWNDPARENT, p r0)"
-    System::Call "*$0(i.r1, i.r2, i.r3, i.r4)"
-    System::Free $0
+FunctionEnd
 
-    IntOp $3 $3 - $1
-    IntOp $4 $3 * 60
-    IntOp $4 $4 / 100
+Function ShowWelcomeChrome
+    Push $0
+    LockWindow on
+    GetDlgItem $0 $HWNDPARENT 1028
+    ShowWindow $0 ${SW_NORMAL}
 
-    System::Call "User32::GetWindow(i $HWNDPARENT, i ${GW_CHILD}) i .r5"
+    GetDlgItem $0 $HWNDPARENT 1256
+    ShowWindow $0 ${SW_NORMAL}
 
-hide_welcome_header_brand_loop:
-    ${If} $5 == 0
-        Goto hide_welcome_header_brand_done
-    ${EndIf}
+    GetDlgItem $0 $HWNDPARENT 1035
+    ShowWindow $0 ${SW_NORMAL}
 
-    System::Alloc 16
-    Pop $0
-    System::Call "User32::GetWindowRect(i r5, p r0)"
-    System::Call "*$0(i.r6, i.r7, i.r8, i.r9)"
-    System::Free $0
+    GetDlgItem $0 $HWNDPARENT 1037
+    ShowWindow $0 ${SW_NORMAL}
 
-    IntOp $6 $6 - $1
-    IntOp $7 $7 - $2
+    GetDlgItem $0 $HWNDPARENT 1038
+    ShowWindow $0 ${SW_NORMAL}
 
-    ${If} $6 >= $4
-    ${AndIf} $7 < 72
-        ShowWindow $5 ${SW_HIDE}
-    ${EndIf}
+    GetDlgItem $0 $HWNDPARENT 1039
+    ShowWindow $0 ${SW_NORMAL}
 
-    System::Call "User32::GetWindow(i r5, i ${GW_HWNDNEXT}) i .r5"
-    Goto hide_welcome_header_brand_loop
-
-hide_welcome_header_brand_done:
-    Pop $9
-    Pop $8
-    Pop $7
-    Pop $6
-    Pop $5
-    Pop $4
-    Pop $3
-    Pop $2
-    Pop $1
+    GetDlgItem $0 $HWNDPARENT 1045
+    ShowWindow $0 ${SW_HIDE}
+    LockWindow off
     Pop $0
 FunctionEnd
 
@@ -297,9 +295,9 @@ var ICONS_GROUP
 !insertmacro MUI_PAGE_INSTFILES
 
 ; Finish page - title/text/bitmap inline (#69)
+!define MUI_WELCOMEFINISHPAGE_BITMAP "${CONTACT_US_FINISH_BMP_NAME}"
 !define MUI_FINISHPAGE_TITLE "$(FINISH_TITLE)"
 !define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"
-!define MUI_FINISHPAGE_BITMAP "${CONTACT_US_FINISH_BMP_NAME}"
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "查看安装日志"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
@@ -324,6 +322,7 @@ RequestExecutionLevel admin
 
 Function .onInit
     ; Chinese only - no language picker.
+    CreateFont $WelcomeTitleFont "$(^Font)" "14" "700"
 
     ; WM_SETICON is sent later, in show_welcome_dialog, after the dialog
     ; window has actually been created. .onInit runs before any UI exists
