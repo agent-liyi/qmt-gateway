@@ -40,6 +40,10 @@ $InstallLog = Join-Path $InstallDir $InstallLogName
 $PythonExe = Join-Path $PythonDir 'python.exe'
 
 function Initialize-InstallerLogs {
+    foreach ($directory in @($InstallDir, $PythonDir, $AppDir, $DiagnosticDir)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+
     $summaryLines = @(
         '[Install]',
         ('INSTDIR=' + $InstallDir),
@@ -219,9 +223,7 @@ function Invoke-BootstrapPipStage {
 
 function Invoke-InstallDependenciesStage {
     $installDepsLog = Join-Path $PythonDir '_install_deps.log'
-    $pyprojectPath = Join-Path $AppDir 'pyproject.toml'
-    $requirementsPath = Join-Path $DiagnosticDir 'qmt-gateway-requirements.txt'
-    $depsScriptPath = Join-Path $DiagnosticDir 'qmt-gateway-read-deps.py'
+    $requirementsPath = Join-Path $AppDir 'requirements.txt'
 
     Add-InstallerLogLines @(
         'PIP_INSTALL_START',
@@ -230,36 +232,18 @@ function Invoke-InstallDependenciesStage {
         ('REQUIREMENTS=' + $requirementsPath)
     )
 
-    [System.IO.File]::WriteAllText($depsScriptPath, @'
-import pathlib
-import sys
-import tomllib
-
-data = tomllib.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
-dependencies = data.get("project", {}).get("dependencies", [])
-pathlib.Path(sys.argv[2]).write_text("\n".join(dependencies) + "\n", encoding="utf-8")
-'@, [System.Text.UTF8Encoding]::new($false))
-
     $exitCode = Invoke-LoggedPython -Arguments @(
-        $depsScriptPath,
-        $pyprojectPath,
-        $requirementsPath
+        '-m',
+        'pip',
+        'install',
+        '-r',
+        $requirementsPath,
+        '--no-warn-script-location',
+        '-i',
+        $PipIndexUrl,
+        '--trusted-host',
+        $PipTrustedHost
     ) -DetailLog $installDepsLog -TempDetailLog $TempInstallDepsLog
-
-    if ($exitCode -eq 0) {
-        $exitCode = Invoke-LoggedPython -Arguments @(
-            '-m',
-            'pip',
-            'install',
-            '-r',
-            $requirementsPath,
-            '--no-warn-script-location',
-            '-i',
-            $PipIndexUrl,
-            '--trusted-host',
-            $PipTrustedHost
-        ) -DetailLog $installDepsLog -TempDetailLog $TempInstallDepsLog
-    }
 
     exit $exitCode
 }

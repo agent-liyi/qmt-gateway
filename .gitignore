@@ -14,3 +14,4 @@ uv.lock
 logs/
 data/home/
 *.dmp
+installer/requirements.txt

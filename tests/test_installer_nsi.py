@@ -2,8 +2,9 @@
 
 from pathlib import Path
 
-INSTALLER_NSI = Path(__file__).resolve().parents[1] / "installer" / "installer.nsi"
-INSTALLER_PS1 = Path(__file__).resolve().parents[1] / "installer" / "install-python.ps1"
+ROOT = Path(__file__).resolve().parents[1]
+INSTALLER_NSI = ROOT / "installer" / "installer.nsi"
+INSTALLER_PS1 = ROOT / "installer" / "install-python.ps1"
 
 
 def test_installer_nsi_exists():
@@ -192,6 +193,9 @@ def test_installer_streams_detail_output_to_dedicated_temp_logs():
     assert '!define TEMP_EXTRACT_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_EXTRACT_LOG_BASENAME}"' in text
     assert '!define TEMP_BOOTSTRAP_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_BOOTSTRAP_LOG_BASENAME}"' in text
     assert '!define TEMP_INSTALL_DEPS_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_INSTALL_DEPS_LOG_BASENAME}"' in text
+    assert "New-Item -ItemType Directory -Path $directory -Force" in helper, (
+        "InitLogs must create $INSTDIR/python/app before writing detail logs so clean installs do not fail"
+    )
     assert 'Tee-Object' not in text
     assert 'Tee-Object' not in helper
 
@@ -248,14 +252,32 @@ def test_installer_bootstraps_pip_before_using_it():
     assert "setuptools>=68" in helper and "'wheel'" in helper, (
         "Installer must install setuptools/wheel after get-pip.py so pip can build/install dependencies if needed"
     )
-    assert "qmt-gateway-requirements.txt" in helper and "tomllib" in helper, (
-        "Installer should read third-party dependencies from pyproject.toml into a requirements file"
+    assert "qmt-gateway-requirements.txt" not in helper and "tomllib" not in helper, (
+        "Dependency extraction belongs to the build workflow, not the installer runtime"
     )
-    assert "'-r'" in helper and "$requirementsPath" in helper, (
-        "Installer should pip install third-party dependencies from the generated requirements file"
+    assert "requirements.txt" in helper and "'-r'" in helper and "$requirementsPath" in helper, (
+        "Installer should pip install third-party dependencies from the packaged requirements file"
     )
     assert "'-e'" not in helper and "'--no-build-isolation'" not in helper, (
         "Do not editable-install the app itself; embedded Python imports the copied package via python313._pth"
+    )
+
+
+def test_installer_generates_requirements_at_build_time():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
+    generator = (ROOT / "installer" / "generate-requirements.py").read_text(encoding="utf-8")
+    assert "!system" in text and "generate-requirements.py" in text, (
+        "NSIS build must generate installer/requirements.txt from pyproject.toml before packaging"
+    )
+    assert 'File "requirements.txt"' in text, (
+        "Installer must package the build-time generated requirements.txt"
+    )
+    assert "tomllib" in generator, (
+        "Build-time generator should read dependencies from pyproject.toml"
+    )
+    assert "tomllib" not in helper, (
+        "Installer runtime must not parse pyproject.toml to generate requirements"
     )
 
 
