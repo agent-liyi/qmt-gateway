@@ -140,11 +140,17 @@ function Invoke-RuntimeStage {
     if (Test-Path -LiteralPath $pthPath) {
         $pthLines = [System.Collections.Generic.List[string]]::new()
         $hasSitePackages = $false
+        $hasAppDir = $false
 
         foreach ($line in Get-Content -LiteralPath $pthPath) {
             switch ($line) {
                 'Lib\site-packages' {
                     $hasSitePackages = $true
+                    $pthLines.Add($line)
+                    continue
+                }
+                '..\app' {
+                    $hasAppDir = $true
                     $pthLines.Add($line)
                     continue
                 }
@@ -158,6 +164,9 @@ function Invoke-RuntimeStage {
 
         if (-not $hasSitePackages) {
             $pthLines.Add('Lib\site-packages')
+        }
+        if (-not $hasAppDir) {
+            $pthLines.Add('..\app')
         }
         $pthLines.Add('import site')
 
@@ -189,6 +198,21 @@ function Invoke-BootstrapPipStage {
         $PipTrustedHost
     ) -DetailLog $bootstrapLog -TempDetailLog $TempBootstrapLog
 
+    if ($exitCode -eq 0) {
+        $exitCode = Invoke-LoggedPython -Arguments @(
+            '-m',
+            'pip',
+            'install',
+            'setuptools>=68',
+            'wheel',
+            '--no-warn-script-location',
+            '-i',
+            $PipIndexUrl,
+            '--trusted-host',
+            $PipTrustedHost
+        ) -DetailLog $bootstrapLog -TempDetailLog $TempBootstrapLog
+    }
+
     Remove-Item -LiteralPath $getPip -Force -ErrorAction SilentlyContinue
     exit $exitCode
 }
@@ -208,6 +232,7 @@ function Invoke-InstallDependenciesStage {
         'install',
         '-e',
         $AppDir,
+        '--no-build-isolation',
         '--no-warn-script-location',
         '-i',
         $PipIndexUrl,

@@ -202,8 +202,11 @@ def test_installer_updates_python313_pth_without_utf8_bom():
     assert "[System.IO.File]::WriteAllText($pthPath, $content, [System.Text.UTF8Encoding]::new($false))" in helper, (
         "python313._pth must be written without a BOM so embedded Python can still import encodings"
     )
-    assert "Lib\\site-packages" in helper, (
+    assert r"Lib\site-packages" in helper, (
         "Embedded Python must add Lib\\site-packages to python313._pth so pip-installed packages are importable"
+    )
+    assert r"..\app" in helper, (
+        "Embedded Python ignores PYTHONPATH when python313._pth exists; add ..\\app so python -m qmt_gateway works"
     )
     assert "'import site'" in helper and "'#import site'" in helper, (
         "Helper must normalize python313._pth so import site is enabled even when the embeddable zip ships it commented out"
@@ -241,6 +244,12 @@ def test_installer_bootstraps_pip_before_using_it():
     )
     assert "'pip'" in helper and "'install'" in helper and "$AppDir" in helper, (
         "Dependency installation should use explicit mirror flags instead of relying on preconfigured pip state"
+    )
+    assert "setuptools>=68" in helper and "'wheel'" in helper, (
+        "Installer must install setuptools/wheel after get-pip.py so pyproject editable install can import setuptools.build_meta"
+    )
+    assert "'--no-build-isolation'" in helper, (
+        "Installer should reuse the bootstrapped setuptools/wheel instead of creating an isolated build env in embedded Python"
     )
 
 
