@@ -139,6 +139,7 @@ def test_installer_uses_external_powershell_helper():
         "Do not put complex PowerShell bodies in NSIS -Command strings"
     )
     assert "File /oname=${INSTALLER_SCRIPT_NAME} \"install-python.ps1\"" in text
+    assert '-File "${INSTALLER_SCRIPT_PATH}" -Stage InitLogs' in text
     assert '-File "${INSTALLER_SCRIPT_PATH}" -Stage Runtime' in text
     assert '-File "${INSTALLER_SCRIPT_PATH}" -Stage BootstrapPip' in text
     assert '-File "${INSTALLER_SCRIPT_PATH}" -Stage InstallDependencies' in text
@@ -152,7 +153,7 @@ def test_installer_powershell_commands_use_normal_single_quotes():
     assert all("''" not in line for line in powershell_lines), (
         "Wrap -Command with NSIS $\\\"...$\\\" so PowerShell can keep plain single-quoted literals"
     )
-    assert "[ValidateSet('Runtime', 'BootstrapPip', 'InstallDependencies')]" in helper
+    assert "[ValidateSet('InitLogs', 'Runtime', 'BootstrapPip', 'InstallDependencies')]" in helper
 
 
 def test_installer_aborts_on_critical_exec_failures():
@@ -160,8 +161,8 @@ def test_installer_aborts_on_critical_exec_failures():
     assert '!macro AbortOnExecFailure LABEL' in text, (
         "Critical nsExec steps must check and react to child-process exit codes"
     )
-    assert text.count('!insertmacro AbortOnExecFailure "') >= 3, (
-        "Runtime/bootstrap/install helper stages must stop the installer when they fail"
+    assert text.count('!insertmacro AbortOnExecFailure "') >= 4, (
+        "Log init/runtime/bootstrap/install helper stages must stop the installer when they fail"
     )
 
 
@@ -201,11 +202,14 @@ def test_installer_updates_python313_pth_without_utf8_bom():
     assert "[System.IO.File]::WriteAllText($pthPath, $content, [System.Text.UTF8Encoding]::new($false))" in helper, (
         "python313._pth must be written without a BOM so embedded Python can still import encodings"
     )
-    assert "(?m)^#import site$" in helper, (
-        "Regex end anchors live in the external helper and no longer need NSIS $$ escaping"
+    assert "Lib\\site-packages" in helper, (
+        "Embedded Python must add Lib\\site-packages to python313._pth so pip-installed packages are importable"
     )
-    assert "Set-Content" not in helper, (
-        "Do not rewrite python313._pth with PowerShell UTF8 in Windows PowerShell; it adds a BOM and breaks python313.zip lookup"
+    assert "'import site'" in helper and "'#import site'" in helper, (
+        "Helper must normalize python313._pth so import site is enabled even when the embeddable zip ships it commented out"
+    )
+    assert "Set-Content -LiteralPath $pthPath" not in helper, (
+        "Do not rewrite python313._pth with PowerShell Set-Content in Windows PowerShell; it adds a BOM and breaks python313.zip lookup"
     )
 
 
@@ -240,17 +244,36 @@ def test_installer_bootstraps_pip_before_using_it():
     )
 
 
-def test_installer_logs_absolute_paths_in_log():
-    """The installer must write the absolute install path into install.log *before*
-    invoking PowerShell, so the log still contains the path even if every PowerShell
-    call fails. The path is passed via Windows registry (WriteRegStr + Get-ItemProperty)
-    rather than env vars, to avoid NSIS ANSI code page corruption of CJK characters."""
+def test_installer_logs_absolute_paths_in_utf8_from_helper():
+    """The helper should initialize the summary logs in UTF-8 after the install
+    path is written to the registry. NSIS must avoid writing the CJK install path
+    directly, because mixing ANSI and UTF-8 in the same file causes mojibake."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     helper = INSTALLER_PS1.read_text(encoding="utf-8")
     assert "WriteRegStr" in text and "InstallLocation" in text, (
         "Must write InstallLocation to registry early so PowerShell can read it"
     )
-    assert "Add-Content -LiteralPath" in helper and "install.log" in helper, (
-        "install.log must be written by PowerShell with explicit UTF-8 encoding"
+    assert 'FileWrite $0 "InstallDir=$INSTDIR$\\r$\\n"' not in text, (
+        "Do not write the CJK install path from NSIS; it mixes ANSI bytes into the UTF-8 summary log"
+    )
+    assert 'FileWrite $0 "TempLog=${TEMP_INSTALL_LOG_PATH}$\\r$\\n"' not in text, (
+        "Summary logs should be initialized by the helper instead of split across NSIS and PowerShell encodings"
+    )
+    assert "Set-Content -LiteralPath $InstallLog -Encoding UTF8" in helper, (
+        "install.log must be initialized by PowerShell with explicit UTF-8 encoding"
+    )
+    assert "Set-Content -LiteralPath $TempInstallLog -Encoding UTF8" in helper, (
+        "Temp installer log must be initialized by PowerShell with explicit UTF-8 encoding"
+    )
+
+
+def test_installer_preserves_qmt_gateway_package_layout():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert 'SetOutPath "$INSTDIR\\app\\qmt_gateway"' in text, (
+        "Installer must preserve the qmt_gateway package directory so python -m qmt_gateway works"
+    )
+    assert 'File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \\\n         "..\\qmt_gateway\\*.*"' in text
+    assert 'SetOutPath "$INSTDIR\\app"' in text, (
+        "Project metadata files should live at the app root next to pyproject.toml"
     )
 

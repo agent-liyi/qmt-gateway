@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('Runtime', 'BootstrapPip', 'InstallDependencies')]
+    [ValidateSet('InitLogs', 'Runtime', 'BootstrapPip', 'InstallDependencies')]
     [string]$Stage
 )
 
@@ -38,6 +38,30 @@ $PythonDir = Join-Path $InstallDir 'python'
 $AppDir = Join-Path $InstallDir 'app'
 $InstallLog = Join-Path $InstallDir $InstallLogName
 $PythonExe = Join-Path $PythonDir 'python.exe'
+
+function Initialize-InstallerLogs {
+    $summaryLines = @(
+        '[Install]',
+        ('INSTDIR=' + $InstallDir),
+        ('TEMP_LOG=' + $TempInstallLog),
+        ('PYTHON_DIR=' + $PythonDir),
+        ('APP_DIR=' + $AppDir)
+    )
+
+    Set-Content -LiteralPath $InstallLog -Encoding UTF8 -Value $summaryLines
+    Set-Content -LiteralPath $TempInstallLog -Encoding UTF8 -Value $summaryLines
+
+    foreach ($detailLog in @(
+        (Join-Path $PythonDir '_extract.log'),
+        $TempExtractLog,
+        (Join-Path $PythonDir '_bootstrap_pip.log'),
+        $TempBootstrapLog,
+        (Join-Path $PythonDir '_install_deps.log'),
+        $TempInstallDepsLog
+    )) {
+        Set-Content -LiteralPath $detailLog -Encoding UTF8 -Value @()
+    }
+}
 
 function Add-InstallerLogLine {
     param([string]$Line)
@@ -114,8 +138,30 @@ function Invoke-RuntimeStage {
     Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
 
     if (Test-Path -LiteralPath $pthPath) {
-        $content = Get-Content -LiteralPath $pthPath -Raw
-        $content = [regex]::Replace($content, '(?m)^#import site$', 'import site')
+        $pthLines = [System.Collections.Generic.List[string]]::new()
+        $hasSitePackages = $false
+
+        foreach ($line in Get-Content -LiteralPath $pthPath) {
+            switch ($line) {
+                'Lib\site-packages' {
+                    $hasSitePackages = $true
+                    $pthLines.Add($line)
+                    continue
+                }
+                'import site' { continue }
+                '#import site' { continue }
+                default {
+                    $pthLines.Add($line)
+                }
+            }
+        }
+
+        if (-not $hasSitePackages) {
+            $pthLines.Add('Lib\site-packages')
+        }
+        $pthLines.Add('import site')
+
+        $content = [string]::Join("`r`n", $pthLines) + "`r`n"
         [System.IO.File]::WriteAllText($pthPath, $content, [System.Text.UTF8Encoding]::new($false))
         Add-InstallerLogLine ('UPDATED_PTH=' + $pthPath)
     }
@@ -175,6 +221,7 @@ function Invoke-InstallDependenciesStage {
 try {
     New-Item -ItemType Directory -Path $DiagnosticDir -Force | Out-Null
     switch ($Stage) {
+        'InitLogs' { Initialize-InstallerLogs }
         'Runtime' { Invoke-RuntimeStage }
         'BootstrapPip' { Invoke-BootstrapPipStage }
         'InstallDependencies' { Invoke-InstallDependenciesStage }

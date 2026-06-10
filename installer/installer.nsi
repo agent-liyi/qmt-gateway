@@ -43,16 +43,8 @@ SetCompress off
 !macro LogInit
     CreateDirectory "${INSTALLER_DIAGNOSTIC_DIR}"
     FileOpen $0 "${TEMP_INSTALL_LOG_PATH}" w
-    FileWrite $0 "[Install]$\r$\n"
-    FileWrite $0 "Started: $\r$\n"
-    FileWrite $0 "InstallDir=$INSTDIR$\r$\n"
-    FileWrite $0 "TempLog=${TEMP_INSTALL_LOG_PATH}$\r$\n"
     FileClose $0
     FileOpen $0 "$INSTDIR\${INSTALL_LOG_NAME}" w
-    FileWrite $0 "[Install]$\r$\n"
-    FileWrite $0 "Started: $\r$\n"
-    FileWrite $0 "InstallDir=$INSTDIR$\r$\n"
-    FileWrite $0 "TempLog=${TEMP_INSTALL_LOG_PATH}$\r$\n"
     FileClose $0
 !macroend
 
@@ -192,6 +184,8 @@ Section "-Core" SEC_CORE
     ; string expansion (which corrupts CJK under the system ANSI code page).
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "InstallLocation" "$INSTDIR"
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_INSTALL_STATE_KEY}" "InstallLocation" "$INSTDIR"
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage InitLogs'
+    !insertmacro AbortOnExecFailure "Initialize install logs"
     !insertmacro LogStep "Core: create directories"
 
     ; Create directories
@@ -214,13 +208,12 @@ Section "-Core" SEC_CORE
 
     !insertmacro LogStep "Core: copy application source"
     ; Copy application source to $INSTDIR\app
-    SetOutPath "$INSTDIR\app"
+        SetOutPath "$INSTDIR\app\qmt_gateway"
     File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
          "..\qmt_gateway\*.*"
-    File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
-         "..\pyproject.toml"
-    File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \
-         "..\README.md"
+        SetOutPath "$INSTDIR\app"
+        File "..\pyproject.toml"
+        File "..\README.md"
     SetOutPath "$INSTDIR"
 
     !insertmacro LogStep "Core: copy startup scripts"
