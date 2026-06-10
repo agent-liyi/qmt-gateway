@@ -48,28 +48,41 @@ def kill_qmt_processes(
 def resolve_qmt_executable(qmt_path: str | Path | None) -> Path:
     """根据用户填写的 qmt_path 解析出 QMT 客户端可执行文件路径。
 
-    接受以下两种入口：
+    接受以下几种入口（#63）：
 
-    - 形如 ``C:\\国金证券QMT交易端\\userdata_mini``（以 userdata_mini 结尾）；
-    - 形如 ``C:\\国金证券QMT交易端``（父目录），则要求其下有 ``userdata_mini``。
-    
-    解析后要求父目录下存在 ``bin.x64/{QMT_CLIENT_EXECUTABLE}``。
+    - ``C:\\apps\\qmt\\bin.x64\\XtMiniQmt.exe``（可执行文件本体）
+    - ``C:\\apps\\qmt\\bin.x64``（bin.x64 目录）
+    - ``C:\\apps\\qmt\\userdata_mini``（以 userdata_mini 结尾）
+    - ``C:\\apps\\qmt``（QMT 根目录，要求包含 userdata_mini 或 bin.x64）
+
+    解析后返回 ``base_dir / bin.x64 / XtMiniQmt.exe``。
     """
     text = str(qmt_path or "").strip()
     if not text:
         raise ValueError("QMT 路径未配置")
 
-    configured = Path(text).expanduser().resolve()
+    configured = Path(text).expanduser()
     if not configured.exists():
         raise FileNotFoundError(f"QMT 路径不存在: {configured}")
 
-    if configured.name.lower() == "userdata_mini":
+    if configured.name.lower() == "xtminiqmt.exe":
+        if configured.parent.name.lower() == "bin.x64":
+            base_dir = configured.parent.parent
+        else:
+            raise ValueError(
+                f"XtMiniQmt.exe 必须位于 bin.x64 子目录下，期望路径形如 ...\\bin.x64\\XtMiniQmt.exe，得到: {configured}"
+            )
+    elif configured.name.lower() == "bin.x64":
+        base_dir = configured.parent
+    elif configured.name.lower() == "userdata_mini":
         base_dir = configured.parent
     elif (configured / "userdata_mini").is_dir():
         base_dir = configured
+    elif (configured / "bin.x64" / QMT_CLIENT_EXECUTABLE).is_file():
+        base_dir = configured
     else:
         raise ValueError(
-            "QMT 路径不正确：目录中应包含 userdata_mini（请填写 userdata_mini 的完整路径，或其上一级目录）"
+            "QMT 路径不正确：应包含 userdata_mini、bin.x64\\XtMiniQmt.exe 或指向 QMT 根目录"
         )
 
     executable = base_dir / "bin.x64" / QMT_CLIENT_EXECUTABLE

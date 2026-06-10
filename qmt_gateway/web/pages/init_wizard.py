@@ -306,14 +306,19 @@ def Step5_QMT(form_data: dict | None = None):
                         type="text",
                         name="qmt_path",
                         value=fd.get("qmt_path", ""),
-                        placeholder=r"例如: C:\国金证券QMT交易端\userdata_mini",
+                        placeholder=(
+                            "如果不知道 QMT 安装位置，可以从启动 QMT 的快捷方式中"
+                            "查看目标，复制到此处，例如:"
+                            r" C:\apps\qmt\bin.x64\XtMiniQmt.exe"
+                        ),
                         cls="input input-bordered flex-1",
                         required="required",
                     ),
                     cls="flex items-center gap-3",
                 ),
                 P(
-                    "输入包含 userdata_mini 的完整路径。如果不知道安装位置，可以在文件资源管理器中搜索 userdata_mini",
+                    "可填 XtMiniQmt.exe 所在 bin.x64 目录、其上级目录，或 QMT 根目录。"
+                    "向导会自动校验是否存在 bin.x64\\XtMiniQmt.exe。",
                     cls="text-xs text-gray-500 mt-1 ml-31",
                 ),
                 # xtquant 路径 - 横向布局
@@ -323,10 +328,14 @@ def Step5_QMT(form_data: dict | None = None):
                         type="text",
                         name="xtquant_path",
                         value=fd.get("xtquant_path", ""),
-                        placeholder=r"例如: C:\apps（xtquant 解压后的父目录）",
+                        placeholder=r"包含 xtquant.py 的文件目录，例如: C:\apps\xtquant",
                         cls="input input-bordered flex-1",
                     ),
                     cls="flex items-center gap-3 mt-4",
+                ),
+                P(
+                    "填写包含 xtquant.py 的目录。如果解压到 C:\\apps\\xtquant，则填入 C:\\apps\\xtquant。",
+                    cls="text-xs text-gray-500 mt-1 ml-31",
                 ),
             ),
             cls="mb-4",

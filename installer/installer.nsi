@@ -9,31 +9,22 @@
 
 Unicode True
 SetCompress off
-!define PRODUCT_NAME "迅投 QMT 交易网关"
+!define PRODUCT_NAME "匡醍 QMT 交易网关"
 !define PRODUCT_VERSION "0.1.0"
 !define BUILD_NUMBER "0"  ; Replaced by CI with github.run_number
-!define PRODUCT_PUBLISHER "quantclaws"
-!define PRODUCT_WEB_SITE "https://github.com/quantclaws/qmt-gateway"
+!define PRODUCT_PUBLISHER "zillionare"
+!define PRODUCT_WEB_SITE "https://github.com/zillionare/qmt-gateway"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\qmt-gateway.exe"
 !define PRODUCT_DIR_REGKEY_WOW "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\qmt-gateway.exe"
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 !define PRODUCT_UNINST_ROOT_KEY "HKLM"
 !define PRODUCT_STARTMENU_REGVAL "NSIS:StartMenuDir"
-!define INSTALLER_DIAGNOSTIC_DIR "C:\Temp"
 !define PRODUCT_INSTALL_STATE_KEY "Software\qmt-gateway"
 !define INSTALLER_SCRIPT_NAME "qmt-gateway-install-python.ps1"
-!define INSTALLER_SCRIPT_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${INSTALLER_SCRIPT_NAME}"
+!define INSTALLER_SCRIPT_PATH "$INSTDIR\${INSTALLER_SCRIPT_NAME}"
 !define PIP_INDEX_URL "https://pypi.tuna.tsinghua.edu.cn/simple"
 !define PIP_TRUSTED_HOST "pypi.tuna.tsinghua.edu.cn"
 !define INSTALL_LOG_NAME "install.log"
-!define TEMP_INSTALL_LOG_BASENAME "qmt-gateway-installer.log"
-!define TEMP_INSTALL_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_INSTALL_LOG_BASENAME}"
-!define TEMP_EXTRACT_LOG_BASENAME "qmt-gateway-extract.log"
-!define TEMP_BOOTSTRAP_LOG_BASENAME "qmt-gateway-bootstrap-pip.log"
-!define TEMP_INSTALL_DEPS_LOG_BASENAME "qmt-gateway-install-deps.log"
-!define TEMP_EXTRACT_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_EXTRACT_LOG_BASENAME}"
-!define TEMP_BOOTSTRAP_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_BOOTSTRAP_LOG_BASENAME}"
-!define TEMP_INSTALL_DEPS_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_INSTALL_DEPS_LOG_BASENAME}"
 !define REQUIREMENTS_NAME "requirements.txt"
 !define REQUIREMENTS_PATH "${__FILEDIR__}\${REQUIREMENTS_NAME}"
 
@@ -45,18 +36,12 @@ SetCompress off
 
 
 !macro LogInit
-    CreateDirectory "${INSTALLER_DIAGNOSTIC_DIR}"
-    FileOpen $0 "${TEMP_INSTALL_LOG_PATH}" w
-    FileClose $0
     FileOpen $0 "$INSTDIR\${INSTALL_LOG_NAME}" w
     FileClose $0
 !macroend
 
 
 !macro LogLine TEXT
-    FileOpen $0 "${TEMP_INSTALL_LOG_PATH}" a
-    FileWrite $0 "${TEXT}$\r$\n"
-    FileClose $0
     FileOpen $0 "$INSTDIR\${INSTALL_LOG_NAME}" a
     FileWrite $0 "${TEXT}$\r$\n"
     FileClose $0
@@ -66,9 +51,6 @@ SetCompress off
 !macro LogStep LABEL
     Push $0
     Push $1
-    FileOpen $0 "${TEMP_INSTALL_LOG_PATH}" a
-    FileWrite $0 "==== ${LABEL} ====$\r$\n"
-    FileClose $0
     FileOpen $0 "$INSTDIR\${INSTALL_LOG_NAME}" a
     FileWrite $0 "==== ${LABEL} ====$\r$\n"
     FileClose $0
@@ -152,9 +134,9 @@ LangString WELCOME_TEXT ${LANG_ENGLISH} \
      please download it from your broker's website first.$\n$\n\
      The QMT installation path will be configured in the initialization wizard."
 LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_SIMPCHINESE} \
-    "安装失败。排查日志已保留到：$\n${TEMP_INSTALL_LOG_PATH}"
+    "安装失败。请查看安装目录下的 ${INSTALL_LOG_NAME}。如果尚未选择安装目录，请截屏反馈。"
 LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_ENGLISH} \
-    "Installation failed. Diagnostic log has been preserved at:$\n${TEMP_INSTALL_LOG_PATH}"
+    "Installation failed. Check ${INSTALL_LOG_NAME} in the install directory. If no install directory was selected yet, please provide a screenshot."
 
 Function .onInit
     !insertmacro MUI_LANGDLL_DISPLAY
@@ -177,11 +159,10 @@ Section "-Core" SEC_CORE
     SetOutPath "$INSTDIR"
 
     CreateDirectory "$INSTDIR"
+    SetOutPath "$INSTDIR"
+    File /oname=${INSTALLER_SCRIPT_NAME} "install-python.ps1"
     !insertmacro LogInit
     !insertmacro LogStep "Core: create install dir"
-    SetOutPath "${INSTALLER_DIAGNOSTIC_DIR}"
-    File /oname=${INSTALLER_SCRIPT_NAME} "install-python.ps1"
-    SetOutPath "$INSTDIR"
     !insertmacro LogStep "Core: write uninstall registry"
     ; Publish InstallLocation immediately so PowerShell child processes can
     ; recover the install path from the registry without going through NSIS
@@ -205,8 +186,6 @@ Section "-Core" SEC_CORE
 
     !insertmacro LogStep "Core: extract embedded Python"
     SetOutPath "$INSTDIR\python"
-    ; Run helper scripts from C:\Temp so PowerShell command lines never contain
-    ; the CJK install path or fragile inline script bodies.
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage Runtime'
     !insertmacro AbortOnExecFailure "Extract embedded Python"
 

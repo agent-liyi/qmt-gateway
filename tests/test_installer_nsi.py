@@ -86,8 +86,10 @@ def test_installer_logs_each_step():
     assert '!insertmacro LogInit' in text
     assert '!insertmacro LogStep' in text
     assert 'install.log' in text
-    assert 'qmt-gateway-installer.log' in text
     assert '查看安装日志' in text
+    assert "qmt-gateway-installer.log" not in text, (
+        "Installer logs must live under the chosen install directory (#65); do not mirror to C:\\Temp"
+    )
 
 
 def test_installer_pip_conf_uses_native_file_writes():
@@ -121,8 +123,8 @@ def test_installer_powershell_calls_pass_absolute_paths():
     assert 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\python' not in text, (
         "Do not use -File with a script path that contains $INSTDIR"
     )
-    assert "${INSTALLER_SCRIPT_PATH}" in text and "C:\\Temp" in text, (
-        "Installer must invoke the helper from a stable ASCII C:\\Temp path"
+    assert "${INSTALLER_SCRIPT_PATH}" in text and "$INSTDIR\\${INSTALLER_SCRIPT_NAME}" in text, (
+        "Installer must invoke the helper from $INSTDIR so logs and helper stay under the user's install directory (#65)"
     )
     assert "Get-ItemProperty" in helper and "InstallLocation" in helper, (
         "PowerShell helper must read the install path from the Windows registry via Get-ItemProperty"
@@ -167,35 +169,43 @@ def test_installer_aborts_on_critical_exec_failures():
     )
 
 
-def test_installer_preserves_temp_log_for_failed_runs():
+def test_installer_logs_reside_under_install_directory():
+    """Install logs must live under the user-selected install directory (#65).
+
+    If the installer fails before the user can select a directory, we should not
+    be writing any log at all; the user is instructed to capture a screenshot.
+    """
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     helper = INSTALLER_PS1.read_text(encoding="utf-8")
-    assert '!define INSTALLER_DIAGNOSTIC_DIR "C:\\Temp"' in text
-    assert '!define TEMP_INSTALL_LOG_BASENAME "qmt-gateway-installer.log"' in text
-    assert '!define TEMP_INSTALL_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_INSTALL_LOG_BASENAME}"' in text, (
-        "Installer must mirror logs to C:\\Temp so failed installs leave diagnostics in a stable location"
+    assert "INSTALLER_DIAGNOSTIC_DIR" not in text, (
+        "Installer must not use a hard-coded diagnostic directory like C:\\Temp"
     )
-    assert "$TempInstallLog = Join-Path $DiagnosticDir 'qmt-gateway-installer.log'" in helper, (
-        "PowerShell helper must append diagnostics to the fixed C:\\Temp summary log"
-    )
-    assert "$env:TEMP" not in helper, "Installer diagnostics should no longer be written under %TEMP%"
-    assert 'Function .onInstFailed' in text and 'INSTALL_FAILED_LOG_MESSAGE' in text, (
-        "Failed installs must surface the preserved temp log path to the user"
-    )
-
-
-def test_installer_streams_detail_output_to_dedicated_temp_logs():
-    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    helper = INSTALLER_PS1.read_text(encoding="utf-8")
-    assert 'qmt-gateway-extract.log' in text
-    assert 'qmt-gateway-bootstrap-pip.log' in text
-    assert 'qmt-gateway-install-deps.log' in text
-    assert '!define TEMP_EXTRACT_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_EXTRACT_LOG_BASENAME}"' in text
-    assert '!define TEMP_BOOTSTRAP_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_BOOTSTRAP_LOG_BASENAME}"' in text
-    assert '!define TEMP_INSTALL_DEPS_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_INSTALL_DEPS_LOG_BASENAME}"' in text
+    assert "qmt-gateway-installer.log" not in text
+    assert "qmt-gateway-installer.log" not in helper
+    assert "qmt-gateway-extract.log" not in text
+    assert "qmt-gateway-bootstrap-pip.log" not in text
+    assert "qmt-gateway-install-deps.log" not in text
+    assert "C:\\Temp" not in text
+    assert "C:\\Temp" not in helper
+    assert "DiagnosticDir" not in helper
+    assert "$env:TEMP" not in helper
     assert "New-Item -ItemType Directory -Path $directory -Force" in helper, (
         "InitLogs must create $INSTDIR/python/app before writing detail logs so clean installs do not fail"
     )
+    assert 'Function .onInstFailed' in text and 'INSTALL_FAILED_LOG_MESSAGE' in text, (
+        "Failed installs must surface the install-directory log path to the user"
+    )
+
+
+def test_installer_streams_detail_output_to_install_directory():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
+    assert "_extract.log" in helper
+    assert "_bootstrap_pip.log" in helper
+    assert "_install_deps.log" in helper
+    assert "_extract.log" not in text
+    assert "_bootstrap_pip.log" not in text
+    assert "_install_deps.log" not in text
     assert 'Tee-Object' not in text
     assert 'Tee-Object' not in helper
 
@@ -299,9 +309,6 @@ def test_installer_logs_absolute_paths_in_utf8_from_helper():
     assert "Set-Content -LiteralPath $InstallLog -Encoding UTF8" in helper, (
         "install.log must be initialized by PowerShell with explicit UTF-8 encoding"
     )
-    assert "Set-Content -LiteralPath $TempInstallLog -Encoding UTF8" in helper, (
-        "Temp installer log must be initialized by PowerShell with explicit UTF-8 encoding"
-    )
 
 
 def test_installer_preserves_qmt_gateway_package_layout():
@@ -312,5 +319,22 @@ def test_installer_preserves_qmt_gateway_package_layout():
     assert 'File /r /x ".venv" /x "__pycache__" /x ".git" /x "data" /x "installer" \\\n         "..\\qmt_gateway\\*.*"' in text
     assert 'SetOutPath "$INSTDIR\\app"' in text, (
         "Project metadata files should live at the app root next to pyproject.toml"
+    )
+
+
+def test_installer_brand_and_website_link():
+    """#59 (branding) and #64 (link target) use 匡醍 + the zillionare repo URL."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "匡醍 QMT 交易网关" in text, (
+        "Installer title must use 匡醍 QMT 交易网关 (#59)"
+    )
+    assert "迅投 QMT 交易网关" not in text, (
+        "Old 迅投 brand string must no longer appear in the installer (#59)"
+    )
+    assert "https://github.com/zillionare/qmt-gateway" in text, (
+        "Website link must point to zillionare/qmt-gateway (#64)"
+    )
+    assert "https://github.com/quantclaws/qmt-gateway" not in text, (
+        "Old quantclaws website must be replaced (#64)"
     )
 

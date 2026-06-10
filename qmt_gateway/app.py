@@ -387,13 +387,21 @@ def create_app():
             _wizard_data["auto_start_qmt"] = ""
         logger.info(f"接收到表单数据: {form_dict}")
 
-        # 第2步（管理员设置）点击下一步时，校验密码一致性
+        # 第2步（管理员设置）点击下一步时，校验密码一致性与非空（#32）
         if step == 3:  # 即将进入第3步（服务器设置）
             password = _wizard_data.get("password", "")
             password_confirm = _wizard_data.get("password_confirm", "")
             logger.info(f"第2步密码校验: password='{password}', password_confirm='{password_confirm}'")
+            if not password or not password.strip():
+                return _render_fragment(
+                    InitWizardForm(
+                        step=2,
+                        form_data=_wizard_data,
+                        error="管理员密码不能为空，请输入密码后继续",
+                    ),
+                    _WizardProgressModal(visible=False, oob=True),
+                )
             if password != password_confirm:
-                # 返回第2步，并显示错误信息 + OOB 隐藏进度对话框
                 return _render_fragment(
                     InitWizardForm(
                         step=2,
@@ -439,6 +447,28 @@ def create_app():
                         f"qmt_account_id={_wizard_data.get('qmt_account_id')!r}")
 
             username = _wizard_data.get("username", "admin")
+            password = _wizard_data.get("password", "")
+
+            if not username.strip() or not password.strip():
+                return HTMLResponse(
+                    "管理员账号或密码不能为空，请返回第 2 步重新输入。",
+                    status_code=400,
+                )
+
+            # 1b. 提前校验 QMT/xtquant 路径（#63），避免无效输入触发自动重启
+            preview_settings = _build_settings_from_wizard_data(_wizard_data)
+            path_probe = probe_qmt_path(preview_settings.qmt_path)
+            if not path_probe["valid"]:
+                return _render_fragment(
+                    _build_wizard_failure_fragment(
+                        original_error=path_probe.get("reason", "QMT 路径无效"),
+                        recovery_reason=path_probe.get("reason"),
+                        recovery_hint=(
+                            "请检查 QMT 路径是否正确：可填 XtMiniQmt.exe 所在 bin.x64 目录、"
+                            "其上级目录，或 QMT 根目录。"
+                        ),
+                    )
+                )
 
             # 2. 快照（必须在做任何写操作前完成）
             snapshot = _snapshot_wizard_state(username=username)

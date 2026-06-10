@@ -539,7 +539,7 @@ def _make_fake_xtdata():
 
 
 def test_complete_without_qmt_password_skips_connection_test(
-    seeded_initialized_db, client, monkeypatch
+    seeded_initialized_db, client, monkeypatch, tmp_path
 ):
     """不提供 qmt_password 时，wizard_complete 应跳过连接检查，直接落库完成初始化。"""
     require_xtdata_called = {"value": False}
@@ -551,6 +551,8 @@ def test_complete_without_qmt_password_skips_connection_test(
     from qmt_gateway import core as core_module
     monkeypatch.setattr(core_module, "require_xtdata", spy_require_xtdata)
 
+    valid_qmt = _make_fake_qmt_install(tmp_path)
+
     response = client.post(
         "/init-wizard/complete",
         data={
@@ -561,7 +563,7 @@ def test_complete_without_qmt_password_skips_connection_test(
             "log_rotation": "10 MB",
             "log_retention": "3",
             "qmt_account_id": "new-account",
-            "qmt_path": r"C:\some\qmt",
+            "qmt_path": str(valid_qmt),
             "xtquant_path": "",
             "qmt_password": "",
             "principal": "2000000",
@@ -569,26 +571,24 @@ def test_complete_without_qmt_password_skips_connection_test(
         follow_redirects=False,
     )
 
-    # 应直接重定向到首页
     assert response.status_code in (302, 303)
-    # 不应调用 require_xtdata
     assert require_xtdata_called["value"] is False
-    # 落盘生效
     saved = db.get_settings()
     assert bool(saved.init_completed) is True
     assert saved.server_port == 8888
     assert saved.qmt_account_id == "new-account"
-    # 无密码时不应存储加密密码
     assert saved.qmt_password_encrypted == ""
     assert saved.qmt_password_salt == ""
 
 
 def test_complete_without_qmt_password_still_saves_settings(
-    seeded_initialized_db, client, monkeypatch
+    seeded_initialized_db, client, monkeypatch, tmp_path
 ):
     """无 QMT 密码完成初始化后，settings 各字段应正确保存。"""
     from qmt_gateway import core as core_module
     monkeypatch.setattr(core_module, "require_xtdata", lambda *a, **k: _make_fake_xtdata())
+
+    valid_qmt = _make_fake_qmt_install(tmp_path)
 
     client.post(
         "/init-wizard/complete",
@@ -600,7 +600,7 @@ def test_complete_without_qmt_password_still_saves_settings(
             "log_rotation": "5 MB",
             "log_retention": "5",
             "qmt_account_id": "12345678",
-            "qmt_path": r"C:\broker\userdata_mini",
+            "qmt_path": str(valid_qmt),
             "xtquant_path": r"C:\apps",
             "qmt_password": "",
             "principal": "500000",
@@ -615,13 +615,15 @@ def test_complete_without_qmt_password_still_saves_settings(
 
 
 def test_complete_with_password_but_no_auto_start_skips_restart(
-    seeded_initialized_db, client, monkeypatch
+    seeded_initialized_db, client, monkeypatch, tmp_path
 ):
     """有密码但未勾选 auto_start_qmt 时，应只保存密码不执行自动重启/重连。"""
     from qmt_gateway import app as app_module
     from qmt_gateway import core as core_module
     monkeypatch.setattr(core_module, "require_xtdata", lambda *a, **k: _make_fake_xtdata())
     app_module._wizard_data.clear()
+
+    valid_qmt = _make_fake_qmt_install(tmp_path)
 
     response = client.post(
         "/init-wizard/complete",
@@ -633,7 +635,7 @@ def test_complete_with_password_but_no_auto_start_skips_restart(
             "log_rotation": "5 MB",
             "log_retention": "5",
             "qmt_account_id": "12345678",
-            "qmt_path": r"C:\broker\userdata_mini",
+            "qmt_path": str(valid_qmt),
             "xtquant_path": r"C:\apps",
             "qmt_password": "my-trade-secret",
             "principal": "500000",
@@ -652,7 +654,7 @@ def test_complete_with_password_but_no_auto_start_skips_restart(
 
 
 def test_complete_via_multistep_flow_saves_qmt_password(
-    seeded_initialized_db, client, monkeypatch
+    seeded_initialized_db, client, monkeypatch, tmp_path
 ):
     """模拟真实多步骤流程：先提交 step 2 设置 admin 密码，再提交 step 5 设置 qmt_password。
 
@@ -662,6 +664,8 @@ def test_complete_via_multistep_flow_saves_qmt_password(
     from qmt_gateway import core as core_module
     monkeypatch.setattr(core_module, "require_xtdata", lambda *a, **k: _make_fake_xtdata())
     app_module._wizard_data.clear()
+
+    valid_qmt = _make_fake_qmt_install(tmp_path)
 
     # step 2 → step 3：设置管理员账号
     client.post(
@@ -678,7 +682,7 @@ def test_complete_via_multistep_flow_saves_qmt_password(
         "/init-wizard/complete",
         data={
             "qmt_account_id": "8881457417",
-            "qmt_path": r"C:\broker\userdata_mini",
+            "qmt_path": str(valid_qmt),
             "xtquant_path": r"C:\apps",
             "qmt_password": "trade-secret",
         },
@@ -696,12 +700,13 @@ def test_complete_via_multistep_flow_saves_qmt_password(
 
 
 def test_complete_without_qmt_password_uses_hx_redirect_for_htmx_requests(
-    seeded_initialized_db, client, monkeypatch
+    seeded_initialized_db, client, monkeypatch, tmp_path
 ):
     """HTMX 完成初始化时应返回 HX-Redirect，避免延迟或错误交换。"""
     from qmt_gateway import core as core_module
 
     monkeypatch.setattr(core_module, "require_xtdata", lambda *a, **k: _make_fake_xtdata())
+    valid_qmt = _make_fake_qmt_install(tmp_path)
 
     response = client.post(
         "/init-wizard/complete",
@@ -714,7 +719,7 @@ def test_complete_without_qmt_password_uses_hx_redirect_for_htmx_requests(
             "log_rotation": "5 MB",
             "log_retention": "5",
             "qmt_account_id": "12345678",
-            "qmt_path": r"C:\broker\userdata_mini",
+            "qmt_path": str(valid_qmt),
             "xtquant_path": r"C:\apps",
             "qmt_password": "",
             "principal": "500000",
@@ -759,9 +764,98 @@ def test_step5_password_hint_text_and_alignment():
     assert "可不填写，但会失去自动启动并登录 QMT 的能力" not in html
     # 自动启动复选框 label 包含正确文案
     assert "允许自动启动、重启 QMT" in html
-    # QMT 路径提示中已移除 "提示：" 前缀
-    assert "输入包含 userdata_mini" in html
-    assert "提示：输入包含" not in html
+    # QMT 路径提示支持快捷方式目标（#63）
+    assert "XtMiniQmt.exe" in html
+    assert "bin.x64" in html
+    # xtquant 路径提示更友好（#63）
+    assert "xtquant.py" in html
     # 密码输入框有 id 以便 JS 联动
     assert 'id="qmt-password-input"' in html
     assert 'id="qmt-password-label"' in html
+
+
+def test_step3_rejects_empty_admin_password(seeded_initialized_db, client):
+    """空管理员密码在第2步点"下一步"时必须被拒绝（#32）。"""
+    response = client.post(
+        "/init-wizard/step/3",
+        data={"username": "admin", "password": "", "password_confirm": ""},
+    )
+    assert response.status_code == 200
+    body = response.text
+    assert "管理员密码不能为空" in body, (
+        "空密码应在第 2 步表单直接被拒绝，提示重新输入"
+    )
+
+
+def test_complete_rejects_empty_admin_password(seeded_initialized_db, client):
+    """完成初始化时若密码为空也应被拒绝（#32）。"""
+    response = client.post(
+        "/init-wizard/complete",
+        data={
+            "username": "admin",
+            "password": "",
+            "server_port": "8130",
+            "log_path": "logs",
+            "log_rotation": "10 MB",
+            "log_retention": "3",
+            "qmt_account_id": "x",
+            "qmt_path": r"C:\broker\userdata_mini",
+            "xtquant_path": "",
+            "qmt_password": "",
+            "principal": "1000000",
+        },
+    )
+    assert response.status_code == 400
+    assert "管理员账号或密码不能为空" in response.text
+
+
+def test_resolve_qmt_executable_accepts_xtminiqmt_exe_target(tmp_path):
+    """#63: 用户可从 QMT 快捷方式目标里直接复制 XtMiniQmt.exe 路径。"""
+    from qmt_gateway.qmt_init_helpers import resolve_qmt_executable
+
+    install = tmp_path / "qmt"
+    bin_dir = install / "bin.x64"
+    bin_dir.mkdir(parents=True)
+    exe = bin_dir / "XtMiniQmt.exe"
+    exe.write_bytes(b"")
+
+    resolved = resolve_qmt_executable(exe)
+    assert resolved == exe
+
+    resolved = resolve_qmt_executable(bin_dir)
+    assert resolved == exe
+
+    userdata = install / "userdata_mini"
+    userdata.mkdir()
+    resolved = resolve_qmt_executable(userdata)
+    assert resolved == exe
+
+    resolved = resolve_qmt_executable(install)
+    assert resolved == exe
+
+
+def test_complete_short_circuits_on_invalid_qmt_path(
+    seeded_initialized_db, client
+):
+    """#63: 无效 QMT 路径必须在完成初始化时立即返回错误，而不是先尝试自动重启。"""
+    settings_before = db.get_settings().to_dict()
+    response = client.post(
+        "/init-wizard/complete",
+        data={
+            "username": "admin",
+            "password": "new-pass-456",
+            "server_port": "8130",
+            "log_path": "logs",
+            "log_rotation": "10 MB",
+            "log_retention": "3",
+            "qmt_account_id": "x",
+            "qmt_path": r"C:\definitely\not\there",
+            "xtquant_path": "",
+            "qmt_password": "trade-pass-123",
+            "auto_start_qmt": "on",
+            "principal": "1000000",
+        },
+    )
+    assert response.status_code == 200
+    assert "QMT 路径不正确" in response.text or "QMT 路径不存在" in response.text
+    assert db.get_settings().to_dict() == settings_before

@@ -6,12 +6,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$DiagnosticDir = 'C:\Temp'
 $InstallLogName = 'install.log'
-$TempInstallLog = Join-Path $DiagnosticDir 'qmt-gateway-installer.log'
-$TempExtractLog = Join-Path $DiagnosticDir 'qmt-gateway-extract.log'
-$TempBootstrapLog = Join-Path $DiagnosticDir 'qmt-gateway-bootstrap-pip.log'
-$TempInstallDepsLog = Join-Path $DiagnosticDir 'qmt-gateway-install-deps.log'
 $PipIndexUrl = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 $PipTrustedHost = 'pypi.tuna.tsinghua.edu.cn'
 $StateRegistryPaths = @(
@@ -40,28 +35,23 @@ $InstallLog = Join-Path $InstallDir $InstallLogName
 $PythonExe = Join-Path $PythonDir 'python.exe'
 
 function Initialize-InstallerLogs {
-    foreach ($directory in @($InstallDir, $PythonDir, $AppDir, $DiagnosticDir)) {
+    foreach ($directory in @($InstallDir, $PythonDir, $AppDir)) {
         New-Item -ItemType Directory -Path $directory -Force | Out-Null
     }
 
     $summaryLines = @(
         '[Install]',
         ('INSTDIR=' + $InstallDir),
-        ('TEMP_LOG=' + $TempInstallLog),
         ('PYTHON_DIR=' + $PythonDir),
         ('APP_DIR=' + $AppDir)
     )
 
     Set-Content -LiteralPath $InstallLog -Encoding UTF8 -Value $summaryLines
-    Set-Content -LiteralPath $TempInstallLog -Encoding UTF8 -Value $summaryLines
 
     foreach ($detailLog in @(
         (Join-Path $PythonDir '_extract.log'),
-        $TempExtractLog,
         (Join-Path $PythonDir '_bootstrap_pip.log'),
-        $TempBootstrapLog,
-        (Join-Path $PythonDir '_install_deps.log'),
-        $TempInstallDepsLog
+        (Join-Path $PythonDir '_install_deps.log')
     )) {
         Set-Content -LiteralPath $detailLog -Encoding UTF8 -Value @()
     }
@@ -71,7 +61,6 @@ function Add-InstallerLogLine {
     param([string]$Line)
 
     Add-Content -LiteralPath $InstallLog -Encoding UTF8 -Value $Line
-    Add-Content -LiteralPath $TempInstallLog -Encoding UTF8 -Value $Line
 }
 
 function Add-InstallerLogLines {
@@ -85,8 +74,7 @@ function Add-InstallerLogLines {
 function Add-DetailOutput {
     param(
         [string]$OutputPath,
-        [string]$DetailLog,
-        [string]$TempDetailLog
+        [string]$DetailLog
     )
 
     if (-not (Test-Path -LiteralPath $OutputPath)) {
@@ -96,18 +84,16 @@ function Add-DetailOutput {
     foreach ($line in Get-Content -LiteralPath $OutputPath) {
         Write-Output $line
         Add-Content -LiteralPath $DetailLog -Encoding UTF8 -Value $line
-        Add-Content -LiteralPath $TempDetailLog -Encoding UTF8 -Value $line
     }
 }
 
 function Invoke-LoggedPython {
     param(
         [string[]]$Arguments,
-        [string]$DetailLog,
-        [string]$TempDetailLog
+        [string]$DetailLog
     )
 
-    $outputPath = Join-Path $DiagnosticDir ([System.IO.Path]::GetRandomFileName())
+    $outputPath = Join-Path $PythonDir ([System.IO.Path]::GetRandomFileName())
     $oldErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
@@ -117,7 +103,7 @@ function Invoke-LoggedPython {
         $ErrorActionPreference = $oldErrorActionPreference
     }
 
-    Add-DetailOutput -OutputPath $outputPath -DetailLog $DetailLog -TempDetailLog $TempDetailLog
+    Add-DetailOutput -OutputPath $outputPath -DetailLog $DetailLog
     Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
     return $exitCode
 }
@@ -129,16 +115,14 @@ function Invoke-RuntimeStage {
 
     Add-InstallerLogLines @(
         ('INSTDIR=' + $InstallDir),
-        ('TEMP_LOG=' + $TempInstallLog),
         ('PYTHON_DIR=' + $PythonDir),
         ('APP_DIR=' + $AppDir),
-        ('EXTRACT_LOG=' + $extractLog),
-        ('TEMP_EXTRACT_LOG=' + $TempExtractLog)
+        ('EXTRACT_LOG=' + $extractLog)
     )
 
-    $outputPath = Join-Path $DiagnosticDir ([System.IO.Path]::GetRandomFileName())
+    $outputPath = Join-Path $PythonDir ([System.IO.Path]::GetRandomFileName())
     Expand-Archive -Path $zipPath -DestinationPath $PythonDir -Force *> $outputPath
-    Add-DetailOutput -OutputPath $outputPath -DetailLog $extractLog -TempDetailLog $TempExtractLog
+    Add-DetailOutput -OutputPath $outputPath -DetailLog $extractLog
     Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
 
     if (Test-Path -LiteralPath $pthPath) {
@@ -189,8 +173,7 @@ function Invoke-BootstrapPipStage {
 
     Add-InstallerLogLines @(
         'PIP_BOOTSTRAP_START',
-        ('BOOTSTRAP_LOG=' + $bootstrapLog),
-        ('TEMP_BOOTSTRAP_LOG=' + $TempBootstrapLog)
+        ('BOOTSTRAP_LOG=' + $bootstrapLog)
     )
 
     $exitCode = Invoke-LoggedPython -Arguments @(
@@ -200,7 +183,7 @@ function Invoke-BootstrapPipStage {
         $PipIndexUrl,
         '--trusted-host',
         $PipTrustedHost
-    ) -DetailLog $bootstrapLog -TempDetailLog $TempBootstrapLog
+    ) -DetailLog $bootstrapLog
 
     if ($exitCode -eq 0) {
         $exitCode = Invoke-LoggedPython -Arguments @(
@@ -214,7 +197,7 @@ function Invoke-BootstrapPipStage {
             $PipIndexUrl,
             '--trusted-host',
             $PipTrustedHost
-        ) -DetailLog $bootstrapLog -TempDetailLog $TempBootstrapLog
+        ) -DetailLog $bootstrapLog
     }
 
     Remove-Item -LiteralPath $getPip -Force -ErrorAction SilentlyContinue
@@ -228,7 +211,6 @@ function Invoke-InstallDependenciesStage {
     Add-InstallerLogLines @(
         'PIP_INSTALL_START',
         ('INSTALL_DEPS_LOG=' + $installDepsLog),
-        ('TEMP_INSTALL_DEPS_LOG=' + $TempInstallDepsLog),
         ('REQUIREMENTS=' + $requirementsPath)
     )
 
@@ -243,13 +225,12 @@ function Invoke-InstallDependenciesStage {
         $PipIndexUrl,
         '--trusted-host',
         $PipTrustedHost
-    ) -DetailLog $installDepsLog -TempDetailLog $TempInstallDepsLog
+    ) -DetailLog $installDepsLog
 
     exit $exitCode
 }
 
 try {
-    New-Item -ItemType Directory -Path $DiagnosticDir -Force | Out-Null
     switch ($Stage) {
         'InitLogs' { Initialize-InstallerLogs }
         'Runtime' { Invoke-RuntimeStage }
