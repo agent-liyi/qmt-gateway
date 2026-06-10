@@ -29,15 +29,17 @@ SetCompress off
 !define REQUIREMENTS_NAME "requirements.txt"
 !define REQUIREMENTS_PATH "${__FILEDIR__}\${REQUIREMENTS_NAME}"
 
-; Reserve contact-us.bmp so it is available to every custom Page callback.
-ReserveFile "contact-us.bmp"
-
-; #67 / #68: build-time preprocessor steps.
+; #67 / #68: build-time preprocessor steps. Run BEFORE ReserveFile so the
+; generated bitmaps are present on disk.
 ;   - generate-requirements.py writes installer\requirements.txt from pyproject.toml.
 ;   - generate-bitmaps.ps1 converts quantide.png / contact-us.jpg to the BMP
-;     format that MUI2 requires for MUI_WELCOMEPAGE_BITMAP.
+;     format that MUI2 requires for MUI_WELCOMEPAGE_BITMAP and produces
+;     quantide.ico for MUI_ICON / MUI_UNICON.
 !system 'python ".\generate-requirements.py" "..\pyproject.toml" ".\requirements.txt"' = 0
 !system 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\generate-bitmaps.ps1"' = 0
+
+; Reserve contact-us.bmp so it is available to every custom Page callback.
+ReserveFile "contact-us.bmp"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"

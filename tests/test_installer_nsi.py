@@ -163,6 +163,21 @@ def test_installer_uses_quantide_logo_as_header_image():
     )
 
 
+def test_installer_bitmap_generation_runs_before_reservefile():
+    """contact-us.bmp must exist on disk by the time ReserveFile references
+    it. generate-bitmaps.ps1 therefore has to run in the NSI preprocessor
+    BEFORE the ReserveFile directive; otherwise makensis aborts with
+    'ReserveFile: no files found'."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    generate_idx = text.find("generate-bitmaps.ps1")
+    reserve_idx = text.find('ReserveFile "contact-us.bmp"')
+    assert generate_idx != -1, "generate-bitmaps.ps1 must be invoked by the NSI preprocessor"
+    assert reserve_idx != -1, "contact-us.bmp must be reserved so it is available to Page callbacks"
+    assert generate_idx < reserve_idx, (
+        "generate-bitmaps.ps1 must run BEFORE ReserveFile so the bitmap exists on disk"
+    )
+
+
 def test_installer_welcome_page_uses_nsdialogs_with_qr_on_the_right():
     """#67: welcome page renders a Chinese prompt on the left and the
     contact-us QR code on the right via a custom nsDialogs page (the built-in
