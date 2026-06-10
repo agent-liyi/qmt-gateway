@@ -206,6 +206,15 @@ def test_installer_powershell_does_not_leave_bare_dollars():
     )
 
 
+def test_installer_avoids_last_exit_code_if_statements():
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    powershell_lines = [line for line in text.splitlines() if "powershell.exe" in line]
+    assert all("if ($$LASTEXITCODE)" not in line for line in powershell_lines), (
+        "Avoid inline if($LASTEXITCODE) in NSIS PowerShell strings; preserve the exit code and exit explicitly"
+    )
+    assert "$$exitCode = $$LASTEXITCODE" in text
+
+
 def test_installer_bootstraps_pip_before_using_it():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert "-m pip config set" not in text, (
