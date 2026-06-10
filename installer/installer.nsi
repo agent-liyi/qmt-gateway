@@ -133,7 +133,7 @@ LangString FINISH_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机
 ; Welcome page - custom nsDialogs page so the layout can be left-text /
 ; right-bitmap (the built-in MUI_WELCOME page only supports a left-side
 ; decorative strip, not a right-side QR code) (#67).
-Page custom show_welcome_dialog leave_welcome_dialog "" "$(WELCOME_TITLE)"
+Page custom show_welcome_dialog leave_welcome_dialog "$(WELCOME_TITLE)"
 
 Function show_welcome_dialog
     ; Make sure $PLUGINSDIR exists, then stage contact-us.bmp from the
