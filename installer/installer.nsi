@@ -45,6 +45,7 @@ ReserveFile "contact-us.bmp"
 !include "LogicLib.nsh"
 !include "x64.nsh"
 !include "nsDialogs.nsh"
+!include "WinMessages.nsh"
 
 
 !macro LogInit
@@ -186,14 +187,17 @@ Function show_welcome_dialog
     ; coordinates are in dialog units, but SetWindowPos works in pixels
     ; relative to the parent client area, so we re-issue a SetWindowPos to
     ; resize the control to that exact square.
-    IntOp $6 $4 * 40 / 100            ; right column width
+    IntOp $6 $4 * 40
+    IntOp $6 $6 / 100                  ; right column width
     IntOp $7 $6                        ; square = min(column, height)
-    IntCmp $7 $5 0 0 +1
-    IntOp $7 $5                        ; clamp to height
+    ${If} $7 > $5
+        IntOp $7 $5
+    ${EndIf}
     ; 60% of the dialog width = left column width. The bitmap's top-left
     ; x is that value; the bitmap is left at 0 so it stays at the top of
     ; the right column.
-    IntOp $8 $4 * 60 / 100
+    IntOp $8 $4 * 60
+    IntOp $8 $8 / 100
     ${NSD_CreateBitmap} $8 0 $6 $7 ""
     Pop $2
     ${NSD_SetImage} $2 "$PLUGINSDIR\contact-us.bmp" $3
