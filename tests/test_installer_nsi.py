@@ -140,42 +140,25 @@ def test_installer_documents_makensis_dependency():
     )
 
 
-def test_installer_uses_quantide_logo_as_header_image():
-    """#68: per the product decision (no quantide logo in title bar / taskbar),
-    MUI_ICON and MUI_UNICON are NOT defined. The brand assets (quantide.bmp /
-    quantide.ico) are still generated on disk for potential future use, but
-    are not referenced from the NSIS script."""
+def test_installer_uses_quantide_brand_icon():
+    """#68: the installer's title bar and taskbar must show the quantide brand
+    icon (the user explicitly asked for quantide.png to be the logo).
+    Without MUI_ICON / MUI_UNICON NSIS embeds its default globe-and-arrow
+    icon, which is NOT our brand. The .ico file is generated from
+    quantide.png at build time by generate-bitmaps.ps1."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert '!define MUI_ICON "quantide.ico"' in text, (
+        "Installer must use quantide.ico as its application icon (#68)"
+    )
+    assert '!define MUI_UNICON "quantide.ico"' in text, (
+        "Uninstaller must use quantide.ico as its application icon (#68)"
+    )
     assert "!define MUI_HEADERIMAGE" not in text, (
-        "MUI_HEADERIMAGE must NOT be enabled; the brand logo lives only in the title bar"
-    )
-    assert "!define MUI_ICON" not in text, (
-        "MUI_ICON must NOT be defined; the user explicitly asked for no logo in the title bar"
-    )
-    assert "!define MUI_UNICON" not in text, (
-        "MUI_UNICON must NOT be defined either"
+        "MUI_HEADERIMAGE must be off; brand mark lives in title bar / taskbar only"
     )
     generator = (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8")
-    assert "quantide.png" in generator, (
-        "generate-bitmaps.ps1 must include quantide.png as a source image"
-    )
-
-
-def test_installer_clears_default_window_icon():
-    """The installer EXE still embeds a default NSIS icon even when MUI_ICON
-    is not defined. The .onInit function must explicitly clear both the
-    big and small window icons via WM_SETICON so the installer / uninstaller
-    title bar and taskbar show no logo at all (per the user's product
-    decision)."""
-    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    oninit_start = text.index("Function .onInit")
-    oninit_end = text.index("FunctionEnd", oninit_start)
-    oninit_body = text[oninit_start:oninit_end]
-    assert "WM_SETICON" in oninit_body or "0x0080" in oninit_body, (
-        ".onInit must clear both the big and small window icons via WM_SETICON"
-    )
-    assert "FindWindowW" in oninit_body or "FindWindow(" in oninit_body, (
-        ".onInit must look up the installer window before sending WM_SETICON"
+    assert "Convert-PngToIco" in generator, (
+        "generate-bitmaps.ps1 must produce quantide.ico from quantide.png (#68)"
     )
 
 

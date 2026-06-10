@@ -82,15 +82,18 @@ ReserveFile "contact-us.bmp"
 
 ; MUI Settings
 !define MUI_ABORTWARNING
-; The product is shipped without an application icon: the user explicitly
-; requested no quantide logo in the title bar or taskbar. NSIS falls back
-; to its default install icon. quantide.bmp / quantide.ico are still
-; generated on disk for potential future use, but are not referenced.
+; #68: use the quantide brand icon for the installer and uninstaller
+; (this is the logo the user explicitly asked for in the title bar and
+; taskbar). Without MUI_ICON / MUI_UNICON NSIS falls back to its default
+; globe-and-arrow icon, which is NOT our brand. quantide.png is converted
+; to quantide.ico at build time by installer\generate-bitmaps.ps1.
+!define MUI_ICON "quantide.ico"
+!define MUI_UNICON "quantide.ico"
 ;
-; #68: header image disabled - brand logo lives only in the title bar / taskbar
-; via MUI_ICON and MUI_UNICON. The welcome page custom layout is built with
-; nsDialogs (see show_welcome_dialog) so we have full control over the
-; left-text / right-bitmap layout.
+; Header image is disabled - the brand mark lives in the title bar / taskbar
+; only, not as a strip on every wizard page. The welcome page custom layout
+; is built with nsDialogs (see show_welcome_dialog) so we have full control
+; over the left-text / right-bitmap layout.
 ;
 ; #67: contact-us QR code shown on the welcome page. The source lives at
 ; https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg
@@ -262,22 +265,9 @@ RequestExecutionLevel admin
 Function .onInit
     ; Chinese only - no language picker.
 
-    ; Per the latest product decision the installer should not show any
-    ; quantide logo in its title bar or taskbar. MUI_ICON and MUI_UNICON
-    ; are intentionally undefined, but the installer EXE itself still
-    ; embeds a default NSIS icon resource. We clear both the big and small
-    ; icon for every top-level window the installer creates.
-    ; WM_SETICON (0x0080) with NULL hicon drops the icon entirely.
-    System::Call "User32::FindWindowW(w '#32770', w 0) i.r0"
-    ${If} $0 != 0
-        System::Call "User32::SendMessageW(i r0, i 0x0080, i 0, i 0)"
-        System::Call "User32::SendMessageW(i r0, i 0x0080, i 1, i 0)"
-    ${EndIf}
-    System::Call "User32::GetForegroundWindow() i.r1"
-    ${If} $1 != 0
-        System::Call "User32::SendMessageW(i r1, i 0x0080, i 0, i 0)"
-        System::Call "User32::SendMessageW(i r1, i 0x0080, i 1, i 0)"
-    ${EndIf}
+    ; WM_SETICON is sent later, in show_welcome_dialog, after the dialog
+    ; window has actually been created. .onInit runs before any UI exists
+    ; so sending WM_SETICON there has nothing to act on.
 FunctionEnd
 
 Function .onInstFailed
