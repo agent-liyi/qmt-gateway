@@ -47,6 +47,63 @@ def test_installer_components_section_descriptions_present():
     assert "LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE}" in text
 
 
+def test_installer_lang_strings_defined_before_components_page():
+    """#51: MUI_DESCRIPTION_TEXT expands to a numeric id ('1' or '1+2') if the
+    LangString is not yet defined when MUI_PAGE_COMPONENTS is inserted.
+    Lock the source order so the component selection page never renders
+    mojibake again."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+
+    lang_macro_idx = text.find('!insertmacro MUI_LANGUAGE "SimpChinese"')
+    components_page_idx = text.find("!insertmacro MUI_PAGE_COMPONENTS")
+    core_desc_idx = text.find("LangString DESC_SEC_CORE ${LANG_SIMPCHINESE}")
+    welcome_lang_idx = text.find("LangString WELCOME_TEXT ${LANG_SIMPCHINESE}")
+
+    assert lang_macro_idx != -1 and components_page_idx != -1, (
+        "Both MUI_LANGUAGE and MUI_PAGE_COMPONENTS must be present"
+    )
+    assert lang_macro_idx < components_page_idx, (
+        "MUI_LANGUAGE must be registered before MUI_PAGE_COMPONENTS so LangString lookups resolve"
+    )
+    assert welcome_lang_idx < components_page_idx, (
+        "WELCOME_TEXT / INSTALL_FAILED_LOG_MESSAGE LangStrings must be defined before MUI_PAGE_COMPONENTS"
+    )
+    assert core_desc_idx < components_page_idx, (
+        "DESC_SEC_* LangStrings must be defined before MUI_PAGE_COMPONENTS to avoid mojibake (#51)"
+    )
+
+    # No duplicate definitions of the same LangString later in the file
+    core_count = text.count("LangString DESC_SEC_CORE ${LANG_SIMPCHINESE}")
+    assert core_count == 1, (
+        f"DESC_SEC_CORE must be defined exactly once, found {core_count} times"
+    )
+
+
+def test_installer_component_descriptions_use_brand_new_name():
+    """#51/#59: the welcome / description text must reference the new 匡醍 brand
+    and never the old 迅投 string."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "匡醍" in text, "Installer's component descriptions must use 匡醍 brand (#59)"
+    assert "迅投" not in text, (
+        "Old 迅投 brand string must not appear in installer text (#59)"
+    )
+
+
+def test_installer_documents_makensis_dependency():
+    """#50: developers must be able to discover the NSIS dependency from the repo."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    readme = (ROOT / "installer" / "README.md").read_text(encoding="utf-8")
+    assert "makensis" in text, (
+        "NSIS script must document the makensis requirement in its header"
+    )
+    assert "makensis" in readme, (
+        "installer/README.md must describe how to install NSIS locally (#50)"
+    )
+    assert "choco install nsis" in readme, (
+        "installer/README.md must provide a working install command for developers (#50)"
+    )
+
+
 def test_installer_does_not_persist_install_dir_registry():
     """MUI_DIRECTORY pre-fills $INSTDIR from InstallDirRegKey. Persisting the
     install path (or anything nested) breaks subsequent reinstalls (#61)."""

@@ -2,7 +2,8 @@
 ; Issue #48: NSIS installer with embedded Python
 ;
 ; Prerequisites:
-;   - NSIS 3.x installed (makensis in PATH)
+;   - NSIS 3.x installed (makensis in PATH) - see installer/README.md
+;   - Python 3.11+ on PATH (used to generate installer\requirements.txt)
 ;   - Python 3.13 embeddable package downloaded to installer\python-embed.zip
 ;
 ; Build: makensis /INPUTCHARSET UTF8 installer\installer.nsi
@@ -74,6 +75,34 @@ SetCompress off
 ; !define MUI_UNICON "installer\icon.ico"
 ; !define MUI_WELCOMEFINISHPAGE_BITMAP "installer\welcome.bmp"
 
+; IMPORTANT: register language tables and define every LangString BEFORE the
+; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
+; to its numeric code (e.g. "1" or "1+2") and the component selection page
+; shows mojibake instead of the description (#51).
+!insertmacro MUI_LANGUAGE "SimpChinese"
+!insertmacro MUI_LANGUAGE "English"
+
+; Custom welcome text
+LangString WELCOME_TEXT ${LANG_SIMPCHINESE} \
+    "本软件需要配合匡醍 QMT 交易客户端使用。如果您尚未安装 QMT，请先前往券商官网下载安装。$\n$\n\
+     QMT 安装路径将在初始化向导中配置。"
+LangString WELCOME_TEXT ${LANG_ENGLISH} \
+    "This software requires the Kuangti QMT trading client. If you haven't installed QMT, \
+     please download it from your broker's website first.$\n$\n\
+     The QMT installation path will be configured in the initialization wizard."
+LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_SIMPCHINESE} \
+    "安装失败。请查看安装目录下的 ${INSTALL_LOG_NAME}。如果尚未选择安装目录，请截屏反馈。"
+LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_ENGLISH} \
+    "Installation failed. Check ${INSTALL_LOG_NAME} in the install directory. If no install directory was selected yet, please provide a screenshot."
+
+; Section descriptions (must be defined before MUI_PAGE_COMPONENTS)
+LangString DESC_SEC_CORE ${LANG_SIMPCHINESE} "核心组件（必须安装）"
+LangString DESC_SEC_CORE ${LANG_ENGLISH} "Core components (required)"
+LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "开机自启（用户登录时自动启动）"
+LangString DESC_SEC_AUTOSTART ${LANG_ENGLISH} "Auto-start on login"
+LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "防火墙入站规则（允许局域网访问）"
+LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN access)"
+
 ; Welcome page
 !insertmacro MUI_PAGE_WELCOME
 
@@ -110,10 +139,6 @@ var ICONS_GROUP
 ; Uninstaller pages
 !insertmacro MUI_UNPAGE_INSTFILES
 
-; Language files
-!insertmacro MUI_LANGUAGE "SimpChinese"
-!insertmacro MUI_LANGUAGE "English"
-
 ; MUI reserve files
 ; MUI_RESERVEFILE_INSTALLOPTIONS is not supported in MUI2
 ; !insertmacro MUI_RESERVEFILE_INSTALLOPTIONS
@@ -124,19 +149,6 @@ InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
 ShowInstDetails show
 ShowUnInstDetails show
 RequestExecutionLevel admin
-
-; Custom welcome text
-LangString WELCOME_TEXT ${LANG_SIMPCHINESE} \
-    "本软件需要配合迅投 QMT 交易客户端使用。如果您尚未安装 QMT，请先前往券商官网下载安装。$\n$\n\
-     QMT 安装路径将在初始化向导中配置。"
-LangString WELCOME_TEXT ${LANG_ENGLISH} \
-    "This software requires the Xuntou QMT trading client. If you haven't installed QMT, \
-     please download it from your broker's website first.$\n$\n\
-     The QMT installation path will be configured in the initialization wizard."
-LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_SIMPCHINESE} \
-    "安装失败。请查看安装目录下的 ${INSTALL_LOG_NAME}。如果尚未选择安装目录，请截屏反馈。"
-LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_ENGLISH} \
-    "Installation failed. Check ${INSTALL_LOG_NAME} in the install directory. If no install directory was selected yet, please provide a screenshot."
 
 Function .onInit
     !insertmacro MUI_LANGDLL_DISPLAY
@@ -243,14 +255,8 @@ Section "Firewall" SEC_FIREWALL
     nsExec::ExecToLog 'netsh advfirewall firewall add rule name="QMT Gateway" dir=in action=allow protocol=tcp localport=8130 profile=private enable=yes'
 SectionEnd
 
-; Section descriptions
-LangString DESC_SEC_CORE ${LANG_SIMPCHINESE} "核心组件（必须安装）"
-LangString DESC_SEC_CORE ${LANG_ENGLISH} "Core components (required)"
-LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "开机自启（用户登录时自动启动）"
-LangString DESC_SEC_AUTOSTART ${LANG_ENGLISH} "Auto-start on login"
-LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "防火墙入站规则（允许局域网访问）"
-LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN access)"
-
+; Section descriptions are defined earlier, before MUI_PAGE_COMPONENTS,
+; so MUI_DESCRIPTION_TEXT can resolve the localized strings at compile time
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
     !insertmacro MUI_DESCRIPTION_TEXT ${SEC_CORE} $(DESC_SEC_CORE)
     !insertmacro MUI_DESCRIPTION_TEXT ${SEC_AUTOSTART} $(DESC_SEC_AUTOSTART)
