@@ -33,6 +33,36 @@ def test_installer_finish_page_does_not_define_conflicting_readme_macro():
     )
 
 
+def test_installer_finish_page_renders_title_text_and_bitmap():
+    """#69: finish page must show the localized 'Setup Complete' title, the
+    success description, and the left-side decorative bitmap."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert '!define MUI_FINISHPAGE_TITLE "$(FINISH_TITLE)"' in text, (
+        "Finish page must override MUI_FINISHPAGE_TITLE so the success title is visible (#69)"
+    )
+    assert '!define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"' in text, (
+        "Finish page must override MUI_FINISHPAGE_TEXT with the success description (#69)"
+    )
+    assert '!define MUI_FINISHPAGE_BITMAP "contact-us.bmp"' in text, (
+        "Finish page must render the left-side decorative bitmap (#69)"
+    )
+    finish_title_idx = text.find("LangString FINISH_TITLE ${LANG_SIMPCHINESE}")
+    finish_text_idx = text.find("LangString FINISH_TEXT ${LANG_SIMPCHINESE}")
+    finish_page_idx = text.find("!insertmacro MUI_PAGE_FINISH")
+    assert 0 < finish_title_idx < finish_page_idx, (
+        "FINISH_TITLE LangString must be defined before MUI_PAGE_FINISH (#69/#51)"
+    )
+    assert 0 < finish_text_idx < finish_page_idx, (
+        "FINISH_TEXT LangString must be defined before MUI_PAGE_FINISH (#69/#51)"
+    )
+    assert "$(^Name) 安装程序结束" in text, (
+        "Finish title must use the localized '安装程序结束' wording (#69)"
+    )
+    assert "已经成功安装到本机" in text, (
+        "Finish text must use the localized '已经成功安装到本机' wording (#69)"
+    )
+
+
 def test_installer_uses_64bit_program_files():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert 'InstallDir "$PROGRAMFILES64' in text, (
@@ -80,12 +110,18 @@ def test_installer_lang_strings_defined_before_components_page():
 
 
 def test_installer_component_descriptions_use_brand_new_name():
-    """#51/#59: the welcome / description text must reference the new 匡醍 brand
-    and never the old 迅投 string."""
+    """#51/#59: PRODUCT_NAME must use the new 匡醍 brand. The pre-install prompt
+    legitimately mentions 迅投 QMT because that is the real name of the trading
+    client we depend on."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "匡醍" in text, "Installer's component descriptions must use 匡醍 brand (#59)"
-    assert "迅投" not in text, (
-        "Old 迅投 brand string must not appear in installer text (#59)"
+    assert "匡醍" in text, "Installer must reference 匡醍 brand (#59)"
+    assert '!define PRODUCT_NAME "匡醍 QMT 交易网关"' in text, (
+        "PRODUCT_NAME must use the new 匡醍 brand (#59)"
+    )
+    product_name_idx = text.index('!define PRODUCT_NAME "匡醍 QMT 交易网关"')
+    page_idx = text.index("!insertmacro MUI_PAGE_COMPONENTS")
+    assert product_name_idx < page_idx, (
+        "PRODUCT_NAME must be defined before MUI_PAGE_COMPONENTS so MUI2 sees the brand (#51/#59)"
     )
 
 
@@ -101,6 +137,55 @@ def test_installer_documents_makensis_dependency():
     )
     assert "choco install nsis" in readme, (
         "installer/README.md must provide a working install command for developers (#50)"
+    )
+
+
+def test_installer_uses_quantide_logo_as_header_image():
+    """#68: top-left logo of every page must come from installer/quantide.png."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "!define MUI_HEADERIMAGE" in text, (
+        "MUI_HEADERIMAGE must be enabled so the brand logo renders on every page"
+    )
+    assert '!define MUI_HEADERIMAGE_BITMAP "quantide.bmp"' in text, (
+        "Header bitmap must be quantide.bmp (generated from quantide.png)"
+    )
+    assert "quantide.png" in (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8"), (
+        "generate-bitmaps.ps1 must include quantide.png as a source image"
+    )
+    assert '!define MUI_ICON "quantide.ico"' in text, (
+        "Installer/uninstaller icon must come from quantide.ico so the title bar shows the brand logo (#68)"
+    )
+    assert '!define MUI_UNICON "quantide.ico"' in text, (
+        "Uninstaller icon must also use quantide.ico so uninstaller windows show the brand logo (#68)"
+    )
+    assert "Convert-PngToIco" in (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8"), (
+        "generate-bitmaps.ps1 must produce quantide.ico from quantide.png (#68)"
+    )
+
+
+def test_installer_welcome_page_prompts_user_to_install_qmt_with_contact_qr():
+    """#67: welcome page must show the pre-install QMT prompt and the contact QR."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "本软件需要配置迅投 QMT 交易客户端使用" in text, (
+        "Welcome text must explain QMT must be installed first (#67)"
+    )
+    assert "安装本软件之前，就需要安装好 QMT" in text, (
+        "Welcome text must warn that QMT is required before installation (#67)"
+    )
+    assert "联系我们" in text, (
+        "Welcome text must mention contacting us for help (#67)"
+    )
+    assert '!define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"' in text, (
+        "Welcome page must display the contact-us QR via MUI_WELCOMEPAGE_BITMAP (#67)"
+    )
+    assert "!define MUI_WELCOMEPAGE_TITLE" in text, (
+        "Welcome page must override MUI_WELCOMEPAGE_TITLE so the prompt is visible"
+    )
+    assert "!define MUI_WELCOMEPAGE_TEXT" in text, (
+        "Welcome page must override MUI_WELCOMEPAGE_TEXT with the localized prompt"
+    )
+    assert "cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg" in text, (
+        "Installer must reference the canonical CDN URL for the contact QR (#67)"
     )
 
 
