@@ -20,6 +20,9 @@ SetCompress off
 !define PRODUCT_UNINST_ROOT_KEY "HKLM"
 !define PRODUCT_STARTMENU_REGVAL "NSIS:StartMenuDir"
 !define INSTALLER_DIAGNOSTIC_DIR "C:\Temp"
+!define PRODUCT_INSTALL_STATE_KEY "Software\qmt-gateway"
+!define INSTALLER_SCRIPT_NAME "qmt-gateway-install-python.ps1"
+!define INSTALLER_SCRIPT_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${INSTALLER_SCRIPT_NAME}"
 !define PIP_INDEX_URL "https://pypi.tuna.tsinghua.edu.cn/simple"
 !define PIP_TRUSTED_HOST "pypi.tuna.tsinghua.edu.cn"
 !define INSTALL_LOG_NAME "install.log"
@@ -31,7 +34,6 @@ SetCompress off
 !define TEMP_EXTRACT_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_EXTRACT_LOG_BASENAME}"
 !define TEMP_BOOTSTRAP_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_BOOTSTRAP_LOG_BASENAME}"
 !define TEMP_INSTALL_DEPS_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\${TEMP_INSTALL_DEPS_LOG_BASENAME}"
-!define PS_UNINSTALL_REG_PATH "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -181,11 +183,15 @@ Section "-Core" SEC_CORE
     CreateDirectory "$INSTDIR"
     !insertmacro LogInit
     !insertmacro LogStep "Core: create install dir"
+    SetOutPath "${INSTALLER_DIAGNOSTIC_DIR}"
+    File /oname=${INSTALLER_SCRIPT_NAME} "install-python.ps1"
+    SetOutPath "$INSTDIR"
     !insertmacro LogStep "Core: write uninstall registry"
     ; Publish InstallLocation immediately so PowerShell child processes can
     ; recover the install path from the registry without going through NSIS
     ; string expansion (which corrupts CJK under the system ANSI code page).
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "InstallLocation" "$INSTDIR"
+    WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_INSTALL_STATE_KEY}" "InstallLocation" "$INSTDIR"
     !insertmacro LogStep "Core: create directories"
 
     ; Create directories
@@ -201,19 +207,10 @@ Section "-Core" SEC_CORE
 
     !insertmacro LogStep "Core: extract embedded Python"
     SetOutPath "$INSTDIR\python"
-    ; PowerShell reads the install path from the uninstall registry entry that
-    ; the installer itself writes early in the Core section. That avoids passing
-    ; CJK strings through the NSIS string encoder, which would mangle the bytes
-    ; under the system ANSI code page. Use an NSIS double-quoted literal so
-    ; PowerShell can keep its normal single-quoted strings.
-    nsExec::ExecToLog "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = '${TEMP_INSTALL_LOG_PATH}'; $$py = Join-Path $$base 'python'; foreach ($$line in @('INSTDIR=' + $$base, 'TEMP_LOG=' + $$tempLog, 'PYTHON_DIR=' + $$py, 'APP_DIR=' + (Join-Path $$base 'app'))) { Add-Content -LiteralPath $$log -Encoding UTF8 -Value $$line; Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value $$line }$\""
-    !insertmacro AbortOnExecFailure "Core metadata logging"
-    nsExec::ExecToLog "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$py = Join-Path $$base 'python'; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = '${TEMP_INSTALL_LOG_PATH}'; $$zip = Join-Path $$py 'python-embed.zip'; $$detailLog = Join-Path $$py '_extract.log'; $$tempDetailLog = '${TEMP_EXTRACT_LOG_PATH}'; foreach ($$line in @('EXTRACT_LOG=' + $$detailLog, 'TEMP_EXTRACT_LOG=' + $$tempDetailLog)) { Add-Content -LiteralPath $$log -Encoding UTF8 -Value $$line; Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value $$line }; Expand-Archive -Path $$zip -DestinationPath $$py -Force *>&1 | Tee-Object -FilePath $$detailLog -Append | Tee-Object -FilePath $$tempDetailLog -Append$\""
+    ; Run helper scripts from C:\Temp so PowerShell command lines never contain
+    ; the CJK install path or fragile inline script bodies.
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage Runtime'
     !insertmacro AbortOnExecFailure "Extract embedded Python"
-    nsExec::ExecToLog "powershell.exe -NoProfile -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = '${TEMP_INSTALL_LOG_PATH}'; $$p = Join-Path (Join-Path $$base 'python') 'python313._pth'; if (Test-Path -LiteralPath $$p) { $$content = Get-Content -LiteralPath $$p -Raw; $$content = [regex]::Replace($$content, '(?m)^#import site$$', 'import site'); [System.IO.File]::WriteAllText($$p, $$content, [System.Text.UTF8Encoding]::new($$false)); Add-Content -LiteralPath $$log -Encoding UTF8 -Value ('UPDATED_PTH=' + $$p); Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value ('UPDATED_PTH=' + $$p) }$\""
-    !insertmacro AbortOnExecFailure "Enable import site in python313._pth"
-    nsExec::ExecToLog "powershell.exe -NoProfile -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = '${TEMP_INSTALL_LOG_PATH}'; $$target = Join-Path (Join-Path $$base 'python') 'python-embed.zip'; Remove-Item -LiteralPath $$target -Force -ErrorAction SilentlyContinue; Add-Content -LiteralPath $$log -Encoding UTF8 -Value ('REMOVED=' + $$target); Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value ('REMOVED=' + $$target)$\""
-    !insertmacro AbortOnExecFailure "Remove embedded Python zip"
 
     !insertmacro LogStep "Core: copy application source"
     ; Copy application source to $INSTDIR\app
@@ -236,13 +233,13 @@ Section "-Core" SEC_CORE
     ; install dependencies into the embedded Python's site-packages directly.
     SetOutPath "$INSTDIR\python"
     File "get-pip.py"
-    nsExec::ExecToLog "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$py = Join-Path $$base 'python'; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = '${TEMP_INSTALL_LOG_PATH}'; $$detailLog = Join-Path $$py '_bootstrap_pip.log'; $$tempDetailLog = '${TEMP_BOOTSTRAP_LOG_PATH}'; foreach ($$line in @('PIP_BOOTSTRAP_START', 'BOOTSTRAP_LOG=' + $$detailLog, 'TEMP_BOOTSTRAP_LOG=' + $$tempDetailLog)) { Add-Content -LiteralPath $$log -Encoding UTF8 -Value $$line; Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value $$line }; $$pythonExe = Join-Path $$py 'python.exe'; Set-Location $$py; & $$pythonExe (Join-Path $$py 'get-pip.py') --no-warn-script-location -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} 2>&1 | Tee-Object -FilePath $$detailLog -Append | Tee-Object -FilePath $$tempDetailLog -Append; $$exitCode = $$LASTEXITCODE; Remove-Item -LiteralPath (Join-Path $$py 'get-pip.py') -Force -ErrorAction SilentlyContinue; exit $$exitCode$\""
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage BootstrapPip'
     !insertmacro AbortOnExecFailure "Bootstrap pip"
 
     !insertmacro LogStep "Core: install dependencies"
     ; Install dependencies into the embedded Python's site-packages.
     DetailPrint "正在安装 Python 依赖 (使用国内镜像源)..."
-    nsExec::ExecToLog "powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$ErrorActionPreference = 'Stop'; $$base = (Get-ItemProperty -LiteralPath '${PS_UNINSTALL_REG_PATH}').InstallLocation; $$py = Join-Path $$base 'python'; $$app = Join-Path $$base 'app'; $$log = Join-Path $$base '${INSTALL_LOG_NAME}'; $$tempLog = '${TEMP_INSTALL_LOG_PATH}'; $$detailLog = Join-Path $$py '_install_deps.log'; $$tempDetailLog = '${TEMP_INSTALL_DEPS_LOG_PATH}'; foreach ($$line in @('PIP_INSTALL_START', 'INSTALL_DEPS_LOG=' + $$detailLog, 'TEMP_INSTALL_DEPS_LOG=' + $$tempDetailLog)) { Add-Content -LiteralPath $$log -Encoding UTF8 -Value $$line; Add-Content -LiteralPath $$tempLog -Encoding UTF8 -Value $$line }; $$pythonExe = Join-Path $$py 'python.exe'; Set-Location $$py; & $$pythonExe -m pip install -e $$app --no-warn-script-location -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST} 2>&1 | Tee-Object -FilePath $$detailLog -Append | Tee-Object -FilePath $$tempDetailLog -Append; exit $$LASTEXITCODE$\""
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage InstallDependencies'
     !insertmacro AbortOnExecFailure "Install Python dependencies"
 
     !insertmacro LogStep "Core: write shortcuts"

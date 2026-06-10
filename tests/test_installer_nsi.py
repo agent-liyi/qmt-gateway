@@ -1,13 +1,17 @@
 """NSIS installer script regression tests."""
 
-import re
 from pathlib import Path
 
 INSTALLER_NSI = Path(__file__).resolve().parents[1] / "installer" / "installer.nsi"
+INSTALLER_PS1 = Path(__file__).resolve().parents[1] / "installer" / "install-python.ps1"
 
 
 def test_installer_nsi_exists():
     assert INSTALLER_NSI.is_file(), f"Missing installer script: {INSTALLER_NSI}"
+
+
+def test_installer_powershell_helper_exists():
+    assert INSTALLER_PS1.is_file(), f"Missing installer PowerShell helper: {INSTALLER_PS1}"
 
 
 def test_installer_nsi_uses_unicode_and_utf8_bom():
@@ -112,35 +116,43 @@ def test_installer_powershell_calls_pass_absolute_paths():
     has to deal with NSIS string encoding of CJK characters. The registry key is
     written early in the Core section so all subsequent nsExec calls can read it."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
     assert 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\\python' not in text, (
         "Do not use -File with a script path that contains $INSTDIR"
     )
-    assert "Get-ItemProperty" in text and "InstallLocation" in text, (
-        "nsExec commands must read the install path from the Windows registry via Get-ItemProperty"
+    assert "${INSTALLER_SCRIPT_PATH}" in text and "C:\\Temp" in text, (
+        "Installer must invoke the helper from a stable ASCII C:\\Temp path"
     )
-    assert "HKLM" in text and "Uninstall" in text, (
-        "Registry key must be under HKLM Uninstall path"
+    assert "Get-ItemProperty" in helper and "InstallLocation" in helper, (
+        "PowerShell helper must read the install path from the Windows registry via Get-ItemProperty"
+    )
+    assert "HKLM:\\SOFTWARE\\qmt-gateway" in helper, (
+        "PowerShell helper must read an ASCII registry key to avoid CJK path encoding issues"
     )
 
 
-def test_installer_powershell_uses_escaped_dollar():
-    """In NSIS command strings, $$ produces a literal '$' so
-    PowerShell receives intact $-variables. Bare $name would be expanded by NSIS
-    to empty (or the NSIS register value), corrupting the PowerShell script and
-    causing 'MissingEndParenthesisInExpression' errors at runtime."""
+def test_installer_uses_external_powershell_helper():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "$$base" in text, (
-        "PowerShell variables in NSIS literal strings must be escaped as $$name"
+    assert "-Command" not in "\n".join(
+        line for line in text.splitlines() if "powershell.exe" in line
+    ), (
+        "Do not put complex PowerShell bodies in NSIS -Command strings"
     )
+    assert "File /oname=${INSTALLER_SCRIPT_NAME} \"install-python.ps1\"" in text
+    assert '-File "${INSTALLER_SCRIPT_PATH}" -Stage Runtime' in text
+    assert '-File "${INSTALLER_SCRIPT_PATH}" -Stage BootstrapPip' in text
+    assert '-File "${INSTALLER_SCRIPT_PATH}" -Stage InstallDependencies' in text
 
 
 def test_installer_powershell_commands_use_normal_single_quotes():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
     powershell_lines = [line for line in text.splitlines() if "powershell.exe" in line]
     assert powershell_lines, "Expected installer.nsi to contain PowerShell commands"
     assert all("''" not in line for line in powershell_lines), (
         "Wrap -Command with NSIS $\\\"...$\\\" so PowerShell can keep plain single-quoted literals"
     )
+    assert "[ValidateSet('Runtime', 'BootstrapPip', 'InstallDependencies')]" in helper
 
 
 def test_installer_aborts_on_critical_exec_failures():
@@ -148,22 +160,23 @@ def test_installer_aborts_on_critical_exec_failures():
     assert '!macro AbortOnExecFailure LABEL' in text, (
         "Critical nsExec steps must check and react to child-process exit codes"
     )
-    assert text.count('!insertmacro AbortOnExecFailure "') >= 6, (
-        "Core extraction/bootstrap/install steps must stop the installer when a child process fails"
+    assert text.count('!insertmacro AbortOnExecFailure "') >= 3, (
+        "Runtime/bootstrap/install helper stages must stop the installer when they fail"
     )
 
 
 def test_installer_preserves_temp_log_for_failed_runs():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
     assert '!define INSTALLER_DIAGNOSTIC_DIR "C:\\Temp"' in text
     assert '!define TEMP_INSTALL_LOG_BASENAME "qmt-gateway-installer.log"' in text
     assert '!define TEMP_INSTALL_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_INSTALL_LOG_BASENAME}"' in text, (
         "Installer must mirror logs to C:\\Temp so failed installs leave diagnostics in a stable location"
     )
-    assert "$$tempLog = '${TEMP_INSTALL_LOG_PATH}'" in text, (
-        "PowerShell child processes must append diagnostics to the fixed C:\\Temp summary log"
+    assert "$TempInstallLog = Join-Path $DiagnosticDir 'qmt-gateway-installer.log'" in helper, (
+        "PowerShell helper must append diagnostics to the fixed C:\\Temp summary log"
     )
-    assert "$$env:TEMP" not in text, "Installer diagnostics should no longer be written under %TEMP%"
+    assert "$env:TEMP" not in helper, "Installer diagnostics should no longer be written under %TEMP%"
     assert 'Function .onInstFailed' in text and 'INSTALL_FAILED_LOG_MESSAGE' in text, (
         "Failed installs must surface the preserved temp log path to the user"
     )
@@ -171,59 +184,58 @@ def test_installer_preserves_temp_log_for_failed_runs():
 
 def test_installer_streams_detail_output_to_dedicated_temp_logs():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
     assert 'qmt-gateway-extract.log' in text
     assert 'qmt-gateway-bootstrap-pip.log' in text
     assert 'qmt-gateway-install-deps.log' in text
     assert '!define TEMP_EXTRACT_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_EXTRACT_LOG_BASENAME}"' in text
     assert '!define TEMP_BOOTSTRAP_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_BOOTSTRAP_LOG_BASENAME}"' in text
     assert '!define TEMP_INSTALL_DEPS_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_INSTALL_DEPS_LOG_BASENAME}"' in text
-    assert 'Tee-Object -FilePath $$log' not in text
-    assert 'Tee-Object -FilePath $$tempLog' not in text
+    assert 'Tee-Object' not in text
+    assert 'Tee-Object' not in helper
 
 
 def test_installer_updates_python313_pth_without_utf8_bom():
-    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "python313._pth" in text
-    assert "[System.IO.File]::WriteAllText($$p, $$content, [System.Text.UTF8Encoding]::new($$false))" in text, (
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
+    assert "python313._pth" in helper
+    assert "[System.IO.File]::WriteAllText($pthPath, $content, [System.Text.UTF8Encoding]::new($false))" in helper, (
         "python313._pth must be written without a BOM so embedded Python can still import encodings"
     )
-    assert "(?m)^#import site$$" in text, (
-        "Regex end anchors inside NSIS command strings must escape $ as $$"
+    assert "(?m)^#import site$" in helper, (
+        "Regex end anchors live in the external helper and no longer need NSIS $$ escaping"
     )
-    assert "Set-Content -LiteralPath $$p -Encoding UTF8" not in text, (
+    assert "Set-Content" not in helper, (
         "Do not rewrite python313._pth with PowerShell UTF8 in Windows PowerShell; it adds a BOM and breaks python313.zip lookup"
     )
 
 
-def test_installer_powershell_does_not_leave_bare_dollars():
+def test_installer_no_inline_powershell_dollar_risks():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     powershell_lines = [line for line in text.splitlines() if "powershell.exe" in line]
-    assert all(not re.search(r"(?<!\$)\$false", line) for line in powershell_lines), (
-        "PowerShell $false must be written as $$false inside NSIS command strings"
-    )
-    assert all("(?m)^#import site$'" not in line for line in powershell_lines), (
-        "PowerShell regex end anchors must be written as $$ inside NSIS command strings"
-    )
+    assert all("$false" not in line for line in powershell_lines)
+    assert all("LASTEXITCODE" not in line for line in powershell_lines)
+    assert all("if (" not in line for line in powershell_lines)
 
 
 def test_installer_avoids_last_exit_code_if_statements():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
     powershell_lines = [line for line in text.splitlines() if "powershell.exe" in line]
-    assert all("if ($$LASTEXITCODE)" not in line for line in powershell_lines), (
-        "Avoid inline if($LASTEXITCODE) in NSIS PowerShell strings; preserve the exit code and exit explicitly"
+    assert all("LASTEXITCODE" not in line for line in powershell_lines), (
+        "Avoid inline LASTEXITCODE handling in NSIS PowerShell strings"
     )
-    assert "$$exitCode = $$LASTEXITCODE" in text
+    assert "$exitCode = $LASTEXITCODE" in helper
 
 
 def test_installer_bootstraps_pip_before_using_it():
-    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert "-m pip config set" not in text, (
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
+    assert "-m pip config set" not in helper, (
         "Installer must not invoke pip config before get-pip.py has installed pip"
     )
-    assert "get-pip.py') --no-warn-script-location -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST}" in text, (
+    assert "'--no-warn-script-location'" in helper and "$PipIndexUrl" in helper and "$PipTrustedHost" in helper, (
         "Bootstrap pip by running get-pip.py directly with mirror arguments"
     )
-    assert "-m pip install -e $$app --no-warn-script-location -i ${PIP_INDEX_URL} --trusted-host ${PIP_TRUSTED_HOST}" in text, (
+    assert "'pip'" in helper and "'install'" in helper and "$AppDir" in helper, (
         "Dependency installation should use explicit mirror flags instead of relying on preconfigured pip state"
     )
 
@@ -234,10 +246,11 @@ def test_installer_logs_absolute_paths_in_log():
     call fails. The path is passed via Windows registry (WriteRegStr + Get-ItemProperty)
     rather than env vars, to avoid NSIS ANSI code page corruption of CJK characters."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    helper = INSTALLER_PS1.read_text(encoding="utf-8")
     assert "WriteRegStr" in text and "InstallLocation" in text, (
         "Must write InstallLocation to registry early so PowerShell can read it"
     )
-    assert "Add-Content -LiteralPath" in text and "install.log" in text, (
+    assert "Add-Content -LiteralPath" in helper and "install.log" in helper, (
         "install.log must be written by PowerShell with explicit UTF-8 encoding"
     )
 
