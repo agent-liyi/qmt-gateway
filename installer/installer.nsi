@@ -310,8 +310,10 @@ Function ApplyCompactStandardPageChrome
 
     IntOp $2 $2 - $6
     IntOp $3 $3 - $7
-    IntOp $4 $4 - $2 - $6
-    IntOp $5 $5 - $3 - $7
+    IntOp $4 $4 - $6
+    IntOp $4 $4 - $2
+    IntOp $5 $5 - $7
+    IntOp $5 $5 - $3
 
     StrCpy $8 8
     IntOp $5 $5 + $3
