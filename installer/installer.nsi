@@ -191,7 +191,7 @@ Function show_welcome_dialog
     IntOp $6 $6 / 100                  ; right column width
     StrCpy $7 $6                        ; square starts as column width
     ${If} $7 > $5
-        IntOp $7 $5
+        StrCpy $7 $5                     ; clamp to height
     ${EndIf}
     ; 60% of the dialog width = left column width. The bitmap's top-left
     ; x is that value; the bitmap is left at 0 so it stays at the top of
