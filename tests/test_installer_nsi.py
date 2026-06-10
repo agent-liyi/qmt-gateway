@@ -154,13 +154,15 @@ def test_installer_aborts_on_critical_exec_failures():
 
 def test_installer_preserves_temp_log_for_failed_runs():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert '!define INSTALLER_DIAGNOSTIC_DIR "C:\\Temp"' in text
     assert '!define TEMP_INSTALL_LOG_BASENAME "qmt-gateway-installer.log"' in text
-    assert '!define TEMP_INSTALL_LOG_PATH "$TEMP\\${TEMP_INSTALL_LOG_BASENAME}"' in text, (
-        "Installer must mirror logs to a stable temp file so failed installs leave diagnostics"
+    assert '!define TEMP_INSTALL_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_INSTALL_LOG_BASENAME}"' in text, (
+        "Installer must mirror logs to C:\\Temp so failed installs leave diagnostics in a stable location"
     )
-    assert "Join-Path $$env:TEMP '${TEMP_INSTALL_LOG_BASENAME}'" in text, (
-        "PowerShell child processes must append diagnostics to the temp install log"
+    assert "$$tempLog = '${TEMP_INSTALL_LOG_PATH}'" in text, (
+        "PowerShell child processes must append diagnostics to the fixed C:\\Temp summary log"
     )
+    assert "$$env:TEMP" not in text, "Installer diagnostics should no longer be written under %TEMP%"
     assert 'Function .onInstFailed' in text and 'INSTALL_FAILED_LOG_MESSAGE' in text, (
         "Failed installs must surface the preserved temp log path to the user"
     )
@@ -171,6 +173,9 @@ def test_installer_streams_detail_output_to_dedicated_temp_logs():
     assert 'qmt-gateway-extract.log' in text
     assert 'qmt-gateway-bootstrap-pip.log' in text
     assert 'qmt-gateway-install-deps.log' in text
+    assert '!define TEMP_EXTRACT_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_EXTRACT_LOG_BASENAME}"' in text
+    assert '!define TEMP_BOOTSTRAP_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_BOOTSTRAP_LOG_BASENAME}"' in text
+    assert '!define TEMP_INSTALL_DEPS_LOG_PATH "${INSTALLER_DIAGNOSTIC_DIR}\\${TEMP_INSTALL_DEPS_LOG_BASENAME}"' in text
     assert 'Tee-Object -FilePath $$log' not in text
     assert 'Tee-Object -FilePath $$tempLog' not in text
 
