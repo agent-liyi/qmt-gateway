@@ -96,46 +96,21 @@ SetCompress off
 ; 109x193 slot.
 !define MUI_WELCOMEFINISHPAGE_BITMAP "contact-us.bmp"
 
+; MUI_LANGUAGE is intentionally placed AFTER all !insertmacro MUI_PAGE_*
+; so that the finish page's left-side bitmap GUIInit callback
+; (mui.FinishPage.GUIInit) is registered before .onGUIInit is generated
+; (MUI2 inserts .onGUIInit when the first MUI_LANGUAGE expands). The
+; section description LangStrings below are looked up at runtime, but
+; NSIS resolves ${LANG_SIMPCHINESE} at compile time, so we pre-define it
+; here so the lookup is stable before MUI_LANGUAGE is expanded.
+!define LANG_SIMPCHINESE "2052"
+
 ; MUI2 standard page titles + subtitles. Each LangString id is read by
-; MUI2's MUI_HEADER_TEXT_PAGE macro inside the directory / components /
-; startmenu / instfiles page callbacks (see Pages/Directory.nsh etc.) so
-; that the page renders with the two-row "big title + small subtitle"
-; header layout the user expects (#72). Without these, the subtitle row
-; is empty and the header collapses to a single button-high strip.
-;
-; IMPORTANT: register these LangStrings BEFORE any !insertmacro MUI_PAGE_*
-; (otherwise MUI_DESCRIPTION_TEXT expands the language id to its numeric
-; code and the component selection page shows mojibake instead of the
-; description - #51).
-
-; #67: pre-install prompt about QMT (Chinese only).
-LangString MUI_TEXT_WELCOME_INFO_TITLE ${LANG_SIMPCHINESE} "请先安装 QMT 交易客户端"
-LangString MUI_TEXT_WELCOME_INFO_SUBTITLE ${LANG_SIMPCHINESE} "$\r$\n$\r$\n$\r$\n请先确认本机已经安装迅投 QMT 交易客户端，然后继续。"
-LangString MUI_TEXT_WELCOME_INFO_TEXT ${LANG_SIMPCHINESE} \
-    "本软件需要配置迅投 QMT 交易客户端使用。在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获取 QMT 软件的下载方式。$\n$\n\
-     如果需要帮助，请扫描左侧二维码联系我们。"
-
-; Directory page
-LangString MUI_TEXT_DIRECTORY_TITLE ${LANG_SIMPCHINESE} "选择安装位置"
-LangString MUI_TEXT_DIRECTORY_SUBTITLE ${LANG_SIMPCHINESE} "请选择 $(^NameDA) 的安装文件夹"
-
-; Components page
-LangString MUI_TEXT_COMPONENTS_TITLE ${LANG_SIMPCHINESE} "选择安装组件"
-LangString MUI_TEXT_COMPONENTS_SUBTITLE ${LANG_SIMPCHINESE} "请勾选需要安装的可选组件"
-
-; Start menu page
-LangString MUI_TEXT_STARTMENU_TITLE ${LANG_SIMPCHINESE} "选择开始菜单文件夹"
-LangString MUI_TEXT_STARTMENU_SUBTITLE ${LANG_SIMPCHINESE} "请选择开始菜单中的文件夹"
-
-; Instfiles page
-LangString MUI_TEXT_INSTFILES_TITLE ${LANG_SIMPCHINESE} "正在安装"
-LangString MUI_TEXT_INSTFILES_SUBTITLE ${LANG_SIMPCHINESE} "请稍候，正在完成 $(^NameDA) 的安装"
-
-; Finish page
-LangString MUI_TEXT_FINISH_INFO_TITLE ${LANG_SIMPCHINESE} "$(^Name) 安装程序结束"
-LangString MUI_TEXT_FINISH_INFO_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机。$\r$\n点击『完成(F)』关闭安装程序。"
-
-; Section descriptions (must be defined before MUI_PAGE_COMPONENTS)
+; Section descriptions MUST be LangStrings that are looked up at runtime via
+; MUI_DESCRIPTION_TEXT - they have to be registered before any
+; !insertmacro MUI_PAGE_COMPONENTS, otherwise MUI_DESCRIPTION_TEXT expands
+; the language id to a numeric code and the component selection page
+; shows mojibake instead of the description (#51).
 LangString DESC_SEC_CORE ${LANG_SIMPCHINESE} "核心组件（必须安装）"
 LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "开机自启（用户登录时自动启动）"
 LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "防火墙入站规则（允许局域网访问）"
@@ -188,6 +163,34 @@ var ICONS_GROUP
 ; NSIS prunes it as dead code (warning 6010), leaving the welcome/finish
 ; left-side bitmap slot empty (#73).
 !insertmacro MUI_LANGUAGE "SimpChinese"
+
+; MUI2's standard page titles and subtitles are preprocessor !defines (see
+; MUI_DEFAULT in Interface.nsh), not LangStrings. Override them AFTER
+; !insertmacro MUI_LANGUAGE so they survive until each page callback sends
+; them to the header / subtitle static controls via SendMessage WM_SETTEXT.
+; Without these overrides the headers collapse to a single button-high
+; strip with no subtitle row (#72).
+!define MUI_TEXT_WELCOME_INFO_TITLE "请先安装 QMT 交易客户端"
+!define MUI_TEXT_WELCOME_INFO_SUBTITLE "请先确认本机已经安装迅投 QMT 交易客户端，然后继续。"
+!define MUI_TEXT_WELCOME_INFO_TEXT \
+    "本软件需要配置迅投 QMT 交易客户端使用。在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获取 QMT 软件的下载方式。$\n$\n\
+     如果需要帮助，请扫描左侧二维码联系我们。"
+
+!define MUI_TEXT_DIRECTORY_TITLE "选择安装位置"
+!define MUI_TEXT_DIRECTORY_SUBTITLE "请选择 $(^NameDA) 的安装文件夹"
+
+!define MUI_TEXT_COMPONENTS_TITLE "选择安装组件"
+!define MUI_TEXT_COMPONENTS_SUBTITLE "请勾选需要安装的可选组件"
+
+!define MUI_TEXT_STARTMENU_TITLE "选择开始菜单文件夹"
+!define MUI_TEXT_STARTMENU_SUBTITLE "请选择开始菜单中的文件夹"
+
+!define MUI_TEXT_INSTFILES_TITLE "正在安装"
+!define MUI_TEXT_INSTFILES_SUBTITLE "请稍候，正在完成 $(^NameDA) 的安装"
+
+!define MUI_TEXT_FINISH_INFO_TITLE "$(^Name) 安装程序结束"
+!define MUI_TEXT_FINISH_INFO_TEXT \
+    "$(^Name) 已经成功安装到本机。$\r$\n点击『完成(F)』关闭安装程序。"
 
 ; MUI reserve files
 ; MUI_RESERVEFILE_INSTALLOPTIONS is not supported in MUI2
