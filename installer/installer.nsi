@@ -37,11 +37,9 @@ SetCompress off
 !system 'python ".\generate-requirements.py" "..\pyproject.toml" ".\requirements.txt"' = 0
 !system 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\generate-bitmaps.ps1"' = 0
 
-; Reserve the NSIS built-in zip plugin so the embedded Python distribution
-; can be extracted inside the installer without going through PowerShell.
-; choco's NSIS 3.x ships Plugins\x86-unicode\ZipDLL.dll and the ANSI build
-; installs Plugins\x86-ansi\ZipDLL.dll as well; both expose ZipDLL::Extract.
-ReserveFile "${NSISDIR}\Plugins\x86-unicode\ZipDLL.dll"
+; The NSIS built-in zip plugin (ZipDLL::Extract) is shipped by choco's
+; NSIS 3.x under Plugins\x86-unicode and is picked up automatically - no
+; explicit ReserveFile / File copy is needed.
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"

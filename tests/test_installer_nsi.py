@@ -195,8 +195,9 @@ def test_installer_extracts_python_embed_via_zipdll():
     assert "ZipDLL::Extract" in text, (
         "Installer must use the NSIS built-in ZipDLL plugin to extract python-embed.zip"
     )
-    assert 'ReserveFile "${NSISDIR}\\Plugins\\x86-unicode\\ZipDLL.dll"' in text, (
-        "Installer must reserve the ZipDLL plugin so it is available when needed"
+    assert 'ReserveFile "${NSISDIR}\\Plugins\\x86-unicode\\ZipDLL.dll"' not in text, (
+        "ReserveFile does not accept ${NSISDIR} paths; NSIS ships ZipDLL under "
+        "Plugins\\x86-unicode and the plugin is loaded automatically"
     )
     assert "Expand-Archive -Path $zipPath" not in helper, (
         "PowerShell helper must not call Expand-Archive - extraction is the installer's job"
