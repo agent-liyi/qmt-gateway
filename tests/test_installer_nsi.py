@@ -185,19 +185,19 @@ def test_installer_no_language_picker_for_chinese_only_install():
     )
 
 
-def test_installer_extracts_python_embed_via_zipdll():
+def test_installer_extracts_python_embed_via_native_tar():
     """PowerShell5.1's Expand-Archive intermittently fails with 'Cannot access path'
     under CJK install paths and silently returns 0, leaving the next stage with no
-    python.exe. The installer must use the NSIS built-in ZipDLL plugin to do the
-    actual extraction, and let PowerShell only patch python313._pth."""
+    python.exe. The installer must extract python-embed.zip via the built-in
+    Windows tar.exe (ships with Windows 10 1803+ / Server 2019+) and let PowerShell
+    only patch python313._pth."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     helper = INSTALLER_PS1.read_text(encoding="utf-8")
-    assert "ZipDLL::Extract" in text, (
-        "Installer must use the NSIS built-in ZipDLL plugin to extract python-embed.zip"
+    assert "tar -xf" in text, (
+        "Installer must extract python-embed.zip via the built-in tar.exe"
     )
-    assert 'ReserveFile "${NSISDIR}\\Plugins\\x86-unicode\\ZipDLL.dll"' not in text, (
-        "ReserveFile does not accept ${NSISDIR} paths; NSIS ships ZipDLL under "
-        "Plugins\\x86-unicode and the plugin is loaded automatically"
+    assert "ZipDLL::Extract" not in text, (
+        "ZipDLL is not part of the default NSIS 3.x install - avoid relying on it"
     )
     assert "Expand-Archive -Path $zipPath" not in helper, (
         "PowerShell helper must not call Expand-Archive - extraction is the installer's job"

@@ -37,9 +37,9 @@ SetCompress off
 !system 'python ".\generate-requirements.py" "..\pyproject.toml" ".\requirements.txt"' = 0
 !system 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\generate-bitmaps.ps1"' = 0
 
-; The NSIS built-in zip plugin (ZipDLL::Extract) is shipped by choco's
-; NSIS 3.x under Plugins\x86-unicode and is picked up automatically - no
-; explicit ReserveFile / File copy is needed.
+; The NSIS built-in zip plugin is not part of the default choco NSIS 3.x
+; install, so we do not rely on it. python-embed.zip is extracted with the
+; built-in Windows tar.exe below.
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -230,17 +230,14 @@ Section "-Core" SEC_CORE
     File "python-embed.zip"
 
     !insertmacro LogStep "Core: extract embedded Python"
-    ; Use the NSIS built-in ZipDLL plugin to extract python-embed.zip inside
-    ; the installer itself. PowerShell5.1's Expand-Archive intermittently
-    ; fails with 'Write-Error: Cannot access path' under CJK install paths
-    ; and silently returns 0, leaving the next stage with no python.exe.
+    ; Extract python-embed.zip via the built-in Windows tar.exe (ships with
+    ; Windows 10 1803+ and Server 2019+, present on every supported system).
+    ; tar -xf supports zip archives and handles Unicode paths reliably,
+    ; unlike PowerShell 5.1's Expand-Archive which intermittently fails with
+    ; 'Cannot access path' under CJK install paths.
     SetOutPath "$INSTDIR\python"
-    ZipDLL::Extract "$INSTDIR\python\python-embed.zip" "$INSTDIR\python"
-    Pop $0
-    ${If} $0 != "OK"
-        !insertmacro LogLine "ERROR: ZipDLL::Extract failed with status $0"
-        Abort "Extract embedded Python failed (ZipDLL returned $0)"
-    ${EndIf}
+    nsExec::ExecToLog 'cmd.exe /c tar -xf "$INSTDIR\python\python-embed.zip" -C "$INSTDIR\python"'
+    !insertmacro AbortOnExecFailure "Extract embedded Python"
     Delete "$INSTDIR\python\python-embed.zip"
     !insertmacro LogStep "Core: post-process embedded Python"
     ; Hand control to the PowerShell helper only to patch python313._pth so
