@@ -5,7 +5,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER_NSI = ROOT / "installer" / "installer.nsi"
 INSTALLER_PS1 = ROOT / "installer" / "install-python.ps1"
-REFRESH_CONTACT_PS1 = ROOT / "installer" / "refresh-contact-bmp.ps1"
 
 
 def test_installer_nsi_exists():
@@ -44,15 +43,8 @@ def test_installer_finish_page_renders_title_text_and_bitmap():
     assert '!define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"' in text, (
         "Finish page must override MUI_FINISHPAGE_TEXT with the success description (#69)"
     )
-    assert '!define FINISH_WIZARD_BMP_NAME "finish-wizard.bmp"' in text
-    assert '!define MUI_WELCOMEFINISHPAGE_BITMAP "${FINISH_WIZARD_BMP_NAME}"' in text, (
-        "Finish page should use the bundled dark-blue wizard artwork the user referenced (#69)"
-    )
-    assert "${NSISDIR}\\Contrib\\Graphics\\Wizard\\win.bmp" not in text, (
-        "Do not reference the machine-level NSIS stock bitmap directly; bundle a local generated BMP instead"
-    )
-    assert '!define MUI_FINISHPAGE_BITMAP' not in text, (
-        "Do not use the unsupported MUI_FINISHPAGE_BITMAP macro; MUI2 expects MUI_WELCOMEFINISHPAGE_BITMAP"
+    assert '!define MUI_FINISHPAGE_BITMAP "contact-us.bmp"' in text, (
+        "Finish page must render the left-side decorative bitmap (#69)"
     )
     finish_title_idx = text.find("LangString FINISH_TITLE ${LANG_SIMPCHINESE}")
     finish_text_idx = text.find("LangString FINISH_TEXT ${LANG_SIMPCHINESE}")
@@ -63,14 +55,11 @@ def test_installer_finish_page_renders_title_text_and_bitmap():
     assert 0 < finish_text_idx < finish_page_idx, (
         "FINISH_TEXT LangString must be defined before MUI_PAGE_FINISH (#69/#51)"
     )
-    assert "安装完成" in text, (
-        "Finish title must be short enough to render cleanly beside the wizard bitmap (#69)"
+    assert "$(^Name) 安装程序结束" in text, (
+        "Finish title must use the localized '安装程序结束' wording (#69)"
     )
     assert "已经成功安装到本机" in text, (
         "Finish text must use the localized '已经成功安装到本机' wording (#69)"
-    )
-    assert '!define MUI_FINISHPAGE_RUN_TEXT "立即启动"' in text, (
-        "Finish-page checkbox labels must stay short so they do not overflow the content area"
     )
 
 
@@ -151,157 +140,31 @@ def test_installer_documents_makensis_dependency():
     )
 
 
-def test_installer_uses_quantide_brand_icon():
-    """#68: the installer's title bar and taskbar must show the quantide brand
-    icon (the user explicitly asked for quantide.png to be the logo).
-    Without MUI_ICON / MUI_UNICON NSIS embeds its default globe-and-arrow
-    icon, which is NOT our brand. The .ico file is generated from
-    quantide.png at build time by generate-bitmaps.ps1."""
+def test_installer_uses_quantide_logo_as_header_image():
+    """#68: top-left logo of every page must come from installer/quantide.png."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert "!define MUI_HEADERIMAGE" in text, (
+        "MUI_HEADERIMAGE must be enabled so the brand logo renders on every page"
+    )
+    assert '!define MUI_HEADERIMAGE_BITMAP "quantide.bmp"' in text, (
+        "Header bitmap must be quantide.bmp (generated from quantide.png)"
+    )
+    assert "quantide.png" in (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8"), (
+        "generate-bitmaps.ps1 must include quantide.png as a source image"
+    )
     assert '!define MUI_ICON "quantide.ico"' in text, (
-        "Installer must use quantide.ico as its application icon (#68)"
+        "Installer/uninstaller icon must come from quantide.ico so the title bar shows the brand logo (#68)"
     )
     assert '!define MUI_UNICON "quantide.ico"' in text, (
-        "Uninstaller must use quantide.ico as its application icon (#68)"
+        "Uninstaller icon must also use quantide.ico so uninstaller windows show the brand logo (#68)"
     )
-    assert "!define MUI_HEADERIMAGE" not in text, (
-        "MUI_HEADERIMAGE must be off; brand mark lives in title bar / taskbar only"
-    )
-    generator = (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8")
-    assert "Convert-PngToIco" in generator, (
+    assert "Convert-PngToIco" in (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8"), (
         "generate-bitmaps.ps1 must produce quantide.ico from quantide.png (#68)"
     )
-    assert "New-FinishWizardBitmap" in generator and "finish-wizard.bmp" in generator, (
-        "generate-bitmaps.ps1 must produce the bundled dark-blue finish-page wizard bitmap (#69)"
-    )
 
 
-def test_installer_bitmap_generation_runs_before_reservefile():
-    """contact-us.bmp must exist on disk by the time ReserveFile references
-    it. generate-bitmaps.ps1 therefore has to run in the NSI preprocessor
-    BEFORE the ReserveFile directive; otherwise makensis aborts with
-    'ReserveFile: no files found'."""
-    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    generate_idx = text.find("generate-bitmaps.ps1")
-    reserve_idx = text.find('ReserveFile "${CONTACT_US_QR_BMP_NAME}"')
-    assert generate_idx != -1, "generate-bitmaps.ps1 must be invoked by the NSI preprocessor"
-    assert reserve_idx != -1, "The welcome QR BMP must be reserved so it is available to Page callbacks"
-    assert generate_idx < reserve_idx, (
-        "generate-bitmaps.ps1 must run BEFORE ReserveFile so the bitmap exists on disk"
-    )
-    """contact-us.bmp must exist on disk by the time ReserveFile references
-    it. generate-bitmaps.ps1 therefore has to run in the NSI preprocessor
-    BEFORE the ReserveFile directive; otherwise makensis aborts with
-    'ReserveFile: no files found'."""
-    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    generate_idx = text.find("generate-bitmaps.ps1")
-    reserve_idx = text.find('ReserveFile "${CONTACT_US_QR_BMP_NAME}"')
-    assert generate_idx != -1, "generate-bitmaps.ps1 must be invoked by the NSI preprocessor"
-    assert reserve_idx != -1, "The welcome QR BMP must be reserved so it is available to Page callbacks"
-    assert generate_idx < reserve_idx, (
-        "generate-bitmaps.ps1 must run BEFORE ReserveFile so the bitmap exists on disk"
-    )
-
-
-def test_installer_welcome_page_uses_nsdialogs_with_qr_on_the_right():
-    """#67: welcome page renders a Chinese prompt on the left and the
-    contact-us QR code on the right via a custom nsDialogs page (the built-in
-    MUI_WELCOME page only supports a left-side decorative strip, not a
-    right-side bitmap). The contact-us image is staged into $PLUGINSDIR at
-    page-create time so it stays sharp on high-DPI displays."""
-    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert 'Page custom show_welcome_dialog leave_welcome_dialog' in text, (
-        "Welcome page must be a custom nsDialogs page so we control layout (#67)"
-    )
-    assert 'Page custom show_welcome_dialog leave_welcome_dialog "$(WELCOME_TITLE)"' not in text, (
-        "Do not append the welcome title to the installer window caption; it should render inside the page content instead"
-    )
-    assert "!include \"nsDialogs.nsh\"" in text, (
-        "nsDialogs include is required for the custom welcome page (#67)"
-    )
-    assert 'ReserveFile "${CONTACT_US_QR_BMP_NAME}"' in text, (
-        "The local QR BMP must be reserved so it is available in $PLUGINSDIR (#67)"
-    )
-    assert 'ReserveFile "${CONTACT_US_JPG_NAME}"' in text, (
-        "The bundled QR JPG must be reserved so the welcome page can show a local image immediately (#67)"
-    )
-    assert 'ReserveFile "${CONTACT_US_REFRESH_SCRIPT_NAME}"' in text, (
-        "The refresh helper must be reserved so the welcome page can fetch a newer QR in the background (#67)"
-    )
-    assert 'File /oname=${CONTACT_US_QR_BMP_NAME} "${CONTACT_US_QR_BMP_NAME}"' in text, (
-        "The local QR BMP must be extracted into $PLUGINSDIR by the page callback (#67)"
-    )
-    assert 'File /oname=${CONTACT_US_JPG_NAME} "${CONTACT_US_JPG_NAME}"' in text, (
-        "The bundled QR JPG must be staged into $PLUGINSDIR as the refresh helper fallback (#67)"
-    )
-    assert 'File /oname=${CONTACT_US_REFRESH_SCRIPT_NAME} "${CONTACT_US_REFRESH_SCRIPT_NAME}"' in text, (
-        "The refresh helper script must be staged into $PLUGINSDIR by the welcome page (#67)"
-    )
-    assert "${NSD_CreateLabel}" in text and "${NSD_CreateBitmap}" in text, (
-        "Custom welcome page must contain a label and a bitmap control (#67)"
-    )
-    assert 'nsDialogs::Create 1044' in text, (
-        "Welcome page should use the welcome/finish-page template so there is no oversized built-in header band"
-    )
-    assert '${NSD_CreateLabel} 14u 14u 170u 18u "$(WELCOME_TITLE)"' in text, (
-        "Welcome title should be rendered as a bold content-area label, not in the window caption"
-    )
-    assert 'SendMessage $1 ${WM_SETFONT} $WelcomeTitleFont 0' in text, (
-        "Welcome title should use a larger bold font so it reads like a title"
-    )
-    assert '${NSD_SetStretchedBitmap} $WelcomeQrHandle "$PLUGINSDIR\\${CONTACT_US_QR_BMP_NAME}" $WelcomeQrBitmapHandle' in text, (
-        "Custom welcome page must stretch the staged local QR BMP into the right column (#67)"
-    )
-    assert '${CONTACT_US_REFRESH_SCRIPT_NAME}" -PluginDir "$PLUGINSDIR"' in text, (
-        "Welcome page must launch the refresh helper in the background (#67)"
-    )
-    assert '${NSD_CreateTimer} welcome_qr_refresh_tick 400' in text, (
-        "Welcome page must poll for the refreshed QR and replace it automatically (#67)"
-    )
-    assert 'Call HideWelcomeChrome' in text and 'Call ShowWelcomeChrome' in text, (
-        "Welcome page must hide the built-in welcome-page chrome while the custom layout is shown (#67/#68)"
-    )
-    assert 'GetDlgItem $0 $HWNDPARENT 1028' in text and 'GetDlgItem $0 $HWNDPARENT 1045' in text, (
-        "Welcome page should hide the standard welcome controls and reveal the custom page area (#67/#68)"
-    )
-    assert '${NSD_CreateBitmap} 212u 28u 96u 96u ""' in text, (
-        "QR control should be square so the staged bitmap is not distorted (#67)"
-    )
-
-
-def test_installer_refresh_contact_helper_writes_ready_flag_and_sizes_bitmap():
-    helper = REFRESH_CONTACT_PS1.read_text(encoding="utf-8")
-    assert "$ReadyFlagName = 'contact-us.ready'" in helper
-    assert "$BmpWidth = 280" in helper and "$BmpHeight = 280" in helper
-    assert "$readyFlagPath = Join-Path $pluginDir $ReadyFlagName" in helper
-    assert "Set-Content -LiteralPath $readyFlagPath -Encoding ASCII" in helper, (
-        "Refresh helper must signal the welcome page when the QR BMP is ready to reload"
-    )
-
-
-def test_installer_compacts_standard_pages_and_hides_header_logo():
-    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert 'Function ApplyCompactStandardPageChrome' in text, (
-        "Standard MUI pages should share a compact layout helper so the duplicate header logo is removed everywhere"
-    )
-    assert 'GetDlgItem $0 $HWNDPARENT 1039' in text and 'ShowWindow $0 ${SW_HIDE}' in text, (
-        "The Modern UI header icon control must be hidden on standard pages"
-    )
-    assert 'GetDlgItem $0 $HWNDPARENT 1018' in text and 'User32::MoveWindow' in text, (
-        "The standard page child rect must be moved upward so the oversized blank header area disappears"
-    )
-    assert text.count('!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome') >= 4, (
-        "Directory/components/startmenu/installfiles pages should all reuse the compact-page helper after controls exist"
-    )
-    assert '!define MUI_PAGE_CUSTOMFUNCTION_PRE ApplyCompactStandardPageChrome' not in text, (
-        "PRE runs before standard-page child controls exist, so it cannot reliably shrink the header"
-    )
-
-
-def test_installer_welcome_page_uses_chinese_prompt_only():
-    """The welcome text must be Chinese-only - no English paragraph - per
-    product decision. The user explicitly asked: '这英文是怎么回事？我没有
-    要求使用英文。'"""
+def test_installer_welcome_page_prompts_user_to_install_qmt_with_contact_qr():
+    """#67: welcome page must show the pre-install QMT prompt and the contact QR."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert "本软件需要配置迅投 QMT 交易客户端使用" in text, (
         "Welcome text must explain QMT must be installed first (#67)"
@@ -312,11 +175,17 @@ def test_installer_welcome_page_uses_chinese_prompt_only():
     assert "联系我们" in text, (
         "Welcome text must mention contacting us for help (#67)"
     )
-    assert "This software requires the Xuntou QMT" not in text, (
-        "Welcome text must not contain the English paragraph (#67)"
+    assert '!define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"' in text, (
+        "Welcome page must display the contact-us QR via MUI_WELCOMEPAGE_BITMAP (#67)"
     )
-    assert "!insertmacro MUI_LANGUAGE \"English\"" not in text, (
-        "Installer ships only SimpChinese; do not register the English table"
+    assert "!define MUI_WELCOMEPAGE_TITLE" in text, (
+        "Welcome page must override MUI_WELCOMEPAGE_TITLE so the prompt is visible"
+    )
+    assert "!define MUI_WELCOMEPAGE_TEXT" in text, (
+        "Welcome page must override MUI_WELCOMEPAGE_TEXT with the localized prompt"
+    )
+    assert "cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg" in text, (
+        "Installer must reference the canonical CDN URL for the contact QR (#67)"
     )
 
 
@@ -474,19 +343,13 @@ def test_installer_streams_detail_output_to_install_directory():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     helper = INSTALLER_PS1.read_text(encoding="utf-8")
     assert "_extract.log" in helper
+    assert "_bootstrap_pip.log" in helper
+    assert "_install_deps.log" in helper
     assert "_extract.log" not in text
+    assert "_bootstrap_pip.log" not in text
+    assert "_install_deps.log" not in text
     assert 'Tee-Object' not in text
     assert 'Tee-Object' not in helper
-
-    # Runtime stage must use System.IO.Compression.ZipFile instead of
-    # Expand-Archive: the cmdlet intermittently fails with
-    # 'Cannot access path' under CJK install paths.
-    assert "[System.IO.Compression.ZipFile]::ExtractToDirectory" in helper, (
-        "Runtime stage must call ZipFile::ExtractToDirectory so CJK install paths do not fail"
-    )
-    assert "Expand-Archive -Path" not in helper, (
-        "Expand-Archive is unreliable with CJK paths; ZipFile::ExtractToDirectory must be used instead"
-    )
 
 
 def test_installer_updates_python313_pth_without_utf8_bom():

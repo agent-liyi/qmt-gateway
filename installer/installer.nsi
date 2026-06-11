@@ -28,37 +28,18 @@ SetCompress off
 !define INSTALL_LOG_NAME "install.log"
 !define REQUIREMENTS_NAME "requirements.txt"
 !define REQUIREMENTS_PATH "${__FILEDIR__}\${REQUIREMENTS_NAME}"
-!define CONTACT_US_JPG_NAME "contact-us.jpg"
-!define CONTACT_US_QR_BMP_NAME "contact-us.bmp"
-!define FINISH_WIZARD_BMP_NAME "finish-wizard.bmp"
-!define CONTACT_US_REFRESH_SCRIPT_NAME "refresh-contact-bmp.ps1"
-!define CONTACT_US_READY_FLAG_NAME "contact-us.ready"
-!define CONTACT_US_CDN_URL "https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg"
 
-; #67 / #68: build-time preprocessor steps. Run BEFORE ReserveFile so the
-; generated bitmaps are present on disk.
+; #67 / #68: build-time preprocessor steps.
 ;   - generate-requirements.py writes installer\requirements.txt from pyproject.toml.
 ;   - generate-bitmaps.ps1 converts quantide.png / contact-us.jpg to the BMP
-;     format that MUI2 requires for MUI_WELCOMEPAGE_BITMAP and produces
-;     quantide.ico for MUI_ICON / MUI_UNICON.
+;     format that MUI2 requires for MUI_HEADERIMAGE_BITMAP and
+;     MUI_WELCOMEPAGE_BITMAP.
 !system 'python ".\generate-requirements.py" "..\pyproject.toml" ".\requirements.txt"' = 0
 !system 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\generate-bitmaps.ps1"' = 0
-
-; Reserve the welcome/finish assets so they are available before any page is shown.
-ReserveFile "${CONTACT_US_QR_BMP_NAME}"
-ReserveFile "${FINISH_WIZARD_BMP_NAME}"
-ReserveFile "${CONTACT_US_JPG_NAME}"
-ReserveFile "${CONTACT_US_REFRESH_SCRIPT_NAME}"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
-!include "nsDialogs.nsh"
-
-Var WelcomeQrHandle
-Var WelcomeQrBitmapHandle
-Var WelcomeQrReadyFlagPath
-Var WelcomeTitleFont
 
 
 !macro LogInit
@@ -95,240 +76,76 @@ Var WelcomeTitleFont
 
 ; MUI Settings
 !define MUI_ABORTWARNING
-; #68: use the quantide brand icon for the installer and uninstaller.
-; Windows title bars and taskbars require ICO resources, so page artwork uses
-; BMP while the shell icon remains quantide.ico.
+; #68: use quantide.ico as the installer / uninstaller application icon.
+; The source quantide.png is converted to quantide.ico at build time by
+; installer\generate-bitmaps.ps1.
 !define MUI_ICON "quantide.ico"
 !define MUI_UNICON "quantide.ico"
-;
-; Header image is disabled - the brand mark lives in the title bar / taskbar
-; only, not as a strip on every wizard page. The welcome page custom layout
-; is built with nsDialogs (see show_welcome_dialog) so we have full control
-; over the left-text / right-bitmap layout.
-;
-; #67: the welcome page shows a local BMP derived from contact-us.jpg
-; immediately, then asks refresh-contact-bmp.ps1 to fetch the latest QR from
-; the CDN and overwrite the staged BMP once the download completes.
 ; !define MUI_WELCOMEFINISHPAGE_BITMAP "installer\welcome.bmp"
 
-; #68: header image disabled - brand logo shows only in title bar / taskbar
-; via MUI_ICON and MUI_UNICON. The welcome page custom layout is built with
-; nsDialogs (see show_welcome_dialog) so we have full control over the
-; left-text / right-bitmap layout.
-;
-; #69: the finish page uses a bundled dark-blue wizard illustration matching
-; the classic NSIS finish-page layout the user referenced. We generate it into
-; the repository at build time instead of referencing ${NSISDIR}, which keeps
-; the installer resource path ASCII/local and avoids finish-page mojibake.
+; #68: use quantide logo as the header image on every page. The source lives
+; in installer\quantide.png; installer\generate-bitmaps.ps1 converts it to
+; installer\quantide.bmp at build time.
+!define MUI_HEADERIMAGE
+!define MUI_HEADERIMAGE_BITMAP "quantide.bmp"
+!define MUI_HEADERIMAGE_UNBITMAP "quantide.bmp"
+
+; #67: contact-us QR code shown on the welcome page. The source lives at
+; https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg
+; We ship a local copy in installer\contact-us.jpg; generate-bitmaps.ps1
+; converts it to 164x314 installer\contact-us.bmp at build time.
+!define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"
 
 ; IMPORTANT: register language tables and define every LangString BEFORE the
 ; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
 ; to its numeric code (e.g. "1" or "1+2") and the component selection page
-; shows mojibake instead of the description (#51). Chinese only - the
-; installer ships only the SimpChinese language table; if the user is on
-; an English system, NSIS falls back to the OS language pack and the
-; built-in MUI strings still render in Chinese here.
+; shows mojibake instead of the description (#51).
 !insertmacro MUI_LANGUAGE "SimpChinese"
+!insertmacro MUI_LANGUAGE "English"
 
-; #67: pre-install prompt about QMT (Chinese only, per product decision). The
-; QR code on the right of the welcome page is rendered from
-; installer\contact-us.bmp inside a custom nsDialogs page (see show_welcome_dialog).
+; #67: pre-install prompt about QMT. The QR code on the right is rendered
+; from installer\contact-us.bmp via MUI_WELCOMEPAGE_BITMAP.
 LangString WELCOME_TEXT ${LANG_SIMPCHINESE} \
     "本软件需要配置迅投 QMT 交易客户端使用。在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获得 QMT 软件下载方式。您也可以联系我们获得协助。$\n$\n\
-     安装目录将由您在本向导下一步选择。"
+     This software requires the Xuntou QMT trading client. QMT must be installed before running this installer. Please contact your broker for the official QMT download, or scan the QR code on the right to reach us for help."
+LangString WELCOME_TEXT ${LANG_ENGLISH} \
+    "This software requires the Xuntou QMT trading client. QMT must be installed before running this installer. Please contact your broker for the official QMT download, or scan the QR code on the right to reach us for help."
 
 LangString WELCOME_TITLE ${LANG_SIMPCHINESE} "请先安装 QMT 交易客户端"
+LangString WELCOME_TITLE ${LANG_ENGLISH} "Install QMT first"
 LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_SIMPCHINESE} \
     "安装失败。请查看安装目录下的 ${INSTALL_LOG_NAME}。如果尚未选择安装目录，请截屏反馈。"
+LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_ENGLISH} \
+    "Installation failed. Check ${INSTALL_LOG_NAME} in the install directory. If no install directory was selected yet, please provide a screenshot."
 
 ; Section descriptions (must be defined before MUI_PAGE_COMPONENTS)
 LangString DESC_SEC_CORE ${LANG_SIMPCHINESE} "核心组件（必须安装）"
+LangString DESC_SEC_CORE ${LANG_ENGLISH} "Core components (required)"
 LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "开机自启（用户登录时自动启动）"
+LangString DESC_SEC_AUTOSTART ${LANG_ENGLISH} "Auto-start on login"
 LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "防火墙入站规则（允许局域网访问）"
+LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN access)"
 
 ; Finish page localized text (#69)
-LangString FINISH_TITLE ${LANG_SIMPCHINESE} "安装完成"
+LangString FINISH_TITLE ${LANG_SIMPCHINESE} "$(^Name) 安装程序结束"
+LangString FINISH_TITLE ${LANG_ENGLISH} "$(^Name) Setup Complete"
 LangString FINISH_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机。$\r$\n点击『完成(F)』关闭安装程序。"
+LangString FINISH_TEXT ${LANG_ENGLISH} "$(^Name) has been successfully installed on this computer.$\r$\nClick $\"Finish$\" to close the installer."
 
-; Welcome page - custom nsDialogs page so the layout can be left-text /
-; right-bitmap (the built-in MUI_WELCOME page only supports a left-side
-; decorative strip, not a right-side QR code) (#67).
-Page custom show_welcome_dialog leave_welcome_dialog
-
-Function show_welcome_dialog
-    ; Stage the local QR assets immediately so the page is never blank, then
-    ; refresh them from the CDN in the background.
-    InitPluginsDir
-    SetOutPath $PLUGINSDIR
-    File /oname=${CONTACT_US_QR_BMP_NAME} "${CONTACT_US_QR_BMP_NAME}"
-    File /oname=${CONTACT_US_JPG_NAME} "${CONTACT_US_JPG_NAME}"
-    File /oname=${CONTACT_US_REFRESH_SCRIPT_NAME} "${CONTACT_US_REFRESH_SCRIPT_NAME}"
-
-    StrCpy $WelcomeQrHandle ""
-    StrCpy $WelcomeQrBitmapHandle ""
-    StrCpy $WelcomeQrReadyFlagPath "$PLUGINSDIR\${CONTACT_US_READY_FLAG_NAME}"
-    Delete "$WelcomeQrReadyFlagPath"
-
-    nsDialogs::Create 1044
-    Pop $0
-    ${If} $0 == error
-        Abort
-    ${EndIf}
-
-    SetCtlColors $0 0 0xffffff
-    Call HideWelcomeChrome
-
-    ${NSD_CreateLabel} 14u 14u 170u 18u "$(WELCOME_TITLE)"
-    Pop $1
-    SendMessage $1 ${WM_SETFONT} $WelcomeTitleFont 0
-    SetCtlColors $1 0 0xffffff
-
-    ${NSD_CreateLabel} 14u 40u 180u 88u "$(WELCOME_TEXT)"
-    Pop $2
-    SetCtlColors $2 0 0xffffff
-
-    ${NSD_CreateBitmap} 212u 28u 96u 96u ""
-    Pop $WelcomeQrHandle
-    ${NSD_SetStretchedBitmap} $WelcomeQrHandle "$PLUGINSDIR\${CONTACT_US_QR_BMP_NAME}" $WelcomeQrBitmapHandle
-
-    Exec '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\${CONTACT_US_REFRESH_SCRIPT_NAME}" -PluginDir "$PLUGINSDIR" -BmpName "${CONTACT_US_QR_BMP_NAME}" -JpgName "${CONTACT_US_JPG_NAME}" -CdnUrl "${CONTACT_US_CDN_URL}" -ReadyFlagName "${CONTACT_US_READY_FLAG_NAME}" -BmpWidth 280 -BmpHeight 280'
-    ${NSD_CreateTimer} welcome_qr_refresh_tick 400
-
-    nsDialogs::Show
-    Call ShowWelcomeChrome
-FunctionEnd
-
-Function HideWelcomeChrome
-    Push $0
-    LockWindow on
-    GetDlgItem $0 $HWNDPARENT 1028
-    ShowWindow $0 ${SW_HIDE}
-
-    GetDlgItem $0 $HWNDPARENT 1256
-    ShowWindow $0 ${SW_HIDE}
-
-    GetDlgItem $0 $HWNDPARENT 1035
-    ShowWindow $0 ${SW_HIDE}
-
-    GetDlgItem $0 $HWNDPARENT 1037
-    ShowWindow $0 ${SW_HIDE}
-
-    GetDlgItem $0 $HWNDPARENT 1038
-    ShowWindow $0 ${SW_HIDE}
-
-    GetDlgItem $0 $HWNDPARENT 1039
-    ShowWindow $0 ${SW_HIDE}
-
-    GetDlgItem $0 $HWNDPARENT 1045
-    ShowWindow $0 ${SW_NORMAL}
-    LockWindow off
-    Pop $0
-FunctionEnd
-
-Function ShowWelcomeChrome
-    Push $0
-    LockWindow on
-    GetDlgItem $0 $HWNDPARENT 1028
-    ShowWindow $0 ${SW_NORMAL}
-
-    GetDlgItem $0 $HWNDPARENT 1256
-    ShowWindow $0 ${SW_NORMAL}
-
-    GetDlgItem $0 $HWNDPARENT 1035
-    ShowWindow $0 ${SW_NORMAL}
-
-    GetDlgItem $0 $HWNDPARENT 1037
-    ShowWindow $0 ${SW_NORMAL}
-
-    GetDlgItem $0 $HWNDPARENT 1038
-    ShowWindow $0 ${SW_NORMAL}
-
-    GetDlgItem $0 $HWNDPARENT 1039
-    ShowWindow $0 ${SW_NORMAL}
-
-    GetDlgItem $0 $HWNDPARENT 1045
-    ShowWindow $0 ${SW_HIDE}
-    LockWindow off
-    Pop $0
-FunctionEnd
-
-Function welcome_qr_refresh_tick
-    IfFileExists "$WelcomeQrReadyFlagPath" 0 done
-
-    ${If} $WelcomeQrBitmapHandle != ""
-        ${NSD_FreeBitmap} $WelcomeQrBitmapHandle
-        StrCpy $WelcomeQrBitmapHandle ""
-    ${EndIf}
-
-    ${NSD_SetStretchedBitmap} $WelcomeQrHandle "$PLUGINSDIR\${CONTACT_US_QR_BMP_NAME}" $WelcomeQrBitmapHandle
-    Delete "$WelcomeQrReadyFlagPath"
-    ${NSD_KillTimer} welcome_qr_refresh_tick
-
-done:
-FunctionEnd
-
-Function leave_welcome_dialog
-    ${NSD_KillTimer} welcome_qr_refresh_tick
-    ${If} $WelcomeQrBitmapHandle != ""
-        ${NSD_FreeBitmap} $WelcomeQrBitmapHandle
-        StrCpy $WelcomeQrBitmapHandle ""
-    ${EndIf}
-FunctionEnd
-
-Function ApplyCompactStandardPageChrome
-    Push $0
-    Push $1
-    Push $2
-    Push $3
-    Push $4
-    Push $5
-    Push $8
-
-    LockWindow on
-
-    GetDlgItem $0 $HWNDPARENT 1036
-    ShowWindow $0 ${SW_HIDE}
-    GetDlgItem $0 $HWNDPARENT 1037
-    ShowWindow $0 ${SW_HIDE}
-    GetDlgItem $0 $HWNDPARENT 1038
-    ShowWindow $0 ${SW_HIDE}
-    GetDlgItem $0 $HWNDPARENT 1039
-    ShowWindow $0 ${SW_HIDE}
-
-    GetDlgItem $0 $HWNDPARENT 1018
-    System::Alloc 16
-    Pop $1
-    System::Call "User32::GetWindowRect(i r0, p r1)"
-    System::Call "User32::MapWindowPoints(i 0, i $HWNDPARENT, p r1, i 2)"
-    System::Call "*$1(i.r2, i.r3, i.r4, i.r5)"
-    System::Free $1
-
-    IntOp $4 $4 - $2
-    StrCpy $8 8
-    IntOp $5 $5 - $8
-    System::Call "User32::MoveWindow(i r0, i r2, i r8, i r4, i r5, i 1)"
-
-    LockWindow off
-
-    Pop $8
-    Pop $5
-    Pop $4
-    Pop $3
-    Pop $2
-    Pop $1
-    Pop $0
-FunctionEnd
+; Welcome page - title/text defined as LangString earlier so MUI2 can resolve
+; the language table at compile time. The bitmap is the contact-us QR (#67).
+!define MUI_WELCOMEPAGE_TITLE "$(WELCOME_TITLE)"
+!define MUI_WELCOMEPAGE_TEXT "$(WELCOME_TEXT)"
+!insertmacro MUI_PAGE_WELCOME
 
 ; License page
 ; !insertmacro MUI_PAGE_LICENSE "LICENSE"
 
 ; Directory page
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_DIRECTORY
 
 ; Components / Options page
 !define MUI_COMPONENTSPAGE_SMALLDESC
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_COMPONENTS
 
 ; Start menu page
@@ -337,18 +154,16 @@ var ICONS_GROUP
 !define MUI_STARTMENUPAGE_REGISTRY_ROOT "${PRODUCT_UNINST_ROOT_KEY}"
 !define MUI_STARTMENUPAGE_REGISTRY_KEY "${PRODUCT_UNINST_KEY}"
 !define MUI_STARTMENUPAGE_REGISTRY_VALUENAME "${PRODUCT_STARTMENU_REGVAL}"
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_STARTMENU Application $ICONS_GROUP
 
 ; Instfiles page
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplyCompactStandardPageChrome
 !insertmacro MUI_PAGE_INSTFILES
 
 ; Finish page - title/text/bitmap inline (#69)
-!define MUI_WELCOMEFINISHPAGE_BITMAP "${FINISH_WIZARD_BMP_NAME}"
 !define MUI_FINISHPAGE_TITLE "$(FINISH_TITLE)"
 !define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"
-!define MUI_FINISHPAGE_RUN_TEXT "立即启动"
+!define MUI_FINISHPAGE_BITMAP "contact-us.bmp"
+!define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "查看安装日志"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
 !define MUI_FINISHPAGE_RUN_NOTCHECKED
@@ -371,12 +186,7 @@ ShowUnInstDetails show
 RequestExecutionLevel admin
 
 Function .onInit
-    ; Chinese only - no language picker.
-    CreateFont $WelcomeTitleFont "$(^Font)" "14" "700"
-
-    ; WM_SETICON is sent later, in show_welcome_dialog, after the dialog
-    ; window has actually been created. .onInit runs before any UI exists
-    ; so sending WM_SETICON there has nothing to act on.
+    !insertmacro MUI_LANGDLL_DISPLAY
 FunctionEnd
 
 Function .onInstFailed
