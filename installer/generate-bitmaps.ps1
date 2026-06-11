@@ -134,6 +134,9 @@ function Convert-PngToIco {
     Write-Output "Generated $Destination"
 }
 
-Convert-ImageToBmp -Source "quantide.png" -Destination "quantide.bmp" -Width 0 -Height 0
+# MUI2's MUI_HEADERIMAGE_BITMAP renders on a 150x57 canvas. Fit quantide.png
+# into that canvas with a white background so the brand logo is sharp on the
+# installer chrome instead of being stretched and antialiased into a blur.
+Convert-ImageToBmp -Source "quantide.png" -Destination "quantide.bmp" -Width 150 -Height 57
 Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us.bmp" -Width 164 -Height 314
 Convert-PngToIco -Source "quantide.png" -Destination "quantide.ico"

@@ -109,8 +109,11 @@ function Invoke-LoggedPython {
 }
 
 function Invoke-RuntimeStage {
+    # The NSIS installer extracts python-embed.zip via the built-in
+    # ZipDLL plugin before invoking this stage. This stage only patches
+    # python313._pth so the embedded interpreter can import pip and our
+    # application package.
     $extractLog = Join-Path $PythonDir '_extract.log'
-    $zipPath = Join-Path $PythonDir 'python-embed.zip'
     $pthPath = Join-Path $PythonDir 'python313._pth'
 
     Add-InstallerLogLines @(
@@ -120,51 +123,46 @@ function Invoke-RuntimeStage {
         ('EXTRACT_LOG=' + $extractLog)
     )
 
-    $outputPath = Join-Path $PythonDir ([System.IO.Path]::GetRandomFileName())
-    Expand-Archive -Path $zipPath -DestinationPath $PythonDir -Force *> $outputPath
-    Add-DetailOutput -OutputPath $outputPath -DetailLog $extractLog
-    Remove-Item -LiteralPath $outputPath -Force -ErrorAction SilentlyContinue
-
-    if (Test-Path -LiteralPath $pthPath) {
-        $pthLines = [System.Collections.Generic.List[string]]::new()
-        $hasSitePackages = $false
-        $hasAppDir = $false
-
-        foreach ($line in Get-Content -LiteralPath $pthPath) {
-            switch ($line) {
-                'Lib\site-packages' {
-                    $hasSitePackages = $true
-                    $pthLines.Add($line)
-                    continue
-                }
-                '..\app' {
-                    $hasAppDir = $true
-                    $pthLines.Add($line)
-                    continue
-                }
-                'import site' { continue }
-                '#import site' { continue }
-                default {
-                    $pthLines.Add($line)
-                }
-            }
-        }
-
-        if (-not $hasSitePackages) {
-            $pthLines.Add('Lib\site-packages')
-        }
-        if (-not $hasAppDir) {
-            $pthLines.Add('..\app')
-        }
-        $pthLines.Add('import site')
-
-        $content = [string]::Join("`r`n", $pthLines) + "`r`n"
-        [System.IO.File]::WriteAllText($pthPath, $content, [System.Text.UTF8Encoding]::new($false))
-        Add-InstallerLogLine ('UPDATED_PTH=' + $pthPath)
+    if (-not (Test-Path -LiteralPath $pthPath)) {
+        Add-InstallerLogLine ('ERROR: missing python313._pth at ' + $pthPath)
+        throw "python313._pth was not produced by the installer; python-embed.zip extraction likely failed"
     }
 
-    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
-    Add-InstallerLogLine ('REMOVED=' + $zipPath)
+    $pthLines = [System.Collections.Generic.List[string]]::new()
+    $hasSitePackages = $false
+    $hasAppDir = $false
+
+    foreach ($line in Get-Content -LiteralPath $pthPath) {
+        switch ($line) {
+            'Lib\site-packages' {
+                $hasSitePackages = $true
+                $pthLines.Add($line)
+                continue
+            }
+            '..\app' {
+                $hasAppDir = $true
+                $pthLines.Add($line)
+                continue
+            }
+            'import site' { continue }
+            '#import site' { continue }
+            default {
+                $pthLines.Add($line)
+            }
+        }
+    }
+
+    if (-not $hasSitePackages) {
+        $pthLines.Add('Lib\site-packages')
+    }
+    if (-not $hasAppDir) {
+        $pthLines.Add('..\app')
+    }
+    $pthLines.Add('import site')
+
+    $content = [string]::Join("`r`n", $pthLines) + "`r`n"
+    [System.IO.File]::WriteAllText($pthPath, $content, [System.Text.UTF8Encoding]::new($false))
+    Add-InstallerLogLine ('UPDATED_PTH=' + $pthPath)
 }
 
 function Invoke-BootstrapPipStage {

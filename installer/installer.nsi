@@ -32,10 +32,16 @@ SetCompress off
 ; #67 / #68: build-time preprocessor steps.
 ;   - generate-requirements.py writes installer\requirements.txt from pyproject.toml.
 ;   - generate-bitmaps.ps1 converts quantide.png / contact-us.jpg to the BMP
-;     format that MUI2 requires for MUI_HEADERIMAGE_BITMAP and
-;     MUI_WELCOMEPAGE_BITMAP.
+;     format that MUI2 requires for MUI_WELCOMEPAGE_BITMAP and produces
+;     quantide.ico for MUI_ICON / MUI_UNICON.
 !system 'python ".\generate-requirements.py" "..\pyproject.toml" ".\requirements.txt"' = 0
 !system 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\generate-bitmaps.ps1"' = 0
+
+; Reserve the NSIS built-in zip plugin so the embedded Python distribution
+; can be extracted inside the installer without going through PowerShell.
+; choco's NSIS 3.x ships Plugins\x86-unicode\ZipDLL.dll and the ANSI build
+; installs Plugins\x86-ansi\ZipDLL.dll as well; both expose ZipDLL::Extract.
+ReserveFile "${NSISDIR}\Plugins\x86-unicode\ZipDLL.dll"
 
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
@@ -76,61 +82,55 @@ SetCompress off
 
 ; MUI Settings
 !define MUI_ABORTWARNING
-; #68: use quantide.ico as the installer / uninstaller application icon.
-; The source quantide.png is converted to quantide.ico at build time by
+; #68: use quantide.ico as the installer / uninstaller title-bar and taskbar
+; icon. The source quantide.png is converted to quantide.ico at build time by
 ; installer\generate-bitmaps.ps1.
 !define MUI_ICON "quantide.ico"
 !define MUI_UNICON "quantide.ico"
-; !define MUI_WELCOMEFINISHPAGE_BITMAP "installer\welcome.bmp"
-
-; #68: use quantide logo as the header image on every page. The source lives
-; in installer\quantide.png; installer\generate-bitmaps.ps1 converts it to
-; installer\quantide.bmp at build time.
-!define MUI_HEADERIMAGE
-!define MUI_HEADERIMAGE_BITMAP "quantide.bmp"
-!define MUI_HEADERIMAGE_UNBITMAP "quantide.bmp"
 
 ; #67: contact-us QR code shown on the welcome page. The source lives at
 ; https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg
 ; We ship a local copy in installer\contact-us.jpg; generate-bitmaps.ps1
-; converts it to 164x314 installer\contact-us.bmp at build time.
+; converts it to 164x314 installer\contact-us.bmp at build time. MUI2 places
+; it on the LEFT of the welcome page; the localized prompt text sits on the
+; right.
 !define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"
+!define MUI_FINISHPAGE_BITMAP "contact-us.bmp"
+; Keep MUI_HEADERIMAGE off: quantide.png is a square stamp, not a wide banner,
+; so stretching it into MUI2's 150x57 header strip just adds a second logo row
+; below the title bar. The brand lives in the title bar / taskbar via
+; MUI_ICON / MUI_UNICON only.
 
 ; IMPORTANT: register language tables and define every LangString BEFORE the
 ; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
 ; to its numeric code (e.g. "1" or "1+2") and the component selection page
-; shows mojibake instead of the description (#51).
+; shows mojibake instead of the description (#51). Chinese only - the
+; installer ships only the SimpChinese language table. NSIS automatically
+; falls back to SimpChinese on non-Chinese systems; users without a Chinese
+; codepage still see this Chinese text because MUI2 strings are taken from
+; the registered tables, not the user's UI language.
 !insertmacro MUI_LANGUAGE "SimpChinese"
-!insertmacro MUI_LANGUAGE "English"
 
-; #67: pre-install prompt about QMT. The QR code on the right is rendered
-; from installer\contact-us.bmp via MUI_WELCOMEPAGE_BITMAP.
+; #67: pre-install prompt about QMT (Chinese only). The QR code is rendered
+; from installer\contact-us.bmp via MUI_WELCOMEPAGE_BITMAP - MUI2 places it
+; on the left of the welcome page; the prompt text sits on the right.
 LangString WELCOME_TEXT ${LANG_SIMPCHINESE} \
-    "本软件需要配置迅投 QMT 交易客户端使用。在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获得 QMT 软件下载方式。您也可以联系我们获得协助。$\n$\n\
-     This software requires the Xuntou QMT trading client. QMT must be installed before running this installer. Please contact your broker for the official QMT download, or scan the QR code on the right to reach us for help."
-LangString WELCOME_TEXT ${LANG_ENGLISH} \
-    "This software requires the Xuntou QMT trading client. QMT must be installed before running this installer. Please contact your broker for the official QMT download, or scan the QR code on the right to reach us for help."
+    "本软件需要配置迅投 QMT 交易客户端使用。$\n\
+     在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获取 QMT 软件的下载方式。$\n$\n\
+     如果需要帮助，请扫描左侧二维码联系我们。"
 
 LangString WELCOME_TITLE ${LANG_SIMPCHINESE} "请先安装 QMT 交易客户端"
-LangString WELCOME_TITLE ${LANG_ENGLISH} "Install QMT first"
 LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_SIMPCHINESE} \
     "安装失败。请查看安装目录下的 ${INSTALL_LOG_NAME}。如果尚未选择安装目录，请截屏反馈。"
-LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_ENGLISH} \
-    "Installation failed. Check ${INSTALL_LOG_NAME} in the install directory. If no install directory was selected yet, please provide a screenshot."
 
 ; Section descriptions (must be defined before MUI_PAGE_COMPONENTS)
 LangString DESC_SEC_CORE ${LANG_SIMPCHINESE} "核心组件（必须安装）"
-LangString DESC_SEC_CORE ${LANG_ENGLISH} "Core components (required)"
 LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "开机自启（用户登录时自动启动）"
-LangString DESC_SEC_AUTOSTART ${LANG_ENGLISH} "Auto-start on login"
 LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "防火墙入站规则（允许局域网访问）"
-LangString DESC_SEC_FIREWALL ${LANG_ENGLISH} "Firewall inbound rule (allow LAN access)"
 
 ; Finish page localized text (#69)
 LangString FINISH_TITLE ${LANG_SIMPCHINESE} "$(^Name) 安装程序结束"
-LangString FINISH_TITLE ${LANG_ENGLISH} "$(^Name) Setup Complete"
 LangString FINISH_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机。$\r$\n点击『完成(F)』关闭安装程序。"
-LangString FINISH_TEXT ${LANG_ENGLISH} "$(^Name) has been successfully installed on this computer.$\r$\nClick $\"Finish$\" to close the installer."
 
 ; Welcome page - title/text defined as LangString earlier so MUI2 can resolve
 ; the language table at compile time. The bitmap is the contact-us QR (#67).
@@ -186,7 +186,9 @@ ShowUnInstDetails show
 RequestExecutionLevel admin
 
 Function .onInit
-    !insertmacro MUI_LANGDLL_DISPLAY
+    ; Chinese-only installer. The single registered language table above is
+    ; used directly; NSIS will not pop a language picker because no picker
+    ; macro is invoked here.
 FunctionEnd
 
 Function .onInstFailed
@@ -226,9 +228,23 @@ Section "-Core" SEC_CORE
     File "python-embed.zip"
 
     !insertmacro LogStep "Core: extract embedded Python"
+    ; Use the NSIS built-in ZipDLL plugin to extract python-embed.zip inside
+    ; the installer itself. PowerShell5.1's Expand-Archive intermittently
+    ; fails with 'Write-Error: Cannot access path' under CJK install paths
+    ; and silently returns 0, leaving the next stage with no python.exe.
     SetOutPath "$INSTDIR\python"
+    ZipDLL::Extract "$INSTDIR\python\python-embed.zip" "$INSTDIR\python"
+    Pop $0
+    ${If} $0 != "OK"
+        !insertmacro LogLine "ERROR: ZipDLL::Extract failed with status $0"
+        Abort "Extract embedded Python failed (ZipDLL returned $0)"
+    ${EndIf}
+    Delete "$INSTDIR\python\python-embed.zip"
+    !insertmacro LogStep "Core: post-process embedded Python"
+    ; Hand control to the PowerShell helper only to patch python313._pth so
+    ; the embedded interpreter can import pip and our application package.
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage Runtime'
-    !insertmacro AbortOnExecFailure "Extract embedded Python"
+    !insertmacro AbortOnExecFailure "Post-process embedded Python"
 
     !insertmacro LogStep "Core: copy application source"
     ; Copy application source to $INSTDIR\app
