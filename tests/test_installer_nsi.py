@@ -140,30 +140,28 @@ def test_installer_documents_makensis_dependency():
     )
 
 
-def test_installer_uses_quantide_icon_only_and_no_duplicate_header_logo():
-    """#68: the brand mark must appear in the title bar / taskbar only. quantide.png
-    is a square stamp, so stretching it into MUI2's 150x57 header strip produces a
-    second logo row that overlaps the title bar - that is the bug the user
-    reported. Keep MUI_HEADERIMAGE off and put the brand on MUI_ICON/MUI_UNICON."""
+def test_installer_drops_quantide_logo_from_title_bar_and_header():
+    """#71: the user explicitly asked to drop the quantide brand logo from the
+    title bar, taskbar, and wizard header. quantide.png is a square stamp and
+    turns into a blurry red rectangle when stretched into the installer's icon
+    slots. We let NSIS use its default icon everywhere instead."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert "!define MUI_HEADERIMAGE" not in text, (
-        "MUI_HEADERIMAGE must stay disabled; quantide.png is a square stamp and would "
-        "be stretched into a second logo row under the title bar"
+        "MUI_HEADERIMAGE must stay disabled; quantide.png is a square stamp and "
+        "turns into a blurry red rectangle when stretched into the header strip"
     )
     assert "MUI_HEADERIMAGE_BITMAP" not in text, (
-        "No header bitmap reference allowed; the brand lives in the title bar / taskbar only"
+        "No header bitmap reference allowed; the wizard has no decorative header"
     )
-    assert '!define MUI_ICON "quantide.ico"' in text, (
-        "Installer icon must come from quantide.ico so the title bar shows the brand logo (#68)"
+    assert 'MUI_ICON "quantide.ico"' not in text, (
+        "Title-bar icon must use NSIS default; the quantide stamp renders as a "
+        "blurry red square on the title bar (#71)"
     )
-    assert '!define MUI_UNICON "quantide.ico"' in text, (
-        "Uninstaller icon must also use quantide.ico so the uninstaller windows show the brand logo (#68)"
+    assert 'MUI_UNICON "quantide.ico"' not in text, (
+        "Uninstaller icon must use NSIS default for the same reason (#71)"
     )
-    assert "quantide.png" in (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8"), (
-        "generate-bitmaps.ps1 must include quantide.png as a source image"
-    )
-    assert "Convert-PngToIco" in (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8"), (
-        "generate-bitmaps.ps1 must produce quantide.ico from quantide.png (#68)"
+    assert "Convert-PngToIco" not in (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8"), (
+        "quantide.ico is no longer used; generate-bitmaps.ps1 must not produce it"
     )
 
 
@@ -208,10 +206,9 @@ def test_installer_extracts_python_embed_via_native_tar():
 
 
 def test_installer_welcome_page_prompts_user_to_install_qmt_with_contact_qr():
-    """#67: welcome page must show the pre-install QMT prompt and the contact QR.
-    The QR is rendered from installer\\contact-us.jpg via MUI_WELCOMEPAGE_BITMAP.
-    The text must be Chinese only; the user explicitly asked to drop the English
-    paragraph and to make contact-us.jpg the visible QR."""
+    """#67 / #70 / #71: welcome page must show the pre-install QMT prompt and the
+    contact-us QR on the left, with the localized Chinese text on the right at
+    ~1.2x line spacing. No English paragraph, no brand logo."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert "本软件需要配置迅投 QMT 交易客户端使用" in text, (
         "Welcome text must explain QMT must be installed first (#67)"
@@ -225,12 +222,17 @@ def test_installer_welcome_page_prompts_user_to_install_qmt_with_contact_qr():
     assert '!define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"' in text, (
         "Welcome page must display the contact-us QR via MUI_WELCOMEPAGE_BITMAP (#67)"
     )
-    assert "!define MUI_WELCOMEPAGE_TITLE" in text and "!define MUI_WELCOMEPAGE_TEXT" in text
     assert "Xuntou QMT" not in text, (
         "Welcome text must not contain the English Xuntou QMT paragraph (#70)"
     )
     assert "This software requires" not in text, (
         "Welcome text must not contain any English sentence (#70)"
+    )
+    assert "MUI_PAGE_CUSTOMFUNCTION_SHOW ApplySpacedWelcomePageText" in text, (
+        "Welcome page must apply the spaced-body callback so the prompt renders at 10pt (#70)"
+    )
+    assert 'CreateFont $WelcomeTitleFont "$(^Font)" "10"' in text, (
+        "Installer must create a 10pt body font so the welcome-page callback can use it (#70)"
     )
 
 

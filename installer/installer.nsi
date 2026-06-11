@@ -44,6 +44,9 @@ SetCompress off
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
+!include "WinMessages.nsh"
+
+Var WelcomeTitleFont
 
 
 !macro LogInit
@@ -80,24 +83,19 @@ SetCompress off
 
 ; MUI Settings
 !define MUI_ABORTWARNING
-; #68: use quantide.ico as the installer / uninstaller title-bar and taskbar
-; icon. The source quantide.png is converted to quantide.ico at build time by
-; installer\generate-bitmaps.ps1.
-!define MUI_ICON "quantide.ico"
-!define MUI_UNICON "quantide.ico"
-
+; #71: the user explicitly asked to drop the quantide brand logo from the
+; title bar, taskbar, and wizard header. quantide.png is a square stamp that
+; turns into a blurry red rectangle when stretched into the installer's
+; icon/header slots, so we let NSIS use its default icon everywhere. The
+; welcome page still shows contact-us.bmp (the QR) on the left and the
+; install/finish pages use the standard NSIS art.
+;
 ; #67: contact-us QR code shown on the welcome page. The source lives at
 ; https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg
 ; We ship a local copy in installer\contact-us.jpg; generate-bitmaps.ps1
-; converts it to 164x314 installer\contact-us.bmp at build time. MUI2 places
-; it on the LEFT of the welcome page; the localized prompt text sits on the
-; right.
+; converts it to a 180x180 installer\contact-us.bmp at build time.
 !define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"
 !define MUI_FINISHPAGE_BITMAP "contact-us.bmp"
-; Keep MUI_HEADERIMAGE off: quantide.png is a square stamp, not a wide banner,
-; so stretching it into MUI2's 150x57 header strip just adds a second logo row
-; below the title bar. The brand lives in the title bar / taskbar via
-; MUI_ICON / MUI_UNICON only.
 
 ; IMPORTANT: register language tables and define every LangString BEFORE the
 ; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
@@ -110,11 +108,14 @@ SetCompress off
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
 ; #67: pre-install prompt about QMT (Chinese only). The QR code is rendered
-; from installer\contact-us.bmp via MUI_WELCOMEPAGE_BITMAP - MUI2 places it
-; on the left of the welcome page; the prompt text sits on the right.
+; from installer\contact-us.bmp via MUI_WELCOMEPAGE_BITMAP on the LEFT of
+; the welcome page; the prompt text sits on the right. Extra blank lines
+; (via an extra $\n) and a 10pt body font (configured in .onGUIInit) give a
+; 1.2x line spacing on the text side so the prompt is not crammed against
+; the QR.
 LangString WELCOME_TEXT ${LANG_SIMPCHINESE} \
-    "本软件需要配置迅投 QMT 交易客户端使用。$\n\
-     在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获取 QMT 软件的下载方式。$\n$\n\
+    "本软件需要配置迅投 QMT 交易客户端使用。$\n$\n\
+     在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获取 QMT 软件的下载方式。$\n$\n$\n\
      如果需要帮助，请扫描左侧二维码联系我们。"
 
 LangString WELCOME_TITLE ${LANG_SIMPCHINESE} "请先安装 QMT 交易客户端"
@@ -132,8 +133,12 @@ LangString FINISH_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机
 
 ; Welcome page - title/text defined as LangString earlier so MUI2 can resolve
 ; the language table at compile time. The bitmap is the contact-us QR (#67).
+; ApplySpacedWelcomePageText bumps the body font to 10pt after the dialog has
+; been created so the prompt text reads with comfortable 1.2x line spacing
+; instead of MUI2's cramped default 8pt (#70).
 !define MUI_WELCOMEPAGE_TITLE "$(WELCOME_TITLE)"
 !define MUI_WELCOMEPAGE_TEXT "$(WELCOME_TEXT)"
+!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplySpacedWelcomePageText
 !insertmacro MUI_PAGE_WELCOME
 
 ; License page
@@ -191,6 +196,20 @@ Function .onInit
     ; Chinese-only installer. The single registered language table above is
     ; used directly; NSIS will not pop a language picker because no picker
     ; macro is invoked here.
+    ; Create a 10pt body font up front so the welcome-page custom function
+    ; below can swap it in once the dialog exists. 10pt gives ~17px line
+    ; height which reads as ~1.2x MUI2's default 8pt / ~14px.
+    CreateFont $WelcomeTitleFont "$(^Font)" "10" "400"
+FunctionEnd
+
+Function ApplySpacedWelcomePageText
+    ; MUI2 places the welcome page description in a static text control.
+    ; GetDlgItem + SendMessage WM_SETFONT gives us a 10pt body font and
+    ; therefore ~1.2x line spacing without touching the dialog template.
+    Push $0
+    GetDlgItem $0 $HWNDPARENT 1027
+    SendMessage $0 ${WM_SETFONT} $WelcomeTitleFont 0
+    Pop $0
 FunctionEnd
 
 Function .onInstFailed
