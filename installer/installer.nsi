@@ -96,22 +96,17 @@ SetCompress off
 ; 109x193 slot.
 !define MUI_WELCOMEFINISHPAGE_BITMAP "contact-us.bmp"
 
-; IMPORTANT: register language tables and define every LangString BEFORE the
-; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
-; to its numeric code (e.g. "1" or "1+2") and the component selection page
-; shows mojibake instead of the description (#51). Chinese only - the
-; installer ships only the SimpChinese language table. NSIS automatically
-; falls back to SimpChinese on non-Chinese systems; users without a Chinese
-; codepage still see this Chinese text because MUI2 strings are taken from
-; the registered tables, not the user's UI language.
-!insertmacro MUI_LANGUAGE "SimpChinese"
-
 ; MUI2 standard page titles + subtitles. Each LangString id is read by
 ; MUI2's MUI_HEADER_TEXT_PAGE macro inside the directory / components /
 ; startmenu / instfiles page callbacks (see Pages/Directory.nsh etc.) so
 ; that the page renders with the two-row "big title + small subtitle"
 ; header layout the user expects (#72). Without these, the subtitle row
 ; is empty and the header collapses to a single button-high strip.
+;
+; IMPORTANT: register these LangStrings BEFORE any !insertmacro MUI_PAGE_*
+; (otherwise MUI_DESCRIPTION_TEXT expands the language id to its numeric
+; code and the component selection page shows mojibake instead of the
+; description - #51).
 
 ; #67: pre-install prompt about QMT (Chinese only).
 LangString MUI_TEXT_WELCOME_INFO_TITLE ${LANG_SIMPCHINESE} "请先安装 QMT 交易客户端"
@@ -184,6 +179,15 @@ var ICONS_GROUP
 
 ; Uninstaller pages
 !insertmacro MUI_UNPAGE_INSTFILES
+
+; IMPORTANT: !insertmacro MUI_LANGUAGE must come AFTER every !insertmacro
+; MUI_PAGE_* / !insertmacro MUI_UNPAGE_*. MUI2 inserts .onGUIInit (and
+; therefore the install-time call to mui.FinishPage.GUIInit) when the
+; first MUI_LANGUAGE is expanded. If MUI_LANGUAGE runs before
+; MUI_PAGE_FINISH, mui.FinishPage.GUIInit has not been registered yet and
+; NSIS prunes it as dead code (warning 6010), leaving the welcome/finish
+; left-side bitmap slot empty (#73).
+!insertmacro MUI_LANGUAGE "SimpChinese"
 
 ; MUI reserve files
 ; MUI_RESERVEFILE_INSTALLOPTIONS is not supported in MUI2

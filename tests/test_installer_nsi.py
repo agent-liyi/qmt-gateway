@@ -95,18 +95,23 @@ def test_installer_lang_strings_defined_before_components_page():
     lang_macro_idx = text.find('!insertmacro MUI_LANGUAGE "SimpChinese"')
     components_page_idx = text.find("!insertmacro MUI_PAGE_COMPONENTS")
     core_desc_idx = text.find("LangString DESC_SEC_CORE ${LANG_SIMPCHINESE}")
-    welcome_lang_idx = text.find("LangString WELCOME_TEXT ${LANG_SIMPCHINESE}")
+    welcome_lang_idx = text.find("LangString MUI_TEXT_WELCOME_INFO_TITLE")
 
     assert lang_macro_idx != -1 and components_page_idx != -1, (
         "Both MUI_LANGUAGE and MUI_PAGE_COMPONENTS must be present"
     )
-    assert lang_macro_idx < components_page_idx, (
-        "MUI_LANGUAGE must be registered before MUI_PAGE_COMPONENTS so LangString lookups resolve"
+    # MUI_LANGUAGE is intentionally placed AFTER all MUI_PAGE_* macros so
+    # that mui.FinishPage.GUIInit (registered by MUI_PAGE_FINISH) is alive
+    # when .onGUIInit is generated. The lang strings themselves must
+    # still be defined before MUI_PAGE_COMPONENTS is inserted.
+    assert lang_macro_idx > components_page_idx, (
+        "MUI_LANGUAGE must be registered AFTER all MUI_PAGE_* macros so the "
+        "finish-page left bitmap GUIInit callback survives (#73)"
     )
-    assert welcome_lang_idx < components_page_idx, (
-        "WELCOME_TEXT / INSTALL_FAILED_LOG_MESSAGE LangStrings must be defined before MUI_PAGE_COMPONENTS"
+    assert welcome_lang_idx != -1 and welcome_lang_idx < components_page_idx, (
+        "MUI_TEXT_WELCOME_INFO_TITLE must be defined before MUI_PAGE_COMPONENTS"
     )
-    assert core_desc_idx < components_page_idx, (
+    assert core_desc_idx != -1 and core_desc_idx < components_page_idx, (
         "DESC_SEC_* LangStrings must be defined before MUI_PAGE_COMPONENTS to avoid mojibake (#51)"
     )
 
