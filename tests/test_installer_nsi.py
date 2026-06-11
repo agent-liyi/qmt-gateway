@@ -34,26 +34,34 @@ def test_installer_finish_page_does_not_define_conflicting_readme_macro():
 
 
 def test_installer_finish_page_renders_title_text_and_bitmap():
-    """#69: finish page must show the localized 'Setup Complete' title, the
-    success description, and the left-side decorative bitmap."""
+    """#69 / #72: finish page must show the localized 'Setup Complete' title
+    and the success description, and the left-side decorative bitmap comes
+    from MUI_WELCOMEFINISHPAGE_BITMAP (the official MUI2 macro for the
+    welcome/finish shared 109x193 left-side bitmap)."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
-    assert '!define MUI_FINISHPAGE_TITLE "$(FINISH_TITLE)"' in text, (
-        "Finish page must override MUI_FINISHPAGE_TITLE so the success title is visible (#69)"
+    assert 'LangString MUI_TEXT_FINISH_INFO_TITLE ${LANG_SIMPCHINESE}' in text, (
+        "Finish page must define MUI_TEXT_FINISH_INFO_TITLE so the success title is visible (#69/#72)"
     )
-    assert '!define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"' in text, (
-        "Finish page must override MUI_FINISHPAGE_TEXT with the success description (#69)"
+    assert 'LangString MUI_TEXT_FINISH_INFO_TEXT ${LANG_SIMPCHINESE}' in text, (
+        "Finish page must define MUI_TEXT_FINISH_INFO_TEXT with the success description (#69/#72)"
     )
-    assert '!define MUI_FINISHPAGE_BITMAP "contact-us.bmp"' in text, (
-        "Finish page must render the left-side decorative bitmap (#69)"
+    assert '!define MUI_WELCOMEFINISHPAGE_BITMAP "contact-us.bmp"' in text, (
+        "Finish page bitmap comes from MUI_WELCOMEFINISHPAGE_BITMAP (#72)"
     )
-    finish_title_idx = text.find("LangString FINISH_TITLE ${LANG_SIMPCHINESE}")
-    finish_text_idx = text.find("LangString FINISH_TEXT ${LANG_SIMPCHINESE}")
+    assert "!define MUI_FINISHPAGE_BITMAP" not in text, (
+        "MUI_FINISHPAGE_BITMAP is not the MUI2 macro - the bitmap is shared with the welcome page via MUI_WELCOMEFINISHPAGE_BITMAP"
+    )
+    assert "!define MUI_FINISHPAGE_TITLE" not in text, (
+        "MUI2 reads the finish-page title from MUI_TEXT_FINISH_INFO_TITLE - do not redefine MUI_FINISHPAGE_TITLE"
+    )
+    finish_title_idx = text.find("LangString MUI_TEXT_FINISH_INFO_TITLE ${LANG_SIMPCHINESE}")
+    finish_text_idx = text.find("LangString MUI_TEXT_FINISH_INFO_TEXT ${LANG_SIMPCHINESE}")
     finish_page_idx = text.find("!insertmacro MUI_PAGE_FINISH")
     assert 0 < finish_title_idx < finish_page_idx, (
-        "FINISH_TITLE LangString must be defined before MUI_PAGE_FINISH (#69/#51)"
+        "MUI_TEXT_FINISH_INFO_TITLE LangString must be defined before MUI_PAGE_FINISH (#69/#51)"
     )
     assert 0 < finish_text_idx < finish_page_idx, (
-        "FINISH_TEXT LangString must be defined before MUI_PAGE_FINISH (#69/#51)"
+        "MUI_TEXT_FINISH_INFO_TEXT LangString must be defined before MUI_PAGE_FINISH (#69/#51)"
     )
     assert "$(^Name) 安装程序结束" in text, (
         "Finish title must use the localized '安装程序结束' wording (#69)"
@@ -206,21 +214,28 @@ def test_installer_extracts_python_embed_via_native_tar():
 
 
 def test_installer_welcome_page_prompts_user_to_install_qmt_with_contact_qr():
-    """#67 / #70 / #71: welcome page must show the pre-install QMT prompt and the
-    contact-us QR on the left, with the localized Chinese text on the right at
-    ~1.2x line spacing. No English paragraph, no brand logo."""
+    """#67 / #70 / #71 / #72: welcome page must show the pre-install QMT prompt
+    and the contact-us QR on the left. MUI2's left-side bitmap is controlled
+    by MUI_WELCOMEFINISHPAGE_BITMAP (the welcome/finish macro), and the
+    title/subtitle/body come from MUI_TEXT_WELCOME_INFO_TITLE/SUBTITLE/TEXT."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert "本软件需要配置迅投 QMT 交易客户端使用" in text, (
         "Welcome text must explain QMT must be installed first (#67)"
     )
-    assert "!define MUI_WELCOMEPAGE_TITLE" in text, (
-        "Welcome page must override MUI_WELCOMEPAGE_TITLE so the prompt is visible"
+    assert '!define MUI_WELCOMEFINISHPAGE_BITMAP "contact-us.bmp"' in text, (
+        "Welcome page must use MUI_WELCOMEFINISHPAGE_BITMAP for the contact-us QR (#72)"
     )
-    assert "!define MUI_WELCOMEPAGE_TEXT" in text, (
-        "Welcome page must override MUI_WELCOMEPAGE_TEXT with the localized prompt"
+    assert "!define MUI_WELCOMEPAGE_BITMAP" not in text, (
+        "MUI_WELCOMEPAGE_BITMAP does not exist in MUI2 - use MUI_WELCOMEFINISHPAGE_BITMAP instead"
     )
-    assert '!define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"' in text, (
-        "Welcome page must display the contact-us QR via MUI_WELCOMEPAGE_BITMAP (#67)"
+    assert 'LangString MUI_TEXT_WELCOME_INFO_TITLE ${LANG_SIMPCHINESE}' in text, (
+        "Welcome page must define MUI_TEXT_WELCOME_INFO_TITLE for the localized title (#72)"
+    )
+    assert 'LangString MUI_TEXT_WELCOME_INFO_SUBTITLE ${LANG_SIMPCHINESE}' in text, (
+        "Welcome page must define MUI_TEXT_WELCOME_INFO_SUBTITLE for the localized subtitle (#72)"
+    )
+    assert 'LangString MUI_TEXT_WELCOME_INFO_TEXT ${LANG_SIMPCHINESE}' in text, (
+        "Welcome page must define MUI_TEXT_WELCOME_INFO_TEXT for the localized body (#72)"
     )
     assert "Xuntou QMT" not in text, (
         "Welcome text must not contain the English Xuntou QMT paragraph (#70)"
@@ -228,12 +243,35 @@ def test_installer_welcome_page_prompts_user_to_install_qmt_with_contact_qr():
     assert "This software requires" not in text, (
         "Welcome text must not contain any English sentence (#70)"
     )
-    assert "MUI_PAGE_CUSTOMFUNCTION_SHOW ApplySpacedWelcomePageText" in text, (
-        "Welcome page must apply the spaced-body callback so the prompt renders at 10pt (#70)"
+    assert "ApplySpacedWelcomePageText" not in text, (
+        "The 10pt-font hack for the welcome body was removed - MUI2 ships MUI_TEXT_WELCOME_INFO_TEXT (#72)"
     )
-    assert 'CreateFont $WelcomeTitleFont "$(^Font)" "10"' in text, (
-        "Installer must create a 10pt body font so the welcome-page callback can use it (#70)"
-    )
+
+
+def test_installer_standard_pages_have_chinese_title_and_subtitle():
+    """#72: every standard MUI2 page (directory / components / startmenu /
+    instfiles / finish) renders a two-row header "big title + small subtitle".
+    Without MUI_TEXT_*_TITLE/SUBTITLE lang strings the subtitle row is empty
+    and the header collapses to a single button-high strip."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    expected_pairs = [
+        ("MUI_TEXT_DIRECTORY_TITLE", "选择安装位置"),
+        ("MUI_TEXT_DIRECTORY_SUBTITLE", "选择"),
+        ("MUI_TEXT_COMPONENTS_TITLE", "选择安装组件"),
+        ("MUI_TEXT_COMPONENTS_SUBTITLE", "勾选"),
+        ("MUI_TEXT_STARTMENU_TITLE", "选择开始菜单文件夹"),
+        ("MUI_TEXT_STARTMENU_SUBTITLE", "开始菜单"),
+        ("MUI_TEXT_INSTFILES_TITLE", "正在安装"),
+        ("MUI_TEXT_INSTFILES_SUBTITLE", "安装"),
+        ("MUI_TEXT_FINISH_INFO_TITLE", "安装程序结束"),
+    ]
+    for lang_id, snippet in expected_pairs:
+        assert f"LangString {lang_id} ${{LANG_SIMPCHINESE}}" in text, (
+            f"Installer must define {lang_id} so the page renders its Chinese title (#72)"
+        )
+        assert snippet in text, (
+            f"{lang_id} must contain the Chinese snippet {snippet!r} so the page actually shows it (#72)"
+        )
 
 
 def test_installer_does_not_persist_install_dir_registry():

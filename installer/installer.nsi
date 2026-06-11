@@ -44,9 +44,6 @@ SetCompress off
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "x64.nsh"
-!include "WinMessages.nsh"
-
-Var WelcomeTitleFont
 
 
 !macro LogInit
@@ -90,12 +87,14 @@ Var WelcomeTitleFont
 ; welcome page still shows contact-us.bmp (the QR) on the left and the
 ; install/finish pages use the standard NSIS art.
 ;
-; #67: contact-us QR code shown on the welcome page. The source lives at
-; https://cdn.jsdelivr.net/gh/zillionare/images@main/images/hot/contact-us.jpg
-; We ship a local copy in installer\contact-us.jpg; generate-bitmaps.ps1
-; converts it to a 180x180 installer\contact-us.bmp at build time.
-!define MUI_WELCOMEPAGE_BITMAP "contact-us.bmp"
-!define MUI_FINISHPAGE_BITMAP "contact-us.bmp"
+; #67 / #72: the welcome page and the finish page share a 109x193 left-side
+; bitmap slot, drawn from MUI_WELCOMEFINISHPAGE_BITMAP. This is the official
+; MUI2 macro name; MUI_WELCOMEPAGE_BITMAP does not exist. MUI loads the
+; bitmap into $PLUGINSDIR\modern-wizard.bmp via File /oname and the welcome
+; /finish page callbacks bind it to NSD_CreateBitmap 0u 0u 109u 193u.
+; We render contact-us.bmp (180x180) and let MUI draw it scaled into the
+; 109x193 slot.
+!define MUI_WELCOMEFINISHPAGE_BITMAP "contact-us.bmp"
 
 ; IMPORTANT: register language tables and define every LangString BEFORE the
 ; MUI page macros. Otherwise MUI_DESCRIPTION_TEXT expands the language id
@@ -107,38 +106,50 @@ Var WelcomeTitleFont
 ; the registered tables, not the user's UI language.
 !insertmacro MUI_LANGUAGE "SimpChinese"
 
-; #67: pre-install prompt about QMT (Chinese only). The QR code is rendered
-; from installer\contact-us.bmp via MUI_WELCOMEPAGE_BITMAP on the LEFT of
-; the welcome page; the prompt text sits on the right. Extra blank lines
-; (via an extra $\n) and a 10pt body font (configured in .onGUIInit) give a
-; 1.2x line spacing on the text side so the prompt is not crammed against
-; the QR.
-LangString WELCOME_TEXT ${LANG_SIMPCHINESE} \
-    "本软件需要配置迅投 QMT 交易客户端使用。$\n$\n\
-     在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获取 QMT 软件的下载方式。$\n$\n$\n\
+; MUI2 standard page titles + subtitles. Each LangString id is read by
+; MUI2's MUI_HEADER_TEXT_PAGE macro inside the directory / components /
+; startmenu / instfiles page callbacks (see Pages/Directory.nsh etc.) so
+; that the page renders with the two-row "big title + small subtitle"
+; header layout the user expects (#72). Without these, the subtitle row
+; is empty and the header collapses to a single button-high strip.
+
+; #67: pre-install prompt about QMT (Chinese only).
+LangString MUI_TEXT_WELCOME_INFO_TITLE ${LANG_SIMPCHINESE} "请先安装 QMT 交易客户端"
+LangString MUI_TEXT_WELCOME_INFO_SUBTITLE ${LANG_SIMPCHINESE} "$\r$\n$\r$\n$\r$\n请先确认本机已经安装迅投 QMT 交易客户端，然后继续。"
+LangString MUI_TEXT_WELCOME_INFO_TEXT ${LANG_SIMPCHINESE} \
+    "本软件需要配置迅投 QMT 交易客户端使用。在安装本软件之前，就需要安装好 QMT。请联系您的券商客服，获取 QMT 软件的下载方式。$\n$\n\
      如果需要帮助，请扫描左侧二维码联系我们。"
 
-LangString WELCOME_TITLE ${LANG_SIMPCHINESE} "请先安装 QMT 交易客户端"
-LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_SIMPCHINESE} \
-    "安装失败。请查看安装目录下的 ${INSTALL_LOG_NAME}。如果尚未选择安装目录，请截屏反馈。"
+; Directory page
+LangString MUI_TEXT_DIRECTORY_TITLE ${LANG_SIMPCHINESE} "选择安装位置"
+LangString MUI_TEXT_DIRECTORY_SUBTITLE ${LANG_SIMPCHINESE} "请选择 $(^NameDA) 的安装文件夹"
+
+; Components page
+LangString MUI_TEXT_COMPONENTS_TITLE ${LANG_SIMPCHINESE} "选择安装组件"
+LangString MUI_TEXT_COMPONENTS_SUBTITLE ${LANG_SIMPCHINESE} "请勾选需要安装的可选组件"
+
+; Start menu page
+LangString MUI_TEXT_STARTMENU_TITLE ${LANG_SIMPCHINESE} "选择开始菜单文件夹"
+LangString MUI_TEXT_STARTMENU_SUBTITLE ${LANG_SIMPCHINESE} "请选择开始菜单中的文件夹"
+
+; Instfiles page
+LangString MUI_TEXT_INSTFILES_TITLE ${LANG_SIMPCHINESE} "正在安装"
+LangString MUI_TEXT_INSTFILES_SUBTITLE ${LANG_SIMPCHINESE} "请稍候，正在完成 $(^NameDA) 的安装"
+
+; Finish page
+LangString MUI_TEXT_FINISH_INFO_TITLE ${LANG_SIMPCHINESE} "$(^Name) 安装程序结束"
+LangString MUI_TEXT_FINISH_INFO_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机。$\r$\n点击『完成(F)』关闭安装程序。"
 
 ; Section descriptions (must be defined before MUI_PAGE_COMPONENTS)
 LangString DESC_SEC_CORE ${LANG_SIMPCHINESE} "核心组件（必须安装）"
 LangString DESC_SEC_AUTOSTART ${LANG_SIMPCHINESE} "开机自启（用户登录时自动启动）"
 LangString DESC_SEC_FIREWALL ${LANG_SIMPCHINESE} "防火墙入站规则（允许局域网访问）"
 
-; Finish page localized text (#69)
-LangString FINISH_TITLE ${LANG_SIMPCHINESE} "$(^Name) 安装程序结束"
-LangString FINISH_TEXT ${LANG_SIMPCHINESE} "$(^Name) 已经成功安装到本机。$\r$\n点击『完成(F)』关闭安装程序。"
+; Failure dialog
+LangString INSTALL_FAILED_LOG_MESSAGE ${LANG_SIMPCHINESE} \
+    "安装失败。请查看安装目录下的 ${INSTALL_LOG_NAME}。如果尚未选择安装目录，请截屏反馈。"
 
-; Welcome page - title/text defined as LangString earlier so MUI2 can resolve
-; the language table at compile time. The bitmap is the contact-us QR (#67).
-; ApplySpacedWelcomePageText bumps the body font to 10pt after the dialog has
-; been created so the prompt text reads with comfortable 1.2x line spacing
-; instead of MUI2's cramped default 8pt (#70).
-!define MUI_WELCOMEPAGE_TITLE "$(WELCOME_TITLE)"
-!define MUI_WELCOMEPAGE_TEXT "$(WELCOME_TEXT)"
-!define MUI_PAGE_CUSTOMFUNCTION_SHOW ApplySpacedWelcomePageText
+; Welcome page - MUI2 reads MUI_TEXT_WELCOME_INFO_TITLE/TEXT defined above.
 !insertmacro MUI_PAGE_WELCOME
 
 ; License page
@@ -162,14 +173,7 @@ var ICONS_GROUP
 ; Instfiles page
 !insertmacro MUI_PAGE_INSTFILES
 
-; Finish page - title/text/bitmap inline (#69). The left-side bitmap is
-; MUI_FINISHPAGE_BITMAP, which is defined once above together with the
-; welcome-page bitmap (MUI_FINISHPAGE_BITMAP is not the supported macro
-; for the welcome/finish artwork in MUI2 - use MUI_FINISHPAGE_BITMAP for
-; the finish strip and MUI_WELCOMEPAGE_BITMAP for the welcome strip; do
-; not redefine them here).
-!define MUI_FINISHPAGE_TITLE "$(FINISH_TITLE)"
-!define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"
+; Finish page - MUI2 reads MUI_TEXT_FINISH_INFO_TITLE/TEXT defined above.
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "查看安装日志"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
@@ -196,20 +200,6 @@ Function .onInit
     ; Chinese-only installer. The single registered language table above is
     ; used directly; NSIS will not pop a language picker because no picker
     ; macro is invoked here.
-    ; Create a 10pt body font up front so the welcome-page custom function
-    ; below can swap it in once the dialog exists. 10pt gives ~17px line
-    ; height which reads as ~1.2x MUI2's default 8pt / ~14px.
-    CreateFont $WelcomeTitleFont "$(^Font)" "10" "400"
-FunctionEnd
-
-Function ApplySpacedWelcomePageText
-    ; MUI2 places the welcome page description in a static text control.
-    ; GetDlgItem + SendMessage WM_SETFONT gives us a 10pt body font and
-    ; therefore ~1.2x line spacing without touching the dialog template.
-    Push $0
-    GetDlgItem $0 $HWNDPARENT 1027
-    SendMessage $0 ${WM_SETFONT} $WelcomeTitleFont 0
-    Pop $0
 FunctionEnd
 
 Function .onInstFailed
