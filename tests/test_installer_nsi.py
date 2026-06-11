@@ -57,6 +57,41 @@ def test_installer_finish_page_renders_title_text_and_bitmap():
     )
 
 
+def test_installer_contact_qr_source_is_png_not_jpg():
+    """#74: the welcome/finish left-side artwork is generated from contact-us.png
+    (a 704x1280 PNG with aspect 0.55). The target BMP is 109x193 to match the
+    MUI2 left-side bitmap slot (aspect 0.56); Convert-ImageToBmp draws the
+    QR at its native aspect ratio and centers it with negligible margin so
+    the QR is not squashed into a different shape (#74)."""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    generator = (ROOT / "installer" / "generate-bitmaps.ps1").read_text(encoding="utf-8")
+    assert 'Convert-ImageToBmp -Source "contact-us.png"' in generator, (
+        "generate-bitmaps.ps1 must read the QR from contact-us.png, not contact-us.jpg (#74)"
+    )
+    assert 'Convert-ImageToBmp -Source "contact-us.png" -Destination "contact-us.bmp" -Width 109 -Height 193' in generator, (
+        "generate-bitmaps.ps1 must render the BMP at 109x193 to match the MUI2 left-side slot (#74)"
+    )
+    assert 'contact-us.jpg' not in generator, (
+        "Stale contact-us.jpg reference in generate-bitmaps.ps1 (#74)"
+    )
+    png_path = ROOT / "installer" / "contact-us.png"
+    assert png_path.is_file(), (
+        f"contact-us.png must exist at {png_path} (#74)"
+    )
+    assert not (ROOT / "installer" / "contact-us.jpg").exists(), (
+        "contact-us.jpg must be removed once contact-us.png replaces it (#74)"
+    )
+    import struct
+    raw = png_path.read_bytes()
+    assert raw[:8] == b"\x89PNG\r\n\x1a\n", "contact-us.png must be a real PNG"
+    width = struct.unpack(">I", raw[16:20])[0]
+    height = struct.unpack(">I", raw[20:24])[0]
+    assert height >= width, (
+        f"contact-us.png must be taller than wide (got {width}x{height}) so the "
+        "QR keeps its native aspect when scaled into the 109x193 BMP (#74)"
+    )
+
+
 def test_installer_uses_64bit_program_files():
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert 'InstallDir "$PROGRAMFILES64' in text, (

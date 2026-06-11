@@ -31,8 +31,8 @@ SetCompress off
 
 ; #67 / #68: build-time preprocessor steps.
 ;   - generate-requirements.py writes installer\requirements.txt from pyproject.toml.
-;   - generate-bitmaps.ps1 converts quantide.png / contact-us.jpg to the BMP
-;     format that MUI2 requires for MUI_WELCOMEPAGE_BITMAP and produces
+;   - generate-bitmaps.ps1 converts quantide.png / contact-us.png to the BMP
+;     format that MUI2 requires for MUI_WELCOMEFINISHPAGE_BITMAP and produces
 ;     quantide.ico for MUI_ICON / MUI_UNICON.
 !system 'python ".\generate-requirements.py" "..\pyproject.toml" ".\requirements.txt"' = 0
 !system 'powershell -NoProfile -ExecutionPolicy Bypass -File ".\generate-bitmaps.ps1"' = 0

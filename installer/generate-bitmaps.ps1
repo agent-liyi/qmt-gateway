@@ -40,10 +40,12 @@ function Convert-ImageToBmp {
     Write-Output "Generated $Destination"
 }
 
-# Square contact-us QR used as the left-side artwork on the welcome page.
-# 180x180 keeps it visually balanced against the text on the right and
-# prevents the squashed 164x314 aspect ratio. The welcome page reads it via
-# MUI_WELCOMEPAGE_BITMAP; the finish page reads it via MUI_FINISHPAGE_BITMAP.
-Convert-ImageToBmp -Source "contact-us.jpg" -Destination "contact-us.bmp" -Width 180 -Height 180
+# Contact-us QR used as the left-side artwork on the welcome / finish
+# pages. The source is contact-us.png, a 704x1280 PNG (aspect 0.55 - tall).
+# The MUI2 left-side bitmap slot is 109x193 (aspect 0.56). Using 109x193 as
+# the BMP target lets Convert-ImageToBmp draw the QR at its native aspect
+# ratio (~106x193 inside the 109x193 BMP) so it fills the slot edge-to-
+# edge with no squashing and only a sliver of side margin.
+Convert-ImageToBmp -Source "contact-us.png" -Destination "contact-us.bmp" -Width 109 -Height 193
 # quantide.png is no longer used: the installer lets NSIS use its default icon
 # and does not draw a brand mark on the title bar, taskbar, or wizard header.
