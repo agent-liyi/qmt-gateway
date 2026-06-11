@@ -157,10 +157,14 @@ var ICONS_GROUP
 ; Instfiles page
 !insertmacro MUI_PAGE_INSTFILES
 
-; Finish page - title/text/bitmap inline (#69)
+; Finish page - title/text/bitmap inline (#69). The left-side bitmap is
+; MUI_FINISHPAGE_BITMAP, which is defined once above together with the
+; welcome-page bitmap (MUI_FINISHPAGE_BITMAP is not the supported macro
+; for the welcome/finish artwork in MUI2 - use MUI_FINISHPAGE_BITMAP for
+; the finish strip and MUI_WELCOMEPAGE_BITMAP for the welcome strip; do
+; not redefine them here).
 !define MUI_FINISHPAGE_TITLE "$(FINISH_TITLE)"
 !define MUI_FINISHPAGE_TEXT "$(FINISH_TEXT)"
-!define MUI_FINISHPAGE_BITMAP "contact-us.bmp"
 !define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "查看安装日志"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
