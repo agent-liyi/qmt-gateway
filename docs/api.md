@@ -6,7 +6,7 @@
 { "code": 0, "message": "ok", "data": { ... } }
 ```
 
-> 本文档对应 `feature/silent-task-66` 分支。接口路径若调整，以仓库源码为准。
+> 本文档对应 `fix/quote-volume-amount-cumulative` 分支（与 PR #75 同步）。接口路径若调整，以仓库源码为准。
 
 ---
 
@@ -92,7 +92,7 @@ X-API-Key: qmt_xxx
 | S → C | `{"action":"pong"}` | 心跳应答 |
 | S → C | K 线消息（见下）| 每次 xtquant tick 触发一条 |
 
-**K 线消息结构**（每条消息同时含三个级别，覆盖式更新）：
+**K 线消息结构**（每条消息同时含三个级别，每次 tick 触发一条更新）：
 
 ```json
 {
@@ -104,9 +104,15 @@ X-API-Key: qmt_xxx
 }
 ```
 
-> **关键事实**：xtquant tick 中 `volume` / `amount` 是**当日累计成交**（自开盘起累计），不是本 tick 的 delta。K 线内直接覆盖为最新累计值。**不要**把它理解成"这一分钟的成交量"。
+> **量纲规则**（xtquant tick 字段语义）：
+> - xtquant tick 中 `volume` / `amount` 是**当日累计成交**（自开盘起累计），不是本 tick 的 delta。
+> - K 线内不同级别采用不同公式：
+>   - **1d 整日 = 自开盘累计** → `bar.volume = tick.volume`（覆盖）
+>   - **日内级别（1m / 30m / 其它）** → `bar.volume = max(0, tick.volume − ref_volume)`，其中 `ref_volume` 在每个 tick 立刻更新为当前 `tick.volume`（**末 tick 锁定**，无延迟）
+> - 也就是说，**1m / 30m 的 `volume` / `amount` 表达的就是"该周期内产生的成交量 / 成交额"**，与 xtquant 自带 `subscribe_quote(period=...)` 一致。
+> - 详细状态机与示例见 [docs/quote-bar-synthesis.md](quote-bar-synthesis.md)。
 
-**推送节奏**：xtquant 每次推送 tick 即产生一条消息；非交易时间**不订阅、不推送**。在 [services/quote_service.py](../qmt_gateway/services/quote_service.py) 中通过 `_is_trade_time()`（09:15–11:45、12:45–15:15）控制。
+**推送节奏**：xtquant 全市场 tick 周期约 3 秒；**每次 tick 即产生一条 WebSocket 消息**。同一根 bar 会被推送多次，每次都按"现在掌握的最后一个 tick"刷新 volume / close（无延迟）。非交易时间**不订阅、不推送**，由 [services/quote_service.py](../qmt_gateway/services/quote_service.py) 的 `_is_trade_time()`（09:15–11:45、12:45–15:15）控制。
 
 **Python 客户端示例**：
 
@@ -224,7 +230,7 @@ curl -X POST http://127.0.0.1:8000/api/trade/buy \
 |---|---|---|
 | POST | `/api/history/minutes/jobs` | 创建下载任务（参数：`trade_date=YYYY-MM-DD`，`period=1m`，`universe=ashare`）|
 | GET  | `/api/history/minutes/jobs/{job_id}` | 查询任务状态 / 进度 |
-| GET  | `/api/history/minutes/jobs/{job_id}/file` | 下载产物（csv）|
+| GET  | `/api/history/minutes/jobs/{job_id}/file` | 下载产物（**parquet**，zstd 压缩）|
 
 ```bash
 # 创建任务
@@ -240,7 +246,25 @@ curl http://127.0.0.1:8000/api/history/minutes/jobs/<job_id> -H "X-API-Key: qmt_
 curl -OJ http://127.0.0.1:8000/api/history/minutes/jobs/<job_id>/file -H "X-API-Key: qmt_xxx"
 ```
 
-任务状态：`pending` / `running` / `success` / `failed`，`progress` 为 0~100。
+任务状态：`pending` / `running` / `success` / `failed`。
+
+任务响应字段（参考 [services/history_download_service.py](../qmt_gateway/services/history_download_service.py) 中的 `DownloadJob`）：
+
+| 字段 | 说明 |
+|---|---|
+| `job_id` | 任务 UUID |
+| `trade_date` | 交易日（`YYYY-MM-DD`）|
+| `period` | K 线周期（当前仅支持 `1m`）|
+| `universe` | 股票范围（当前仅支持 `ashare`）|
+| `status` | `pending` / `running` / `success` / `failed` |
+| `total_symbols` | 总股票数（任务开始后回填）|
+| `finished_symbols` | 已处理股票数（粗粒度进度）|
+| `rows` | 已写入 parquet 的行数 |
+| `file_name` | parquet 文件名（含 `<date>_<jobid[:8]>`）|
+| `error` | 失败原因（仅在 `failed` 时有值）|
+| `created_at` / `updated_at` | ISO 时间戳 |
+
+> **当前没有 `progress` 字段**——如有进度展示需求，请用 `finished_symbols / total_symbols` 自算。
 
 ---
 
@@ -366,6 +390,6 @@ curl http://127.0.0.1:8000/api/trade/trades     -H "X-API-Key: $QMT_KEY"
 
 - **量纲**：xtquant 的 `volume` / `amount` 是**当日累计**。所有 K 线 / 历史下载产物沿用此约定，量化策略层请按此解释。
 - **时区**：所有时间戳为本地时间（Asia/Shanghai）。
-- **节流**：实时推送是 tick 驱动，未做节流。客户端接收侧建议按 symbol 做去重。
+- **节流**：实时推送是 tick 驱动，**未做语义节流**——每个 tick 即产生一条 WebSocket 消息，同一根 bar 会被推送多次。后端已用 `asyncio.Queue` + 单 worker 批量广播（[apis/quotes.py](../qmt_gateway/apis/quotes.py)）做传输层优化，缓解事件循环压力；但**不会**主动聚合同 symbol 的多条 tick 合并为单条推送。客户端如需去重，建议按 `(symbol, bar.time)` 维度去重。
 - **QMT 不可用时**：交易接口会返回 `{ "code": 1, "message": "QMT 未连接" }` 类业务错误。脚本侧应做退避重试。
 - **本机限制**：`_require_local_request` 保护的几只 helper 接口必须从本机调用；远端调用返回 403。
