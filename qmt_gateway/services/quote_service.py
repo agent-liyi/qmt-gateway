@@ -198,6 +198,15 @@ class QuoteService:
             # 避免每个 _update_bar / 回调都再 datetime.now() —— 全市场 tick 时
             # 这能省下 ~15000 次系统调用 / 3 秒。
             now = datetime.datetime.now()
+
+            # 集合竞价期间（09:15~09:29:59）不合成 K 线。
+            # 第一根 1m bar 必须是 09:31（包含 09:30:00~09:30:59 的成交，open
+            # = 集合竞价开盘价、volume 包含集合竞价撮合量）；30m / 1d 同理。
+            # 集合竞价撮合行情走独立 endpoint /ws/auction（见 issue #81）。
+            # 详见 docs/know-how.md §1.2 / §1.3。
+            if now.time() < datetime.time(9, 30):
+                return
+
             timestamp_iso = now.isoformat()
 
             # 更新 1分钟 K 线
@@ -270,12 +279,16 @@ class QuoteService:
         has_volume = raw_volume is not None and raw_volume > 0
         has_amount = raw_amount is not None and raw_amount > 0
 
-        # 计算当前 K 线的时间戳
+        # 计算当前 K 线的时间戳。
+        # A 股标准分钟 K 线语义：bar.time = 区间右端点（结束时刻），
+        # 即 09:30:00~09:30:59 的成交属于 09:31 bar；09:31:00~09:31:59
+        # 属于 09:32 bar。聚宽 / Tushare / xtquant 历史 K 线 / 通达信 / Wind
+        # 全部按此对齐。详见 docs/know-how.md §1.2、issue #80。
         if interval == 86400:  # 日线
             bar_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
         else:
             timestamp = int(now.timestamp())
-            bar_timestamp = (timestamp // interval) * interval
+            bar_timestamp = ((timestamp // interval) + 1) * interval
             bar_time = datetime.datetime.fromtimestamp(bar_timestamp)
 
         bar_key = bar_time.isoformat()

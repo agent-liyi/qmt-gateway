@@ -30,7 +30,7 @@
 | 默认监听 | `http://127.0.0.1:<server_port>`（端口见系统管理 `/api/system/port`） |
 | 数据来源 | QMT / xtquant（`xtdata` 行情，`xttrader` 交易）                       |
 | 鉴权方式 | 浏览器会话（cookie）或 `X-API-Key` 头                                 |
-| 实时推送 | WebSocket `/ws/quotes`（1m / 30m / 1d K 线）                          |
+| 实时推送 | WebSocket `/ws/quotes`（1m / 30m / 1d K 线，09:31 起）；`/ws/auction`（集合竞价撮合快照，09:20 ~ 09:25，规划中见 issue #81） |
 
 ---
 
@@ -96,7 +96,7 @@ X-API-Key: qmt_xxx
 {
   "symbol": "600000.SH",
   "timestamp": "2026-06-12T09:31:25.123456",
-  "1m":  { "open": 10.10, "high": 10.15, "low": 10.08, "close": 10.12, "volume": 12345, "amount": 125000.0, "time": "2026-06-12T09:31:00" },
+  "1m":  { "open": 10.10, "high": 10.15, "low": 10.08, "close": 10.12, "volume": 12345, "amount": 125000.0, "time": "2026-06-12T09:32:00" },
   "30m": { "open": ..., "high": ..., "low": ..., "close": ..., "volume": ..., "amount": ..., "time": "..." },
   "1d":  { "open": ..., "high": ..., "low": ..., "close": ..., "volume": ..., "amount": ..., "time": "..." }
 }
@@ -104,14 +104,21 @@ X-API-Key: qmt_xxx
 
 qmt-gateway 使用 orjson 来实现 json.dump.
 
+> **bar.time 语义**（A 股标准 K 线对齐方式，与聚宽 / Tushare / xtquant 历史 K 线一致）：
+> - bar.time = **区间右端点**（结束时刻）
+> - 09:30:00 ~ 09:30:59 的 tick 落在 `bar.time = 09:31`；09:31:00 ~ 09:31:59 落在 `09:32`
+> - 第一根 1m bar = **09:31**（包含集合竞价的 open 与 volume）
+> - 第一根 30m bar = **10:00**（覆盖 09:30 ~ 10:00）
+> - 09:15 ~ 09:29:59 集合竞价期间 **不推送 K 线**（撮合快照走 `/ws/auction`，见 issue #81）
+
 > **量纲规则**（xtquant tick 字段语义）：
 > - xtquant tick 中 `volume` / `amount` 是**当日累计成交**（自开盘起累计），不是本 tick 的 delta。
 > - K 线内不同级别采用不同公式：
 >   - **1d 整日 = 自开盘累计** → `bar.volume = tick.volume`
->   - **日内级别（1m / 30m / 其它）** → `bar.volume = tick.volume - prev_bar.volume`
+>   - **日内级别（1m / 30m / 其它）** → `bar.volume = tick.volume - bar 起点 ref_volume`（详见 [know-how.md §1.4](know-how.md#14-成交量计算)）
 
 
-更详细算法说明，包括推送时机与频繁见 [docs/know-how.md](know-how.md#实时K线合成)。
+更详细算法说明，包括推送时机与频率见 [docs/know-how.md](know-how.md#1-实时-k-线合成)。
 
 **Python 客户端示例**：
 
@@ -129,6 +136,30 @@ async def main():
 
 asyncio.run(main())
 ```
+
+### `WS /ws/auction` _（规划中，issue #81）_
+
+集合竞价撮合行情独立通道。**仅在 09:20 ~ 09:25 推送**（不可撤单阶段，撮合价已稳定收敛；09:15 ~ 09:20 因价格剧烈波动且大量虚假报单而不发布）。
+
+设计意图：让"开盘瞬间需要立即产生策略信号"的客户端（如打板、跳空开盘）在 09:25 集合竞价结束时立刻拿到稳定开盘价，无需等到 09:30 第一个 tick。
+
+集合竞价期间不做 K 线合成（与聚宽 `get_call_auction` / Tushare `acl()` 处理方式一致），只发原始撮合快照：
+
+```json
+{
+  "type": "auction",
+  "timestamp": "2026-06-12T09:23:45.000",
+  "data": {
+    "000001.SZ": { "price": 12.34, "volume": 100000, "amount": 1234000.0 },
+    "600000.SH": { "price":  8.56, "volume":  50000, "amount":  428000.0 }
+  }
+}
+```
+
+- `price` = `tick.lastPrice`（当前撮合价 / 预开盘价）
+- `volume` = `tick.volume`（集合竞价累计撮合量；09:25 锁定即开盘量）
+- `amount` = `tick.amount`
+- 推送频率：跟随 xtquant tick，每 ~3 秒一次
 
 ---
 
