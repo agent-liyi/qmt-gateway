@@ -255,15 +255,14 @@ class QuoteService:
             更新后的 K 线数据
         """
         price = tick.get("lastPrice", 0)
-        # xtquant 规范：tick 中的 volume / amount 是当日累计成交（自开盘起累计），
-        # 不是本 tick 的 delta。不同级别 K 线需采用不同语义：
-        #   - 1d 整日 = 自开盘起累计 → 直接覆盖
-        #   - 日内级别（1m / 30m / 其它）→ 用本 tick 累计值减去 bar 起点 baseline
-        # 若本 tick 缺字段（None / 0），保留上一次非零值以避免被错误清零。
+        # K 线合成（含 volume / amount 的末 tick 锁定、ref_volume 状态机、跨 bar 行为）见
+        # docs/quote-bar-synthesis.md。
         raw_volume = tick.get("volume")
         raw_amount = tick.get("amount")
         new_volume = raw_volume if raw_volume is not None else 0
         new_amount = raw_amount if raw_amount is not None else 0
+        has_volume = raw_volume is not None and raw_volume > 0
+        has_amount = raw_amount is not None and raw_amount > 0
 
         # 计算当前 K 线的时间戳
         if interval == 86400:  # 日线
@@ -278,8 +277,8 @@ class QuoteService:
         if bar_key not in bar_cache:
             # 新 K 线
             bar_cache.clear()
-            # 首 tick 若 volume / amount 缺字段（0 或 None），把 baseline 也置为 0；
-            # 等到下一个有效 tick 出现时再回填（见下方的"延迟建 bar"分支）。
+            # ref_volume / ref_amount：上一根 bar 区间内最后一个 tick.volume / .amount。
+            # 首根 bar 初始化为 0（视作"开盘前"）。
             bar_cache[bar_key] = {
                 "open": price,
                 "high": price,
@@ -287,23 +286,10 @@ class QuoteService:
                 "close": price,
                 "volume": 0,
                 "amount": 0.0,
-                "baseline_volume": new_volume,
-                "baseline_amount": new_amount,
                 "time": bar_time.isoformat(),
+                "ref_volume": 0,
+                "ref_amount": 0.0,
             }
-            # 1d 走覆盖语义：bar.volume = bar 内最新累计 = tick.volume
-            if interval == 86400:
-                if new_volume > 0:
-                    bar_cache[bar_key]["volume"] = new_volume
-                if new_amount > 0:
-                    bar_cache[bar_key]["amount"] = new_amount
-            else:
-                # 日内级别：建 bar 的同时尝试写第一笔"周期内 delta"
-                # 如果首 tick 缺字段，volume/amount 保持 0；下一笔再补
-                if new_volume > 0:
-                    bar_cache[bar_key]["volume"] = 0
-                if new_amount > 0:
-                    bar_cache[bar_key]["amount"] = 0.0
         else:
             # 更新现有 K 线
             bar = bar_cache[bar_key]
@@ -311,29 +297,30 @@ class QuoteService:
             bar["low"] = min(bar["low"], price)
             bar["close"] = price
 
-            if interval == 86400:
-                # 1d 走覆盖
-                if new_volume > 0:
-                    bar["volume"] = new_volume
-                if new_amount > 0:
-                    bar["amount"] = new_amount
-            else:
-                # 日内级别：若本 tick 缺字段，跳过更新（保留上一笔）
-                if new_volume > 0:
-                    # baseline 还没建好（=0）但本 tick 有 volume：
-                    # 这时无法计算 delta（0 不代表"开盘累计为 0"，更可能代表"baseline 缺失"），
-                    # 退化为"以本次为新 baseline，volume 归零重计"。
-                    if bar["baseline_volume"] == 0:
-                        bar["baseline_volume"] = new_volume
-                        bar["volume"] = 0
-                    else:
-                        bar["volume"] = max(0, new_volume - bar["baseline_volume"])
-                if new_amount > 0:
-                    if bar["baseline_amount"] == 0:
-                        bar["baseline_amount"] = new_amount
-                        bar["amount"] = 0.0
-                    else:
-                        bar["amount"] = max(0.0, new_amount - bar["baseline_amount"])
+        # 1d 走覆盖；日内级别走 ref 减法。详细见 docs/quote-bar-synthesis.md。
+        if interval == 86400:
+            if has_volume:
+                bar_cache[bar_key]["volume"] = new_volume
+            if has_amount:
+                bar_cache[bar_key]["amount"] = new_amount
+        else:
+            if has_volume:
+                bar_cache[bar_key]["volume"] = max(
+                    0, new_volume - bar_cache[bar_key]["ref_volume"]
+                )
+            if has_amount:
+                bar_cache[bar_key]["amount"] = max(
+                    0.0, new_amount - bar_cache[bar_key]["ref_amount"]
+                )
+
+        # 末 tick 锁定：无论是否跨 bar，都把"本 tick.volume"作为新的 ref_volume，
+        # 这样下一根 bar 进来的第一个 tick 就能立刻算出正确的 delta。
+        # 缺字段（None / 0）时不更新 ref，避免把坏值灌进基线。
+        if interval != 86400:
+            if has_volume:
+                bar_cache[bar_key]["ref_volume"] = new_volume
+            if has_amount:
+                bar_cache[bar_key]["ref_amount"] = new_amount
 
         return bar_cache[bar_key]
 
