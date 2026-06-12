@@ -25,12 +25,12 @@
 
 ## 基础信息
 
-| 项 | 说明 |
-|---|---|
-| 默认监听 | `http://127.0.0.1:<server_port>`（端口见系统管理 `/api/system/port`）|
-| 数据来源 | QMT / xtquant（`xtdata` 行情，`xttrader` 交易）|
-| 鉴权方式 | 浏览器会话（cookie）或 `X-API-Key` 头 |
-| 实时推送 | WebSocket `/ws/quotes`（1m / 30m / 1d K 线）|
+| 项       | 说明                                                                  |
+| -------- | --------------------------------------------------------------------- |
+| 默认监听 | `http://127.0.0.1:<server_port>`（端口见系统管理 `/api/system/port`） |
+| 数据来源 | QMT / xtquant（`xtdata` 行情，`xttrader` 交易）                       |
+| 鉴权方式 | 浏览器会话（cookie）或 `X-API-Key` 头                                 |
+| 实时推送 | WebSocket `/ws/quotes`（1m / 30m / 1d K 线）                          |
 
 ---
 
@@ -83,12 +83,12 @@ X-API-Key: qmt_xxx
 
 实时推送通道。客户端协议：
 
-| 方向 | 消息 | 说明 |
-|---|---|---|
-| C → S | `{"action":"subscribe","symbols":["600000.SH"]}` | 当前仅做日志，**不过滤推送**（所有客户端都收到全市场 tick 聚合结果）|
-| C → S | `{"action":"ping"}` | 心跳 |
-| S → C | `{"action":"pong"}` | 心跳应答 |
-| S → C | K 线消息（见下）| 每次 xtquant tick 触发一条 |
+| 方向  | 消息                                             | 说明                                                                 |
+| ----- | ------------------------------------------------ | -------------------------------------------------------------------- |
+| C → S | `{"action":"subscribe","symbols":["600000.SH"]}` | 当前仅做日志，**不过滤推送**（所有客户端都收到全市场 tick 聚合结果） |
+| C → S | `{"action":"ping"}`                              | 心跳                                                                 |
+| S → C | `{"action":"pong"}`                              | 心跳应答                                                             |
+| S → C | K 线消息（见下）                                 | 每次 xtquant tick 触发一条                                           |
 
 **K 线消息结构**（每条消息同时含三个级别，每次 tick 触发一条更新）：
 
@@ -102,15 +102,16 @@ X-API-Key: qmt_xxx
 }
 ```
 
+qmt-gateway 使用 orjson 来实现 json.dump.
+
 > **量纲规则**（xtquant tick 字段语义）：
 > - xtquant tick 中 `volume` / `amount` 是**当日累计成交**（自开盘起累计），不是本 tick 的 delta。
 > - K 线内不同级别采用不同公式：
->   - **1d 整日 = 自开盘累计** → `bar.volume = tick.volume`（覆盖）
->   - **日内级别（1m / 30m / 其它）** → `bar.volume = max(0, tick.volume − ref_volume)`，其中 `ref_volume` 在每个 tick 立刻更新为当前 `tick.volume`（**末 tick 锁定**，无延迟）
-> - 也就是说，**1m / 30m 的 `volume` / `amount` 表达的就是"该周期内产生的成交量 / 成交额"**，与 xtquant 自带 `subscribe_quote(period=...)` 一致。
-> - 详细状态机与示例见 [docs/quote-bar-synthesis.md](quote-bar-synthesis.md)。
+>   - **1d 整日 = 自开盘累计** → `bar.volume = tick.volume`
+>   - **日内级别（1m / 30m / 其它）** → `bar.volume = tick.volume - prev_bar.volume`
 
-**推送节奏**：xtquant 全市场 tick 周期约 3 秒；**每次 tick 即产生一条 WebSocket 消息**。同一根 bar 会被推送多次，每次都按"现在掌握的最后一个 tick"刷新 volume / close（无延迟）。非交易时间**不订阅、不推送**，由 [services/quote_service.py](../qmt_gateway/services/quote_service.py) 的 `_is_trade_time()`（09:15–11:45、12:45–15:15）控制。
+
+更详细算法说明，包括推送时机与频繁见 [docs/know-how.md](know-how.md#实时K线合成)。
 
 **Python 客户端示例**：
 
@@ -133,12 +134,12 @@ asyncio.run(main())
 
 ## 股票基础信息
 
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| GET | `/api/stocks` | 列出全部已缓存股票 |
-| GET | `/api/stocks/search?stock_search=...` | 关键字搜索（用于前端下拉补全）|
-| GET | `/api/stock/info?symbol=600000.SH` | 拉取单只股票的 Speed Dial HTML，响应头 `X-Last-Close` 返回昨收价 |
-| GET | `/api/stock/resolve?q=...` | 智能解析（代码 / 中文名 / 拼音）|
+| 方法 | 路径                                  | 用途                                                             |
+| ---- | ------------------------------------- | ---------------------------------------------------------------- |
+| GET  | `/api/stocks`                         | 列出全部已缓存股票                                               |
+| GET  | `/api/stocks/search?stock_search=...` | 关键字搜索（用于前端下拉补全）                                   |
+| GET  | `/api/stock/info?symbol=600000.SH`    | 拉取单只股票的 Speed Dial HTML，响应头 `X-Last-Close` 返回昨收价 |
+| GET  | `/api/stock/resolve?q=...`            | 智能解析（代码 / 中文名 / 拼音）                                 |
 
 `/api/stock/resolve` 返回示例：
 
@@ -156,13 +157,13 @@ asyncio.run(main())
 
 ### 查询
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| GET | `/api/trade/asset` | 账户资金快照（总资产 / 可用 / 冻结 / 持仓市值 / 当日盈亏）|
-| GET | `/api/trade/positions?view=json\|table` | 当前持仓；`view=table` 返回 HTML 片段 |
-| GET | `/api/trade/orders?status=all&view=json\|table` | 委托列表；`status` 可取 `all` / `pending` / `partial` / `filled` / `cancelled` / `rejected` 等 |
-| GET | `/api/trade/trades` | 当日成交 |
-| GET | `/api/trade/connection-status` | QMT 客户端连接状态 |
+| 方法 | 路径                                            | 说明                                                                                           |
+| ---- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| GET  | `/api/trade/asset`                              | 账户资金快照（总资产 / 可用 / 冻结 / 持仓市值 / 当日盈亏）                                     |
+| GET  | `/api/trade/positions?view=json\|table`         | 当前持仓；`view=table` 返回 HTML 片段                                                          |
+| GET  | `/api/trade/orders?status=all&view=json\|table` | 委托列表；`status` 可取 `all` / `pending` / `partial` / `filled` / `cancelled` / `rejected` 等 |
+| GET  | `/api/trade/trades`                             | 当日成交                                                                                       |
+| GET  | `/api/trade/connection-status`                  | QMT 客户端连接状态                                                                             |
 
 `/api/trade/asset` 返回示例：
 
@@ -181,11 +182,11 @@ asyncio.run(main())
 
 ### 委托 / 撤单
 
-| 方法 | 路径 | 必填参数 | 说明 |
-|---|---|---|---|
-| POST | `/api/trade/buy` | `symbol`, `price`, `shares` | 限价买入；可附 `qtoid`（策略订单号）、`strategy_id` |
-| POST | `/api/trade/sell` | `symbol`, `price`, `shares` | 限价卖出 |
-| POST | `/api/trade/cancel` | `qtoid`（或 `order_id`）| 撤单；可加 `view=table` 撤单后回 HTML 片段 |
+| 方法 | 路径                | 必填参数                    | 说明                                                |
+| ---- | ------------------- | --------------------------- | --------------------------------------------------- |
+| POST | `/api/trade/buy`    | `symbol`, `price`, `shares` | 限价买入；可附 `qtoid`（策略订单号）、`strategy_id` |
+| POST | `/api/trade/sell`   | `symbol`, `price`, `shares` | 限价卖出                                            |
+| POST | `/api/trade/cancel` | `qtoid`（或 `order_id`）    | 撤单；可加 `view=table` 撤单后回 HTML 片段          |
 
 ```bash
 # 买入 1000 股 600000.SH @ 10.20
@@ -203,19 +204,19 @@ curl -X POST http://127.0.0.1:8000/api/trade/buy \
 
 ### QMT 重启
 
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| POST | `/api/trade/restart-qmt` | 重启 QMT 客户端并自动登录；可传 `password`，缺省时尝试用会话派生的密钥解密已存密码 |
-| GET  | `/api/trade/restart-qmt/has-password` | 探测当前会话是否持有可解密的 QMT 密码 |
-| GET  | `/api/trade/restart-qmt/password?token=...` | **仅本机** 一次性获取重启密码（helper 用）|
-| POST | `/api/trade/restart-qmt/helper-status?token=...&status=...` | **仅本机** helper 状态回写 |
+| 方法 | 路径                                                        | 用途                                                                               |
+| ---- | ----------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| POST | `/api/trade/restart-qmt`                                    | 重启 QMT 客户端并自动登录；可传 `password`，缺省时尝试用会话派生的密钥解密已存密码 |
+| GET  | `/api/trade/restart-qmt/has-password`                       | 探测当前会话是否持有可解密的 QMT 密码                                              |
+| GET  | `/api/trade/restart-qmt/password?token=...`                 | **仅本机** 一次性获取重启密码（helper 用）                                         |
+| POST | `/api/trade/restart-qmt/helper-status?token=...&status=...` | **仅本机** helper 状态回写                                                         |
 
 > 30 秒超时，后台执行；返回结构为 `{ "success": bool, "error": "..." }`。
 
 ### 本金管理
 
-| 方法 | 路径 | 必填参数 | 说明 |
-|---|---|---|---|
+| 方法 | 路径                   | 必填参数    | 说明                                                   |
+| ---- | ---------------------- | ----------- | ------------------------------------------------------ |
 | POST | `/api/asset/principal` | `principal` | 录入 / 修改初始本金；写入 `assets` 表，`principal > 0` |
 
 ---
@@ -224,11 +225,11 @@ curl -X POST http://127.0.0.1:8000/api/trade/buy \
 
 异步任务模型：
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/history/minutes/jobs` | 创建下载任务（参数：`trade_date=YYYY-MM-DD`，`period=1m`，`universe=ashare`）|
-| GET  | `/api/history/minutes/jobs/{job_id}` | 查询任务状态 / 进度 |
-| GET  | `/api/history/minutes/jobs/{job_id}/file` | 下载产物（**parquet**，zstd 压缩）|
+| 方法 | 路径                                      | 说明                                                                          |
+| ---- | ----------------------------------------- | ----------------------------------------------------------------------------- |
+| POST | `/api/history/minutes/jobs`               | 创建下载任务（参数：`trade_date=YYYY-MM-DD`，`period=1m`，`universe=ashare`） |
+| GET  | `/api/history/minutes/jobs/{job_id}`      | 查询任务状态 / 进度                                                           |
+| GET  | `/api/history/minutes/jobs/{job_id}/file` | 下载产物（**parquet**，zstd 压缩）                                            |
 
 ```bash
 # 创建任务
@@ -248,19 +249,19 @@ curl -OJ http://127.0.0.1:8000/api/history/minutes/jobs/<job_id>/file -H "X-API-
 
 任务响应字段（参考 [services/history_download_service.py](../qmt_gateway/services/history_download_service.py) 中的 `DownloadJob`）：
 
-| 字段 | 说明 |
-|---|---|
-| `job_id` | 任务 UUID |
-| `trade_date` | 交易日（`YYYY-MM-DD`）|
-| `period` | K 线周期（当前仅支持 `1m`）|
-| `universe` | 股票范围（当前仅支持 `ashare`）|
-| `status` | `pending` / `running` / `success` / `failed` |
-| `total_symbols` | 总股票数（任务开始后回填）|
-| `finished_symbols` | 已处理股票数（粗粒度进度）|
-| `rows` | 已写入 parquet 的行数 |
-| `file_name` | parquet 文件名（含 `<date>_<jobid[:8]>`）|
-| `error` | 失败原因（仅在 `failed` 时有值）|
-| `created_at` / `updated_at` | ISO 时间戳 |
+| 字段                        | 说明                                         |
+| --------------------------- | -------------------------------------------- |
+| `job_id`                    | 任务 UUID                                    |
+| `trade_date`                | 交易日（`YYYY-MM-DD`）                       |
+| `period`                    | K 线周期（当前仅支持 `1m`）                  |
+| `universe`                  | 股票范围（当前仅支持 `ashare`）              |
+| `status`                    | `pending` / `running` / `success` / `failed` |
+| `total_symbols`             | 总股票数（任务开始后回填）                   |
+| `finished_symbols`          | 已处理股票数（粗粒度进度）                   |
+| `rows`                      | 已写入 parquet 的行数                        |
+| `file_name`                 | parquet 文件名（含 `<date>_<jobid[:8]>`）    |
+| `error`                     | 失败原因（仅在 `failed` 时有值）             |
+| `created_at` / `updated_at` | ISO 时间戳                                   |
 
 > **当前没有 `progress` 字段**——如有进度展示需求，请用 `finished_symbols / total_symbols` 自算。
 
@@ -270,18 +271,18 @@ curl -OJ http://127.0.0.1:8000/api/history/minutes/jobs/<job_id>/file -H "X-API-
 
 > 下列接口使用 `@login_required`，**仅 session 登录**可访问（不接受 API key）。
 
-| 方法 | 路径 | 用途 |
-|---|---|---|
-| GET  | `/api/system/version` | 当前版本 / 远端最新版本 / 是否有更新 |
-| POST | `/api/system/version/check` | 主动触发版本检查 |
-| POST | `/api/system/update` | 启动后台更新任务，返回 `task_id` |
-| GET  | `/api/system/update/status/{task_id}` | 轮询更新进度 |
-| POST | `/api/system/rollback` | 回滚到上一版本 |
-| GET  | `/api/system/autostart` | 开机自启状态 |
-| POST | `/api/system/autostart` | 启用 / 禁用（表单 `enabled=true|false`）|
-| GET  | `/api/system/port` | 当前服务端口 |
-| GET  | `/api/system/firewall` | 防火墙规则是否存在 |
-| POST | `/api/system/firewall` | 更新防火墙端口（表单 `port=...`）|
+| 方法 | 路径                                  | 用途                                 |
+| ---- | ------------------------------------- | ------------------------------------ |
+| GET  | `/api/system/version`                 | 当前版本 / 远端最新版本 / 是否有更新 |
+| POST | `/api/system/version/check`           | 主动触发版本检查                     |
+| POST | `/api/system/update`                  | 启动后台更新任务，返回 `task_id`     |
+| GET  | `/api/system/update/status/{task_id}` | 轮询更新进度                         |
+| POST | `/api/system/rollback`                | 回滚到上一版本                       |
+| GET  | `/api/system/autostart`               | 开机自启状态                         |
+| POST | `/api/system/autostart`               | 启用 / 禁用（表单 `enabled=true      | false`） |
+| GET  | `/api/system/port`                    | 当前服务端口                         |
+| GET  | `/api/system/firewall`                | 防火墙规则是否存在                   |
+| POST | `/api/system/firewall`                | 更新防火墙端口（表单 `port=...`）    |
 
 更新任务返回结构：
 
@@ -297,11 +298,11 @@ curl -OJ http://127.0.0.1:8000/api/history/minutes/jobs/<job_id>/file -H "X-API-
 
 > 这些接口要求**已登录**（不接受 API key 自身调用），用来防止 token 自我繁殖。
 
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST   | `/api/api-keys` | 颁发新 key（参数 `name`）；**plaintext 仅在创建时返回一次** |
-| GET    | `/api/api-keys` | 列出全部 key（不含明文 / hash）|
-| DELETE | `/api/api-keys/{key_id}` | 吊销指定 key |
+| 方法   | 路径                     | 说明                                                        |
+| ------ | ------------------------ | ----------------------------------------------------------- |
+| POST   | `/api/api-keys`          | 颁发新 key（参数 `name`）；**plaintext 仅在创建时返回一次** |
+| GET    | `/api/api-keys`          | 列出全部 key（不含明文 / hash）                             |
+| DELETE | `/api/api-keys/{key_id}` | 吊销指定 key                                                |
 
 ```bash
 # 颁发
@@ -320,15 +321,15 @@ curl -X POST http://127.0.0.1:8000/api/api-keys \
 
 ## 错误码
 
-| `code` | 含义 | 典型场景 |
-|---|---|---|
-| 0 | 成功 | — |
-| 1 | 业务失败 | 参数错误 / QMT 未连接 / 撤单失败 / 任务不存在 / 资源冲突（任务尚未完成）|
-| 401 | 未登录或 API key 无效 | 缺少 `X-API-Key`、key 已被吊销、session 过期 |
-| 403 | 权限不足 | helper 接口被远端调用（要求 127.0.0.1）|
-| 404 | 资源不存在 | `job_id` / `key_id` 不存在 |
-| 409 | 资源状态冲突 | 下载任务尚未完成时再次请求文件 |
-| 500 | 服务器异常 | QMT 调用失败、数据库异常等 |
+| `code` | 含义                  | 典型场景                                                                 |
+| ------ | --------------------- | ------------------------------------------------------------------------ |
+| 0      | 成功                  | —                                                                        |
+| 1      | 业务失败              | 参数错误 / QMT 未连接 / 撤单失败 / 任务不存在 / 资源冲突（任务尚未完成） |
+| 401    | 未登录或 API key 无效 | 缺少 `X-API-Key`、key 已被吊销、session 过期                             |
+| 403    | 权限不足              | helper 接口被远端调用（要求 127.0.0.1）                                  |
+| 404    | 资源不存在            | `job_id` / `key_id` 不存在                                               |
+| 409    | 资源状态冲突          | 下载任务尚未完成时再次请求文件                                           |
+| 500    | 服务器异常            | QMT 调用失败、数据库异常等                                               |
 
 > HTTP 状态码与 `code` 同时出现；优先以 HTTP 状态码判断调用成败，再看 `code` 区分业务类型。
 

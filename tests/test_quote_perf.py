@@ -92,40 +92,65 @@ def test_update_bar_1d_uses_overwrite_with_cumulative():
     assert bar["amount"] == 50000.0
 
 
-def test_update_bar_1m_last_tick_locked_delta():
-    """1m 走末 tick 锁定：bar.volume = tick.volume - ref_volume（每次 tick 更新 ref）。"""
+def test_update_bar_1m_xtquant_standard_kline_semantics():
+    """1m 走 xtquant 标准 K 线语义：bar.volume = tick.volume - bar 起点 ref_volume。
+
+    与 docs/know-how.md §1.4 一致：
+    - 同 bar 内多 tick：ref_volume 保持为该 bar 起点（=上一根 bar 末 tick.volume，
+      首根 bar 为 0）；bar.volume 表达"截至本 tick 为止的累计成交"
+    - 跨 bar 那一刻：ref_volume 切换为上一根 bar 末 tick.volume
+    """
     service = QuoteService()
     bar_cache: dict = {}
     now = datetime.datetime(2026, 6, 12, 9, 31, 25)
 
-    # 同区间 3 个 tick：ref 每次都更新
+    # tick1：首根 bar，ref=0
     service._update_bar(bar_cache, {"lastPrice": 10.0, "volume": 100000, "amount": 1000000.0}, now, 60)
-    bar = service._update_bar(bar_cache, {"lastPrice": 10.1, "volume": 100500, "amount": 1005050.0}, now, 60)
-    assert bar["volume"] == 500  # 100500 - 100000
-    assert abs(bar["amount"] - 5050.0) < 0.01
+    # tick2：仍 09:31 桶，ref 保持 0；bar.volume = 100300 - 0 = 100300
+    bar = service._update_bar(bar_cache, {"lastPrice": 10.1, "volume": 100300, "amount": 1003000.0}, now, 60)
+    assert bar["volume"] == 100300
+    assert abs(bar["amount"] - 1003000.0) < 0.01
 
-    bar = service._update_bar(bar_cache, {"lastPrice": 10.2, "volume": 101200, "amount": 1012150.0}, now, 60)
-    # 末 tick 锁定：ref 已是 100500，bar.volume = 101200 - 100500 = 700
-    assert bar["volume"] == 700
-    assert abs(bar["amount"] - 7100.0) < 0.01
+    # tick3：仍 09:31 桶，ref 仍 0；bar.volume = 100500 - 0 = 100500
+    bar = service._update_bar(bar_cache, {"lastPrice": 10.2, "volume": 100500, "amount": 1005050.0}, now, 60)
+    assert bar["volume"] == 100500
+    assert abs(bar["amount"] - 1005050.0) < 0.01
 
 
-def test_update_bar_1m_cross_bar_uses_previous_bar_last_tick_as_ref():
-    """1m 跨 bar：新 bar 的第一笔 delta = tick.volume - 上一根 bar 末 tick.volume（无延迟）。"""
+def test_update_bar_1m_cross_bar_inherits_previous_bar_last_tick():
+    """1m 跨 bar：新 bar 的 ref_volume 继承自旧 bar 的最后一个 tick.volume。
+
+    这是与 docs/know-how.md §1.4 "跨 bar 更新 ref_volume <- last_tick.volume" 一致的行为。
+    """
     service = QuoteService()
     bar_cache: dict = {}
     t1 = datetime.datetime(2026, 6, 12, 9, 31, 25)
-    t2 = datetime.datetime(2026, 6, 12, 9, 31, 35)  # 仍在 09:31 桶（>=09:31, <09:32）
-    t3 = datetime.datetime(2026, 6, 12, 9, 32, 5)   # 进入 09:32 桶
+    t2 = datetime.datetime(2026, 6, 12, 9, 32, 5)   # 进入 09:32 桶
 
+    # 09:31 bar 末 tick.volume = 100500
     service._update_bar(bar_cache, {"lastPrice": 10.0, "volume": 100000, "amount": 1000000.0}, t1, 60)
-    bar2 = service._update_bar(bar_cache, {"lastPrice": 10.1, "volume": 100500, "amount": 1005050.0}, t2, 60)
-    assert bar2["volume"] == 500  # 100500 - 100000
+    service._update_bar(bar_cache, {"lastPrice": 10.1, "volume": 100500, "amount": 1005050.0}, t1, 60)
 
-    # 跨 bar 进入 09:32 桶
-    bar3 = service._update_bar(bar_cache, {"lastPrice": 10.2, "volume": 100700, "amount": 1007050.0}, t3, 60)
-    # 跨 bar 那一刻：新 bar.volume = tick.volume(100700) - 上一根 bar 末 tick.volume(100500) = 200
+    # 跨 bar：09:32 第一个 tick 进来
+    bar3 = service._update_bar(bar_cache, {"lastPrice": 10.2, "volume": 100700, "amount": 1007050.0}, t2, 60)
+    # 新 bar 的 ref_volume = 旧 bar 末 tick.volume(100500)
+    # bar.volume = 100700 - 100500 = 200
     assert bar3["volume"] == 200
     assert bar3["time"] == "2026-06-12T09:32:00"
-    # 缓存里只剩新 bar
     assert len(bar_cache) == 1
+
+
+def test_update_bar_1m_does_not_use_this_tick_in_subtraction():
+    """1m 关键不变量：bar.volume = tick.volume - ref(更新前)，不是 tick.volume - tick.volume。
+
+    即"用 ref 记录本 bar 区间的起点累计值"；本 tick 不参与当次减法。
+    """
+    service = QuoteService()
+    bar_cache: dict = {}
+    now = datetime.datetime(2026, 6, 12, 9, 31, 25)
+
+    service._update_bar(bar_cache, {"lastPrice": 10.0, "volume": 100000, "amount": 1000000.0}, now, 60)
+    bar = service._update_bar(bar_cache, {"lastPrice": 10.1, "volume": 100300, "amount": 1003000.0}, now, 60)
+    # 如果错误地写成 tick - tick，结果是 0；正确值是 100300
+    assert bar["volume"] != 0
+    assert bar["volume"] == 100300

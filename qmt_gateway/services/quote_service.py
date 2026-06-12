@@ -262,8 +262,7 @@ class QuoteService:
             更新后的 K 线数据
         """
         price = tick.get("lastPrice", 0)
-        # K 线合成（含 volume / amount 的末 tick 锁定、ref_volume 状态机、跨 bar 行为）见
-        # docs/quote-bar-synthesis.md。
+        # K 线合成（xtquant 末 tick 锁定语义，跨 bar 时切换 ref）见 docs/know-how.md §1.4。
         raw_volume = tick.get("volume")
         raw_amount = tick.get("amount")
         new_volume = raw_volume if raw_volume is not None else 0
@@ -282,10 +281,20 @@ class QuoteService:
         bar_key = bar_time.isoformat()
 
         if bar_key not in bar_cache:
-            # 新 K 线
+            # 新 K 线：跨 bar 发生。
+            # ref_volume / ref_amount 维持"本 bar 区间起点"的值（= 旧 bar 末 tick），
+            # **不**在本 bar 内的 tick 上更新（与 docs/know-how.md §1.4 规则 3 一致）。
+            # last_tick_volume / last_tick_amount 则记录"本 bar 区间内的最后一个 tick"
+            # 以供下一根 bar 跨过来时读取作为它的 ref 起点（与规则 2 一致）。
+            prev_ref_volume = 0
+            prev_ref_amount = 0.0
+            if bar_cache:
+                old_bar = next(iter(bar_cache.values()))
+                # 优先用旧 bar 的"末 tick"作为新 bar 的 ref；
+                # 若旧 bar 没有任何有效 tick（首根 bar 之前的状态），则退化为 0
+                prev_ref_volume = old_bar.get("last_tick_volume", 0) or 0
+                prev_ref_amount = old_bar.get("last_tick_amount", 0.0) or 0.0
             bar_cache.clear()
-            # ref_volume / ref_amount：上一根 bar 区间内最后一个 tick.volume / .amount。
-            # 首根 bar 初始化为 0（视作"开盘前"）。
             bar_cache[bar_key] = {
                 "open": price,
                 "high": price,
@@ -294,17 +303,20 @@ class QuoteService:
                 "volume": 0,
                 "amount": 0.0,
                 "time": bar_time.isoformat(),
-                "ref_volume": 0,
-                "ref_amount": 0.0,
+                "ref_volume": prev_ref_volume,
+                "ref_amount": prev_ref_amount,
+                "last_tick_volume": 0,
+                "last_tick_amount": 0.0,
             }
         else:
-            # 更新现有 K 线
+            # 同区间内的 tick：更新 OHLC。
+            # 注意：ref_volume 在本 bar 区间内**不更新**（与 docs/know-how.md §1.4 规则 3 一致）。
             bar = bar_cache[bar_key]
             bar["high"] = max(bar["high"], price)
             bar["low"] = min(bar["low"], price)
             bar["close"] = price
 
-        # 1d 走覆盖；日内级别走 ref 减法。详细见 docs/quote-bar-synthesis.md。
+        # 1d 走覆盖；日内级别走 ref 减法。详细见 docs/know-how.md。
         if interval == 86400:
             if has_volume:
                 bar_cache[bar_key]["volume"] = new_volume
@@ -320,14 +332,15 @@ class QuoteService:
                     0.0, new_amount - bar_cache[bar_key]["ref_amount"]
                 )
 
-        # 末 tick 锁定：无论是否跨 bar，都把"本 tick.volume"作为新的 ref_volume，
-        # 这样下一根 bar 进来的第一个 tick 就能立刻算出正确的 delta。
-        # 缺字段（None / 0）时不更新 ref，避免把坏值灌进基线。
+        # 每 tick 到来都更新 last_tick_volume / last_tick_amount（无论是否跨 bar）。
+        # 这是"本 bar 区间内的最后一个 tick"的真实记录：同 bar 内多 tick 时它会被
+        # 反复刷新；跨 bar 时新 bar 读取它作为自己的 ref_volume 起点。
+        # 缺字段（None / 0）时不更新，避免把坏值灌进基线。
         if interval != 86400:
             if has_volume:
-                bar_cache[bar_key]["ref_volume"] = new_volume
+                bar_cache[bar_key]["last_tick_volume"] = new_volume
             if has_amount:
-                bar_cache[bar_key]["ref_amount"] = new_amount
+                bar_cache[bar_key]["last_tick_amount"] = new_amount
 
         return bar_cache[bar_key]
 
