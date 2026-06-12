@@ -255,8 +255,13 @@ class QuoteService:
             更新后的 K 线数据
         """
         price = tick.get("lastPrice", 0)
-        volume = tick.get("volume", 0)
-        amount = tick.get("amount", 0)
+        # xtquant 规范：tick 中的 volume / amount 是当日累计成交（自开盘起累计），
+        # 不是本 tick 的 delta。因此 K 线内直接覆盖为最新累计值，不再 += 累加。
+        # 若本 tick 缺字段（为 None / 0），保留上一次非零值以避免被错误清零。
+        raw_volume = tick.get("volume")
+        raw_amount = tick.get("amount")
+        new_volume = raw_volume if raw_volume is not None else 0
+        new_amount = raw_amount if raw_amount is not None else 0
 
         # 计算当前 K 线的时间戳
         if interval == 86400:  # 日线
@@ -269,15 +274,15 @@ class QuoteService:
         bar_key = bar_time.isoformat()
 
         if bar_key not in bar_cache:
-            # 新 K 线
+            # 新 K 线：以首个 tick 的累计值作为 bar 起点
             bar_cache.clear()
             bar_cache[bar_key] = {
                 "open": price,
                 "high": price,
                 "low": price,
                 "close": price,
-                "volume": volume,
-                "amount": amount,
+                "volume": new_volume,
+                "amount": new_amount,
                 "time": bar_time.isoformat(),
             }
         else:
@@ -286,8 +291,11 @@ class QuoteService:
             bar["high"] = max(bar["high"], price)
             bar["low"] = min(bar["low"], price)
             bar["close"] = price
-            bar["volume"] += volume
-            bar["amount"] += amount
+            # 累计值字段直接覆盖；只在本次拿到有效值时才更新，防止被 0 / None 清掉
+            if new_volume > 0:
+                bar["volume"] = new_volume
+            if new_amount > 0:
+                bar["amount"] = new_amount
 
         return bar_cache[bar_key]
 
