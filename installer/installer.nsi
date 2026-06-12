@@ -144,10 +144,12 @@ var ICONS_GROUP
 !insertmacro MUI_PAGE_INSTFILES
 
 ; Finish page - MUI2 reads MUI_TEXT_FINISH_INFO_TITLE/TEXT defined above.
-!define MUI_FINISHPAGE_RUN_TEXT "立即启动 $(^Name)"
+;
+; #66: the gateway is launched at logon by the scheduled task, so the "run
+; now" checkbox is removed.  The browser is opened automatically by
+; Section -Post once the service is reachable on http://localhost:8130,
+; so the user does not have to click anything to see the gateway UI.
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "查看安装日志"
-!define MUI_FINISHPAGE_RUN "$INSTDIR\start.bat"
-!define MUI_FINISHPAGE_RUN_NOTCHECKED
 !define MUI_FINISHPAGE_SHOWREADME "$INSTDIR\${INSTALL_LOG_NAME}"
 !define MUI_FINISHPAGE_SHOWREADME_NOTCHECKED
 !insertmacro MUI_PAGE_FINISH
@@ -198,7 +200,7 @@ var ICONS_GROUP
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
 OutFile "QMT-Gateway-Setup-${PRODUCT_VERSION}-build${BUILD_NUMBER}.exe"
-InstallDir "$PROGRAMFILES64\${PRODUCT_NAME}"
+InstallDir "$PROGRAMFILES64\quantide-gateway"
 ShowInstDetails show
 ShowUnInstDetails show
 RequestExecutionLevel admin
@@ -207,6 +209,21 @@ Function .onInit
     ; Chinese-only installer. The single registered language table above is
     ; used directly; NSIS will not pop a language picker because no picker
     ; macro is invoked here.
+FunctionEnd
+
+Function .onVerifyInstDir
+    ; Warn if the install path contains non-ASCII characters. The scheduled
+    ; task launcher (wscript + bat) cannot resolve CJK paths through ANSI
+    ; filesystem APIs, so an ASCII-only path is required.
+    System::Call "kernel32::WideCharToMultiByte(i 0, i 0, w '$INSTDIR', i -1, i 0, i 0, i 0, *i .r2) i .r0"
+    System::Alloc $0
+    Pop $1
+    System::Call "kernel32::WideCharToMultiByte(i 0, i 0, w '$INSTDIR', i -1, i r1, i r0, i 0, *i .r2) i .r3"
+    System::Free $1
+    ${If} $2 <> 0
+        MessageBox MB_OK|MB_ICONEXCLAMATION \
+            "安装路径包含非 ASCII 字符（如中文），可能导致开机自启功能异常。$\n$\n建议使用纯英文路径，如: C:\Program Files\quantide-gateway"
+    ${EndIf}
 FunctionEnd
 
 Function .onInstFailed
@@ -273,9 +290,17 @@ Section "-Core" SEC_CORE
     SetOutPath "$INSTDIR"
 
     !insertmacro LogStep "Core: copy startup scripts"
-    ; Copy startup scripts
+    ; start.bat is retained as a manual / debug entry point that runs the
+    ; gateway in a visible console window. start-silent.bat is the hidden
+    ; wrapper invoked by start-silent.vbs (which the scheduled task
+    ; launches at logon) - it sets the same environment as start.bat but
+    ; appends stdout/stderr to logs\task-launcher.log instead of showing
+    ; a console.
     File "start.bat"
+    File "start-silent.bat"
     File "start-silent.vbs"
+    File "task-template.xml"
+    File "register-task.ps1"
 
     !insertmacro LogStep "Core: bootstrap pip"
     ; Embed Python does not ship with venv/pip. Bootstrap pip with get-pip.py and
@@ -292,12 +317,15 @@ Section "-Core" SEC_CORE
     !insertmacro AbortOnExecFailure "Install Python dependencies"
 
     !insertmacro LogStep "Core: write shortcuts"
-    ; Shortcuts
+    ; Shortcuts - since the gateway runs at logon and the UI is just a
+    ; web page on http://localhost:8130, the desktop shortcut opens the
+    ; URL directly. start.bat is kept for advanced/debug usage but is
+    ; not exposed as a shortcut to avoid confusing users who would then
+    ; run a second copy in a console.
     !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     CreateDirectory "$SMPROGRAMS\$ICONS_GROUP"
     CreateShortCut "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME}.lnk" "$INSTDIR\start.bat"
-    CreateShortCut "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME} (静默启动).lnk" "$INSTDIR\start-silent.vbs"
-    CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\start-silent.vbs"
+    CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\start.bat"
     !insertmacro MUI_STARTMENU_WRITE_END
 
     !insertmacro LogStep "Core: done"
@@ -306,7 +334,12 @@ SectionEnd
 Section "Autostart" SEC_AUTOSTART
     !insertmacro LogStep "Autostart: register scheduled task"
     DetailPrint "正在注册开机自启任务..."
-    nsExec::ExecToLog 'schtasks /create /tn "QMT Gateway" /tr "wscript.exe \"$INSTDIR\start-silent.vbs\"" /sc onlogon /rl limited /f'
+
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\register-task.ps1" -InstallDir "$INSTDIR"'
+    !insertmacro AbortOnExecFailure "Register scheduled task"
+
+    Delete "$INSTDIR\task-template.xml"
+    Delete "$INSTDIR\register-task.ps1"
 SectionEnd
 
 Section "Firewall" SEC_FIREWALL
@@ -323,11 +356,6 @@ SectionEnd
     !insertmacro MUI_DESCRIPTION_TEXT ${SEC_FIREWALL} $(DESC_SEC_FIREWALL)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
-Function OpenBrowser
-    ExecShell "open" "http://localhost:8130"
-FunctionEnd
-
-
 Section -AdditionalIcons
     !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     WriteIniStr "$INSTDIR\${PRODUCT_NAME}.url" "InternetShortcut" "URL" "${PRODUCT_WEB_SITE}"
@@ -343,6 +371,13 @@ Section -Post
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "DisplayVersion" "${PRODUCT_VERSION}"
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "URLInfoAbout" "${PRODUCT_WEB_SITE}"
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "Publisher" "${PRODUCT_PUBLISHER}"
+
+    DetailPrint "正在启动 QMT Gateway..."
+    Exec 'wscript.exe "$INSTDIR\start-silent.vbs"'
+    !insertmacro LogLine "Gateway launch initiated (non-blocking)"
+
+    DetailPrint "等待服务就绪，即将打开浏览器..."
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$r=0;while($$r -lt 30){try{$$c=New-Object Net.Sockets.TcpClient(''localhost'',8130);$$c.Close();break}catch{Start-Sleep 1;$$r++}};if($$r -lt 30){Start-Process ''http://localhost:8130''}"'
 SectionEnd
 
 ; Uninstaller
@@ -391,7 +426,10 @@ Section Uninstall
     RMDir /r "$INSTDIR\.venv"
     RMDir /r "$INSTDIR\app"
     Delete "$INSTDIR\start.bat"
+    Delete "$INSTDIR\start-silent.bat"
     Delete "$INSTDIR\start-silent.vbs"
+    Delete "$INSTDIR\task-template.xml"
+    Delete "$INSTDIR\register-task.ps1"
     Delete "$INSTDIR\uninstall.exe"
     Delete "$INSTDIR\${PRODUCT_NAME}.url"
     ; Clean any other top-level files (e.g. qmt_gateway sources installed at root)
