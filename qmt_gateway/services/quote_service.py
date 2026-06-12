@@ -194,7 +194,11 @@ class QuoteService:
             if not symbol:
                 return
 
+            # 取一次 now，三个 K 线级别共享；同时也用于回调载荷。
+            # 避免每个 _update_bar / 回调都再 datetime.now() —— 全市场 tick 时
+            # 这能省下 ~15000 次系统调用 / 3 秒。
             now = datetime.datetime.now()
+            timestamp_iso = now.isoformat()
 
             # 更新 1分钟 K 线
             bar_1m = self._update_bar(
@@ -220,16 +224,19 @@ class QuoteService:
                 interval=86400,
             )
 
+            # 构造回调载荷：直接复用 timestamp_iso，不再重复格式化。
+            payload = {
+                "symbol": symbol,
+                "timestamp": timestamp_iso,
+                "1m": bar_1m,
+                "30m": bar_30m,
+                "1d": bar_1d,
+            }
+
             # 触发回调
             for callback in self._callbacks:
                 try:
-                    callback({
-                        "symbol": symbol,
-                        "timestamp": now.isoformat(),
-                        "1m": bar_1m,
-                        "30m": bar_30m,
-                        "1d": bar_1d,
-                    })
+                    callback(payload)
                 except Exception as e:
                     logger.error(f"行情回调错误: {e}")
 
@@ -255,8 +262,14 @@ class QuoteService:
             更新后的 K 线数据
         """
         price = tick.get("lastPrice", 0)
-        volume = tick.get("volume", 0)
-        amount = tick.get("amount", 0)
+        # K 线合成（含 volume / amount 的末 tick 锁定、ref_volume 状态机、跨 bar 行为）见
+        # docs/quote-bar-synthesis.md。
+        raw_volume = tick.get("volume")
+        raw_amount = tick.get("amount")
+        new_volume = raw_volume if raw_volume is not None else 0
+        new_amount = raw_amount if raw_amount is not None else 0
+        has_volume = raw_volume is not None and raw_volume > 0
+        has_amount = raw_amount is not None and raw_amount > 0
 
         # 计算当前 K 线的时间戳
         if interval == 86400:  # 日线
@@ -271,14 +284,18 @@ class QuoteService:
         if bar_key not in bar_cache:
             # 新 K 线
             bar_cache.clear()
+            # ref_volume / ref_amount：上一根 bar 区间内最后一个 tick.volume / .amount。
+            # 首根 bar 初始化为 0（视作"开盘前"）。
             bar_cache[bar_key] = {
                 "open": price,
                 "high": price,
                 "low": price,
                 "close": price,
-                "volume": volume,
-                "amount": amount,
+                "volume": 0,
+                "amount": 0.0,
                 "time": bar_time.isoformat(),
+                "ref_volume": 0,
+                "ref_amount": 0.0,
             }
         else:
             # 更新现有 K 线
@@ -286,8 +303,31 @@ class QuoteService:
             bar["high"] = max(bar["high"], price)
             bar["low"] = min(bar["low"], price)
             bar["close"] = price
-            bar["volume"] += volume
-            bar["amount"] += amount
+
+        # 1d 走覆盖；日内级别走 ref 减法。详细见 docs/quote-bar-synthesis.md。
+        if interval == 86400:
+            if has_volume:
+                bar_cache[bar_key]["volume"] = new_volume
+            if has_amount:
+                bar_cache[bar_key]["amount"] = new_amount
+        else:
+            if has_volume:
+                bar_cache[bar_key]["volume"] = max(
+                    0, new_volume - bar_cache[bar_key]["ref_volume"]
+                )
+            if has_amount:
+                bar_cache[bar_key]["amount"] = max(
+                    0.0, new_amount - bar_cache[bar_key]["ref_amount"]
+                )
+
+        # 末 tick 锁定：无论是否跨 bar，都把"本 tick.volume"作为新的 ref_volume，
+        # 这样下一根 bar 进来的第一个 tick 就能立刻算出正确的 delta。
+        # 缺字段（None / 0）时不更新 ref，避免把坏值灌进基线。
+        if interval != 86400:
+            if has_volume:
+                bar_cache[bar_key]["ref_volume"] = new_volume
+            if has_amount:
+                bar_cache[bar_key]["ref_amount"] = new_amount
 
         return bar_cache[bar_key]
 

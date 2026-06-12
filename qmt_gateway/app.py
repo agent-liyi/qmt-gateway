@@ -1136,8 +1136,10 @@ def create_app():
         if not check_init_required():
             # 启动定时任务
             scheduler.start()
-            # 启动行情服务
+            # 启动行情服务（同步订阅 + 异步 worker）
             quote_ws.start()
+            # 在事件循环中显式 await 一次 worker 启动，避免 schedule 漂移
+            await quote_ws.start_async()
             logger.info("应用启动完成")
 
     @app.on_event("shutdown")
