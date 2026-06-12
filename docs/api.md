@@ -6,8 +6,6 @@
 { "code": 0, "message": "ok", "data": { ... } }
 ```
 
-> 本文档对应 `fix/quote-volume-amount-cumulative` 分支（与 PR #75 同步）。接口路径若调整，以仓库源码为准。
-
 ---
 
 ## 目录
