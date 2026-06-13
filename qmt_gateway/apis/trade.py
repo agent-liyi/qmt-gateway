@@ -4,7 +4,6 @@
 """
 
 import datetime
-import sqlite3
 from decimal import Decimal
 
 from fastcore.xml import to_xml
@@ -248,39 +247,6 @@ def _snapshot_asset(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> Asset | None:
     return asset
 
 
-def _snapshot_positions(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> None:
-    rows = trade_service.get_positions()
-    today = datetime.date.today()
-    if rows is None:
-        return
-    try:
-        db.execute_write(
-            "delete from positions where portfolio_id = ? and dt = ?",
-            (portfolio_id, today),
-        )
-        for row in rows:
-            symbol = str(_get_value(row, "symbol", "")).strip()
-            if not symbol:
-                continue
-            shares = _as_float(_get_value(row, "shares", 0))
-            if shares <= 0:
-                continue
-            price = _as_float(_get_value(row, "cost", _get_value(row, "price", 0)))
-            position = Position(
-                portfolio_id=portfolio_id,
-                dt=today,
-                asset=symbol,
-                shares=shares,
-                avail=_as_float(_get_value(row, "avail", 0)),
-                price=price,
-                profit=_as_float(_get_value(row, "profit", 0)),
-                mv=_as_float(_get_value(row, "market_value", 0)),
-            )
-            db["positions"].upsert(position.to_dict(), pk=Position.__pk__)
-    except sqlite3.OperationalError as exc:
-        logger.warning(f"持仓快照写入失败，回退到已有缓存数据: {exc}")
-
-
 def get_latest_asset_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
     # region debug-point asset-cache-read
     asset = _get_latest_asset(portfolio_id)
@@ -321,7 +287,7 @@ def get_latest_asset_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> dict:
 
 
 def get_latest_positions_data(portfolio_id: str = DEFAULT_PORTFOLIO_ID) -> list[dict]:
-    _snapshot_positions(portfolio_id)
+    trade_service.refresh_positions_snapshot()
     positions = [p for p in _get_latest_positions(portfolio_id) if p.shares > 0]
     total = get_latest_asset_data(portfolio_id).get("total", 0)
     name_map = _get_stock_name_map([p.asset for p in positions])

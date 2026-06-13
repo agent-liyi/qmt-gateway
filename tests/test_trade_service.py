@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from qmt_gateway.core.enums import OrderStatus
+from qmt_gateway.core.enums import OrderSide, OrderStatus
 from qmt_gateway.services.trade_service import TradeService
 
 
@@ -426,16 +426,6 @@ def test_refresh_positions_snapshot_persists_to_db(monkeypatch):
     deleted = []
     upserted = []
 
-    class FakeConn:
-        def execute(self, sql, params=()):
-            deleted.append((sql, params))
-            return SimpleNamespace(fetchone=lambda: None)
-
-    monkeypatch.setattr(
-        trade_service_module.db,
-        "conn",
-        SimpleNamespace(execute=lambda sql, params=(): SimpleNamespace(fetchone=lambda: None)),
-    )
     monkeypatch.setattr(
         trade_service_module.db,
         "execute_write",
@@ -496,6 +486,137 @@ def test_persist_callback_trade_refreshes_positions(monkeypatch):
     service.persist_callback_trade(xt_trade)
 
     assert refreshed == [True]
+
+
+@pytest.mark.parametrize(
+    ("method_name", "expected_side"),
+    [
+        ("buy", OrderSide.BUY),
+        ("sell", OrderSide.SELL),
+    ],
+)
+def test_order_wrappers_defer_xtconstant_lookup_until_place_order(
+    monkeypatch, method_name, expected_side
+):
+    service = TradeService()
+    captured = []
+
+    def fake_place_order(symbol, price, shares, side, qtoid="", strategy_id=""):
+        captured.append((symbol, price, shares, side, qtoid, strategy_id))
+        return {"success": True}
+
+    monkeypatch.setattr(service, "_place_order", fake_place_order)
+    monkeypatch.setattr(
+        trade_service_module,
+        "_get_xtquant",
+        lambda name: (_ for _ in ()).throw(AssertionError("wrapper should not load xtconstant")),
+    )
+
+    result = getattr(service, method_name)(
+        "601398.SH", 7.29, 100, qtoid="q-1", strategy_id="grid"
+    )
+
+    assert result == {"success": True}
+    assert captured == [
+        ("601398.SH", 7.29, 100, expected_side, "q-1", "grid")
+    ]
+
+
+def test_persist_callback_trade_marks_partial_from_cumulative_fills(monkeypatch):
+    service = TradeService()
+    stored_trades = []
+    updated = {}
+    scheduled = []
+
+    monkeypatch.setattr(
+        service,
+        "_persist_trade_snapshot",
+        lambda trade, *, foid, cid: stored_trades.append(SimpleNamespace(shares=trade["shares"])),
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "get_order_by_foid",
+        lambda foid: SimpleNamespace(qtoid="q-1", shares=1000),
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "get_trades_by_qtoid",
+        lambda qtoid: list(stored_trades),
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "update_order",
+        lambda qtoid, **kwargs: updated.update({"qtoid": qtoid, **kwargs}),
+    )
+    monkeypatch.setattr(service, "_schedule_position_snapshot", lambda: scheduled.append(True))
+
+    xt_trade = SimpleNamespace(
+        traded_id="t-1",
+        order_remark="q-1",
+        stock_code="601398.SH",
+        order_type=24,
+        traded_price=7.29,
+        traded_volume=400,
+        traded_amount=2916.0,
+        traded_time=time.time(),
+        order_id="o-1",
+        order_sysid="c-1",
+    )
+
+    service.persist_callback_trade(xt_trade)
+
+    assert updated["qtoid"] == "q-1"
+    assert updated["filled"] == 400.0
+    assert updated["status"] == OrderStatus.PART_SUCC
+    assert scheduled == [True]
+
+
+def test_persist_callback_trade_marks_succeeded_when_cumulative_fills_complete(monkeypatch):
+    service = TradeService()
+    existing_trades = [SimpleNamespace(shares=400.0)]
+    current_trades = []
+    updated = {}
+
+    monkeypatch.setattr(
+        service,
+        "_persist_trade_snapshot",
+        lambda trade, *, foid, cid: current_trades.append(SimpleNamespace(shares=trade["shares"])),
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "get_order_by_foid",
+        lambda foid: SimpleNamespace(qtoid="q-1", shares=1000),
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "get_trades_by_qtoid",
+        lambda qtoid: existing_trades + current_trades,
+    )
+    monkeypatch.setattr(
+        trade_service_module.db,
+        "update_order",
+        lambda qtoid, **kwargs: updated.update({"qtoid": qtoid, **kwargs}),
+    )
+    monkeypatch.setattr(service, "_schedule_position_snapshot", lambda: None)
+
+    xt_trade = SimpleNamespace(
+        traded_id="t-2",
+        order_remark="q-1",
+        stock_code="601398.SH",
+        order_type=24,
+        traded_price=7.30,
+        traded_volume=600,
+        traded_amount=4380.0,
+        traded_time=time.time(),
+        order_id="o-1",
+        order_sysid="c-2",
+    )
+
+    service.persist_callback_trade(xt_trade)
+
+    assert updated["qtoid"] == "q-1"
+    assert updated["filled"] == 1000.0
+    assert updated["status"] == OrderStatus.SUCCEEDED
 
 
 def test_try_auto_start_qmt_succeeds_on_first_attempt(monkeypatch):

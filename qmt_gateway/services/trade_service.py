@@ -3,6 +3,7 @@
 基于 qmt_broker.py 封装 xttrader 交易功能。
 """
 
+import concurrent.futures
 import datetime
 import io
 import locale
@@ -206,6 +207,10 @@ class TradeService:
         self._auto_start_max_retries = 2
         self._auto_reconnect_lock = threading.Lock()
         self._auto_reconnect_running = False
+        # 持仓快照线程池：确保同一时间最多一个刷新任务 (#91)
+        self._position_snapshot_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="position-snapshot"
+        )
 
     def _set_connection_state(self, connected: bool, message: str) -> str:
         self._connected = connected
@@ -1033,27 +1038,39 @@ class TradeService:
                 self._account = None
                 self._set_connection_state(False, "交易接口已断开")
 
-    def buy(self, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = "") -> dict:
-        """买入股票
+    def _place_order(
+        self,
+        symbol: str,
+        price: float,
+        shares: int,
+        side: OrderSide,
+        qtoid: str = "",
+        strategy_id: str = "",
+    ) -> dict:
+        """下单公共方法，buy/sell 共用 (#83, #90)
 
         Args:
             symbol: 股票代码
             price: 委托价格（0 表示市价）
             shares: 委托数量
+            side: 买卖方向
+            qtoid: 客户端指定的订单 ID，为空时自动生成
+            strategy_id: 策略 ID
 
         Returns:
             委托结果
         """
-        if not self._connected:
+        if not self._ensure_connected():
             return {"success": False, "error": "交易接口未连接"}
 
         try:
             xtconstant = _get_xtquant("xtconstant")
             resolved_qtoid = qtoid or str(uuid4())
+            order_type = xtconstant.STOCK_BUY if side == OrderSide.BUY else xtconstant.STOCK_SELL
 
             # 确定价格类型
             if price <= 0:
-                # 市价买入
+                # 市价
                 market = symbol.split(".")[1].upper() if "." in symbol else "SH"
                 if market == "SH":
                     price_type = xtconstant.MARKET_SH_CONVERT_5_CANCEL
@@ -1067,7 +1084,7 @@ class TradeService:
             order_id = self._trader.order_stock(
                 account=self._account,
                 stock_code=symbol,
-                order_type=xtconstant.STOCK_BUY,
+                order_type=order_type,
                 order_volume=shares,
                 price_type=price_type,
                 price=price,
@@ -1080,7 +1097,7 @@ class TradeService:
 
             self._persist_submitted_order(
                 symbol=symbol,
-                side=OrderSide.BUY,
+                side=side,
                 price=price,
                 shares=shares,
                 qtoid=resolved_qtoid,
@@ -1090,68 +1107,17 @@ class TradeService:
             return {"success": True, "qtoid": resolved_qtoid, "order_id": str(order_id)}
 
         except Exception as e:
-            logger.error(f"买入失败: {e}")
+            side_name = "buy" if side == OrderSide.BUY else "sell"
+            logger.error(f"{side_name}失败: {e}")
             return {"success": False, "error": str(e)}
+
+    def buy(self, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = "") -> dict:
+        """买入股票"""
+        return self._place_order(symbol, price, shares, OrderSide.BUY, qtoid, strategy_id)
 
     def sell(self, symbol: str, price: float, shares: int, qtoid: str = "", strategy_id: str = "") -> dict:
-        """卖出股票
-
-        Args:
-            symbol: 股票代码
-            price: 委托价格（0 表示市价）
-            shares: 委托数量
-
-        Returns:
-            委托结果
-        """
-        if not self._connected:
-            return {"success": False, "error": "交易接口未连接"}
-
-        try:
-            xtconstant = _get_xtquant("xtconstant")
-            resolved_qtoid = qtoid or str(uuid4())
-
-            # 确定价格类型
-            if price <= 0:
-                # 市价卖出
-                market = symbol.split(".")[1].upper() if "." in symbol else "SH"
-                if market == "SH":
-                    price_type = xtconstant.MARKET_SH_CONVERT_5_CANCEL
-                else:
-                    price_type = xtconstant.MARKET_SZ_CONVERT_5_CANCEL
-                price = 0
-            else:
-                price_type = xtconstant.FIX_PRICE
-
-            # 下单
-            order_id = self._trader.order_stock(
-                account=self._account,
-                stock_code=symbol,
-                order_type=xtconstant.STOCK_SELL,
-                order_volume=shares,
-                price_type=price_type,
-                price=price,
-                strategy_name=strategy_id or "gateway",
-                order_remark=resolved_qtoid,
-            )
-
-            if order_id == -1:
-                return {"success": False, "error": "下单失败"}
-
-            self._persist_submitted_order(
-                symbol=symbol,
-                side=OrderSide.SELL,
-                price=price,
-                shares=shares,
-                qtoid=resolved_qtoid,
-                foid=str(order_id),
-                strategy_id=strategy_id,
-            )
-            return {"success": True, "qtoid": resolved_qtoid, "order_id": str(order_id)}
-
-        except Exception as e:
-            logger.error(f"卖出失败: {e}")
-            return {"success": False, "error": str(e)}
+        """卖出股票"""
+        return self._place_order(symbol, price, shares, OrderSide.SELL, qtoid, strategy_id)
 
     def cancel_order(self, order_id: str) -> dict:
         """撤单
@@ -1353,7 +1319,7 @@ class TradeService:
                     "qtoid": qtoid,
                     "symbol": t.stock_code,
                     "name": "",
-                    "side": "buy" if t.order_type == 23 else "sell",
+                    "side": self._convert_order_side(t.order_type),
                     "price": t.traded_price,
                     "shares": t.traded_volume,
                     "amount": t.traded_amount,
@@ -1542,7 +1508,10 @@ class TradeService:
         )
 
     def persist_callback_trade(self, xt_trade: Any) -> None:
-        """处理成交回调并将其映射回 qtoid。"""
+        """处理成交回调并将其映射回 qtoid。
+
+        根据累计成交量与委托量对比判断部分成交 / 全部成交 (#84)。
+        """
         try:
             trade = {
                 "tid": str(getattr(xt_trade, "traded_id", "") or ""),
@@ -1561,25 +1530,31 @@ class TradeService:
             self._persist_trade_snapshot(trade, foid=foid, cid=cid)
             db_order = db.get_order_by_foid(foid)
             if db_order is not None:
-                db.update_order(db_order.qtoid, status=OrderStatus.SUCCEEDED)
+                order_volume = float(db_order.shares or 0)
+                filled_volume = sum(
+                    float(getattr(item, "shares", 0) or 0)
+                    for item in db.get_trades_by_qtoid(db_order.qtoid)
+                )
+                if order_volume > 0 and filled_volume < order_volume:
+                    new_status = OrderStatus.PART_SUCC
+                else:
+                    new_status = OrderStatus.SUCCEEDED
+                db.update_order(db_order.qtoid, filled=filled_volume, status=new_status)
             self._schedule_position_snapshot()
         except Exception as e:
             logger.error(f"回调成交落库失败: {e}")
 
     def _schedule_position_snapshot(self) -> None:
-        """在后台线程中刷新持仓快照，避免阻塞 QMT 回调导致死锁 (#41)
+        """在后台线程池中刷新持仓快照，避免阻塞 QMT 回调导致死锁 (#41)
 
         on_stock_trade / on_stock_order 回调运行在 QMT 库的内部线程中。
         refresh_positions_snapshot() 内部需要调用 self._trader.query_stock_positions()，
         这会从 QMT 回调中再次进入 QMT 库，导致死锁或挂起，并最终使整个网关无响应。
 
-        因此，调度一个独立线程执行该操作，主流程立即返回。
+        使用 ThreadPoolExecutor(max_workers=1) 确保同一时间最多一个
+        持仓刷新任务在运行，避免短时间内大量成交回报创建过多线程 (#91)。
         """
-        threading.Thread(
-            target=self._safe_refresh_positions_snapshot,
-            name="position-snapshot-refresher",
-            daemon=True,
-        ).start()
+        self._position_snapshot_executor.submit(self._safe_refresh_positions_snapshot)
 
     def _safe_refresh_positions_snapshot(self) -> None:
         """包装 refresh_positions_snapshot，捕获并记录所有异常，避免后台线程崩溃。"""
