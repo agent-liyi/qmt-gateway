@@ -30,7 +30,7 @@
 | 默认监听 | `http://127.0.0.1:<server_port>`（端口见系统管理 `/api/system/port`） |
 | 数据来源 | QMT / xtquant（`xtdata` 行情，`xttrader` 交易）                       |
 | 鉴权方式 | 浏览器会话（cookie）或 `X-API-Key` 头                                 |
-| 实时推送 | WebSocket `/ws/quotes`（1m / 30m / 1d K 线，09:31 起）；`/ws/auction`（集合竞价撮合快照，09:20 ~ 09:25，规划中见 issue #81） |
+| 实时推送 | WebSocket `/ws/quotes`（1m / 30m / 1d K 线，09:31 起）；`/ws/auction`（集合竞价撮合快照，09:15 ~ 09:29:59） |
 
 ---
 
@@ -79,6 +79,14 @@ X-API-Key: qmt_xxx
 { "code": 0, "data": { "running": true, "clients": 2 } }
 ```
 
+### `GET /api/v1/auction/status`
+
+返回集合竞价 WebSocket 服务状态。
+
+```json
+{ "code": 0, "data": { "running": true, "clients": 1 } }
+```
+
 ### `WS /ws/quotes`
 
 实时推送通道。客户端协议：
@@ -109,7 +117,7 @@ qmt-gateway 使用 orjson 来实现 json.dump.
 > - 09:30:00 ~ 09:30:59 的 tick 落在 `bar.time = 09:31`；09:31:00 ~ 09:31:59 落在 `09:32`
 > - 第一根 1m bar = **09:31**（包含集合竞价的 open 与 volume）
 > - 第一根 30m bar = **10:00**（覆盖 09:30 ~ 10:00）
-> - 09:15 ~ 09:29:59 集合竞价期间 **不推送 K 线**（撮合快照走 `/ws/auction`，见 issue #81）
+> - 09:15 ~ 09:29:59 集合竞价期间 **不推送 K 线**（撮合快照走 `/ws/auction`）
 
 > **量纲规则**（xtquant tick 字段语义）：
 > - xtquant tick 中 `volume` / `amount` 是**当日累计成交**（自开盘起累计），不是本 tick 的 delta。
@@ -137,29 +145,71 @@ async def main():
 asyncio.run(main())
 ```
 
-### `WS /ws/auction` _（规划中，issue #81）_
+### `WS /ws/auction`
 
-集合竞价撮合行情独立通道。**仅在 09:20 ~ 09:25 推送**（不可撤单阶段，撮合价已稳定收敛；09:15 ~ 09:20 因价格剧烈波动且大量虚假报单而不发布）。
+集合竞价撮合行情独立通道，**09:15 ~ 09:29:59 期间推送**，每个 tick 推一条消息。
 
-设计意图：让"开盘瞬间需要立即产生策略信号"的客户端（如打板、跳空开盘）在 09:25 集合竞价结束时立刻拿到稳定开盘价，无需等到 09:30 第一个 tick。
+设计意图：让"开盘瞬间需要立即产生策略信号"的客户端（如打板、跳空开盘策略）在 09:25 集合竞价撮合那一帧立刻拿到稳定开盘价（`open != 0` 且 `volume > 0`），无需等到 09:30 第一个连续竞价 tick。
 
-集合竞价期间不做 K 线合成（与聚宽 `get_call_auction` / Tushare `acl()` 处理方式一致），只发原始撮合快照：
+集合竞价期间**不做 K 线合成**（与聚宽 `get_call_auction` / Tushare `acl()` 处理方式一致），原样转发 xtquant tick 的关键字段：
 
 ```json
 {
   "type": "auction",
-  "timestamp": "2026-06-12T09:23:45.000",
-  "data": {
-    "000001.SZ": { "price": 12.34, "volume": 100000, "amount": 1234000.0 },
-    "600000.SH": { "price":  8.56, "volume":  50000, "amount":  428000.0 }
-  }
+  "symbol": "000001.SZ",
+  "server_time": "2026-06-12T09:25:00.000",
+  "phase": "matching",
+  "price": 11.00,
+  "open": 11.00,
+  "high": 11.00,
+  "low": 11.00,
+  "volume": 23464,
+  "amount": 258104.0,
+  "stock_status": 2,
+  "last_close": 12.0
 }
 ```
 
-- `price` = `tick.lastPrice`（当前撮合价 / 预开盘价）
-- `volume` = `tick.volume`（集合竞价累计撮合量；09:25 锁定即开盘量）
-- `amount` = `tick.amount`
-- 推送频率：跟随 xtquant tick，每 ~3 秒一次
+字段说明（基于 [wiki "xtquant 全推 Tick 行为"](https://github.com/zillionare/qmt-gateway/wiki/xtquant-%E5%85%A8%E6%8E%A8-Tick-%E8%A1%8C%E4%B8%BA) 实测）：
+
+| 字段          | 说明                                                                   |
+| ------------- | ---------------------------------------------------------------------- |
+| `symbol`      | 证券代码                                                               |
+| `server_time` | 交易所推送时刻（毫秒精度，ISO 格式）；下游应以此为准，**不要用本地时钟** |
+| `phase`       | 子阶段：`auction_a`（09:15-09:19:59 可撤单）、`auction_b`（09:20-09:24:59 不可撤单）、`matching`（09:25-09:29:59 撮合后静默期） |
+| `price`       | `tick.lastPrice`：集合竞价段是虚拟撮合价，`matching` 起锁定为撮合成交价  |
+| `open` / `high` / `low` | 集合竞价段（A/B）全为 0；09:25 ± 几秒撮合那一帧 ⭐ 首次同时填入，且 `open = high = low = price = 撮合成交价` |
+| `volume`      | 当日累计成交量（手）；集合竞价段（A/B）为 0，撮合那一帧首次跳变到非零并锁定 |
+| `amount`      | 当日累计成交额（元），同 `volume`                                      |
+| `stock_status`| xtquant 状态码：`2`=集合竞价进行中，`3`=连续竞价就绪（撮合后到 09:30 之间） |
+| `last_close`  | 昨收价（前复权）                                                       |
+
+> **识别撮合那一帧**：`phase == "matching"` 且 `open != 0` 且 `volume > 0` 的第一条 tick 即为集合竞价撮合成交（深交所个股最快 09:25:00 整点；上交所指数最迟 09:25:09）。客户端可据此立刻产出 09:30 开盘的下单信号。
+
+> **推送频率**：跟随 xtquant tick，每 ~3 秒一条；个股在 09:15-09:25 共约 60-200 条 / 标的（上交所指数较稀疏）。
+
+订阅时段外的 tick 不会推送到本通道（连续竞价 tick 走 `/ws/quotes`）。
+
+**Python 客户端示例**：
+
+```python
+import asyncio, json, websockets
+
+async def open_signal():
+    open_prices = {}
+    async with websockets.connect("ws://127.0.0.1:8000/ws/auction") as ws:
+        async for msg in ws:
+            tick = json.loads(msg)
+            # 撮合那一帧：拿到稳定开盘价
+            if tick["phase"] == "matching" and tick["open"] > 0:
+                open_prices[tick["symbol"]] = tick["open"]
+                # 立即产出策略信号（无需等到 09:30）
+                ratio = tick["open"] / tick["last_close"]
+                if ratio > 1.05:
+                    print(f"{tick['symbol']} 跳空高开 {ratio:.2%}")
+
+asyncio.run(open_signal())
+```
 
 ---
 

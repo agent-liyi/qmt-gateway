@@ -4,6 +4,8 @@
 """
 
 from qmt_gateway.apis.api_keys import register_routes as register_api_key_routes
+from qmt_gateway.apis.auction import auction_ws
+from qmt_gateway.apis.auction import register_routes as register_auction_routes
 from qmt_gateway.apis.auth import login_required
 from qmt_gateway.apis.auth import register_routes as register_auth_routes
 from qmt_gateway.apis.history import register_routes as register_history_routes
@@ -17,6 +19,7 @@ from qmt_gateway.apis.trade import register_routes as register_trade_routes
 __all__ = [
     "login_required",
     "register_api_key_routes",
+    "register_auction_routes",
     "register_auth_routes",
     "register_history_routes",
     "register_ping_routes",
@@ -24,5 +27,6 @@ __all__ = [
     "register_trade_routes",
     "register_quotes_routes",
     "register_stock_routes",
+    "auction_ws",
     "quote_ws",
 ]

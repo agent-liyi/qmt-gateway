@@ -14,9 +14,11 @@ from loguru import logger
 from qmt_gateway.access_log import configure_access_log
 from qmt_gateway.apis import (
     login_required,
+    auction_ws,
     quote_ws,
     register_api_key_routes,
     register_ping_routes,
+    register_auction_routes,
     register_auth_routes,
     register_history_routes,
     register_quotes_routes,
@@ -333,6 +335,7 @@ def create_app():
     register_auth_routes(app)
     register_trade_routes(app)
     register_quotes_routes(app)
+    register_auction_routes(app)
     register_stock_routes(app)
     register_history_routes(app)
     register_api_key_routes(app)
@@ -1138,8 +1141,11 @@ def create_app():
             scheduler.start()
             # 启动行情服务（同步订阅 + 异步 worker）
             quote_ws.start()
+            # 集合竞价独立 endpoint：订阅 quote_service 的原始 tick
+            auction_ws.start()
             # 在事件循环中显式 await 一次 worker 启动，避免 schedule 漂移
             await quote_ws.start_async()
+            await auction_ws.start_async()
             logger.info("应用启动完成")
 
     @app.on_event("shutdown")
@@ -1147,6 +1153,7 @@ def create_app():
         """应用关闭时执行"""
         scheduler.stop()
         quote_ws.stop()
+        auction_ws.stop()
         logger.info("应用已关闭")
 
     return app

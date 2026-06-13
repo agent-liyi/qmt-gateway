@@ -17,58 +17,70 @@ import pytest
 from qmt_gateway.services.quote_service import QuoteService
 
 
-def _make_tick(symbol: str = "600000.SH", last_price: float = 10.0,
-              volume: int = 1000, amount: float = 10000.0) -> dict:
+# 默认 server_time：放在 10:00 连续竞价段，避免被集合竞价 / 订阅快照闸门拦截
+_DEFAULT_SERVER_DT = datetime.datetime(2026, 6, 12, 10, 0, 0)
+_DEFAULT_SERVER_MS = int(_DEFAULT_SERVER_DT.timestamp() * 1000)
+
+
+def _make_tick(
+    symbol: str = "600000.SH",
+    last_price: float = 10.0,
+    volume: int = 1000,
+    amount: float = 10000.0,
+    server_time_ms: int | None = None,
+) -> dict:
+    """构造一个 xtquant 风格的 tick 字典。
+
+    关键字段：
+    - ``time``: server_time（毫秒）；不指定则取 _DEFAULT_SERVER_MS
+    - ``code`` / ``lastPrice`` / ``volume`` / ``amount``: 与 xtquant 全推一致
+    """
     return {
         "code": symbol,
+        "time": server_time_ms if server_time_ms is not None else _DEFAULT_SERVER_MS,
         "lastPrice": last_price,
+        "open": last_price,
+        "high": last_price,
+        "low": last_price,
         "volume": volume,
         "amount": amount,
+        "lastClose": last_price,
+        "stockStatus": 3,
     }
+
+
+def _ms(dt: datetime.datetime) -> int:
+    """datetime → server_time 毫秒。"""
+    return int(dt.timestamp() * 1000)
 
 
 def test_on_tick_uses_one_now_for_all_bars(monkeypatch):
     """_on_tick 应只取一次 now，避免三个 _update_bar 内部各自 datetime.now()
     产生微小时间差，导致 1m / 30m / 1d 的 timestamp 出现不一致。
 
-    做法：mock QuoteService._is_trade_time / _update_bar，
-    在 _update_bar 上装一个计数器，第一次调用时记录 bar["time"]，后续断言相等。
+    做法：mock _update_bar 记录每次调用收到的 now 参数，断言三次 now 完全一致。
     """
     service = QuoteService()
 
-    seen_times: list[str] = []
+    seen_nows: list[datetime.datetime] = []
     seen_lock = threading.Lock()
 
-    real_update_bar = service._update_bar
-
     def spy_update_bar(bar_cache, tick, now, interval):
-        bar = real_update_bar(bar_cache, tick, now, interval)
         with seen_lock:
-            seen_times.append(bar["time"])
-        return bar
+            seen_nows.append(now)
+        return {"time": now.isoformat()}
 
     monkeypatch.setattr(service, "_is_trade_time", lambda: True)
     monkeypatch.setattr(service, "_update_bar", spy_update_bar)
 
-    # 固定 now 到交易时段（>= 09:30），避免被集合竞价闸门挡住。
-    fake_now = datetime.datetime(2026, 6, 12, 10, 0, 0)
-
-    class _FakeDateTime(datetime.datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return fake_now
-
-    monkeypatch.setattr(
-        "qmt_gateway.services.quote_service.datetime.datetime",
-        _FakeDateTime,
-    )
-
-    service._on_tick(_make_tick())
+    # tick 自带 server_time（10:00），不再依赖本地 now
+    service._on_tick(_make_tick(server_time_ms=_ms(datetime.datetime(2026, 6, 12, 10, 0, 0))))
 
     # 三个级别（1m / 30m / 1d）各走一次 _update_bar
-    assert len(seen_times) == 3
-    # 因为 _on_tick 取一次 now → 三个 bar 共享同一时间 → bar.time 也一致
-    assert seen_times[0] == seen_times[1] == seen_times[2]
+    assert len(seen_nows) == 3
+    # 关键不变量：三次调用共享同一 now（避免每个级别各自 datetime.now()
+    # 产生微小时间差）
+    assert seen_nows[0] == seen_nows[1] == seen_nows[2]
 
 
 def test_subscribe_unsubscribe_dedup():
@@ -240,20 +252,9 @@ def test_on_tick_skips_auction_period(monkeypatch):
     monkeypatch.setattr(service, "_is_trade_time", lambda: True)
     monkeypatch.setattr(service, "_update_bar", spy_update_bar)
 
-    # 模拟 09:20 集合竞价期间的 tick：通过 monkeypatch datetime
-    fake_now = datetime.datetime(2026, 6, 12, 9, 20, 30)
-
-    class _FakeDateTime(datetime.datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return fake_now
-
-    monkeypatch.setattr(
-        "qmt_gateway.services.quote_service.datetime.datetime",
-        _FakeDateTime,
-    )
-
-    service._on_tick(_make_tick())
+    # 09:20:30（集合竞价 B 段）的 tick——通过 server_time 控制，无需 mock datetime
+    auction_ms = _ms(datetime.datetime(2026, 6, 12, 9, 20, 30))
+    service._on_tick(_make_tick(server_time_ms=auction_ms))
 
     # 集合竞价期间不应进 _update_bar
     assert update_bar_calls == []
@@ -272,19 +273,104 @@ def test_on_tick_synthesizes_at_0930(monkeypatch):
     monkeypatch.setattr(service, "_is_trade_time", lambda: True)
     monkeypatch.setattr(service, "_update_bar", spy_update_bar)
 
-    fake_now = datetime.datetime(2026, 6, 12, 9, 30, 0, 500)
-
-    class _FakeDateTime(datetime.datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return fake_now
-
-    monkeypatch.setattr(
-        "qmt_gateway.services.quote_service.datetime.datetime",
-        _FakeDateTime,
-    )
-
-    service._on_tick(_make_tick())
+    cont_ms = _ms(datetime.datetime(2026, 6, 12, 9, 30, 0, 500_000))
+    service._on_tick(_make_tick(server_time_ms=cont_ms))
 
     # 三个级别（1m / 30m / 1d）都进了 _update_bar
     assert sorted(update_bar_calls) == [60, 1800, 86400]
+
+
+def test_on_tick_drops_subscription_snapshot():
+    """订阅瞬间 xtquant 推送的 server_time=0 快照 tick 必须被剔除。
+
+    特征：tick.time<=0；payload OHLV=0、lastPrice=lastClose=昨收价。
+    见 wiki "xtquant 全推 Tick 行为" §3.1。
+    """
+    service = QuoteService()
+
+    update_bar_calls: list[int] = []
+    tick_callback_calls: list[tuple] = []
+
+    def spy_update_bar(bar_cache, tick, now, interval):
+        update_bar_calls.append(interval)
+        return {}
+
+    def tick_cb(symbol, server_time, tick):
+        tick_callback_calls.append((symbol, server_time, tick))
+
+    service._is_trade_time = lambda: True
+    service._update_bar = spy_update_bar
+    service.subscribe_tick(tick_cb)
+
+    # time=0 的快照 tick
+    service._on_tick(_make_tick(server_time_ms=0))
+    # time<0 的异常 tick
+    service._on_tick(_make_tick(server_time_ms=-100))
+
+    assert update_bar_calls == []
+    assert tick_callback_calls == []
+
+
+def test_on_tick_fires_tick_callback_during_auction():
+    """集合竞价段（09:15~09:29:59）应触发 _tick_callbacks，但不进 _update_bar。"""
+    service = QuoteService()
+
+    update_bar_calls: list[int] = []
+    tick_calls: list[tuple] = []
+
+    def spy_update_bar(bar_cache, tick, now, interval):
+        update_bar_calls.append(interval)
+        return {}
+
+    def tick_cb(symbol, server_time, tick):
+        tick_calls.append((symbol, server_time, tick))
+
+    service._is_trade_time = lambda: True
+    service._update_bar = spy_update_bar
+    service.subscribe_tick(tick_cb)
+
+    # 09:20:30 集合竞价 B 段
+    t = datetime.datetime(2026, 6, 12, 9, 20, 30)
+    service._on_tick(_make_tick(symbol="000001.SZ", server_time_ms=_ms(t)))
+
+    assert update_bar_calls == []
+    assert len(tick_calls) == 1
+    sym, st, tick = tick_calls[0]
+    assert sym == "000001.SZ"
+    assert st == t
+    assert tick["code"] == "000001.SZ"
+
+
+def test_on_tick_fires_tick_callback_during_continuous():
+    """连续竞价段（>= 09:30）也触发 _tick_callbacks，便于下游做统一加工。"""
+    service = QuoteService()
+
+    tick_calls: list[tuple] = []
+
+    def tick_cb(symbol, server_time, tick):
+        tick_calls.append((symbol, server_time, tick))
+
+    service._is_trade_time = lambda: True
+    service.subscribe_tick(tick_cb)
+
+    t = datetime.datetime(2026, 6, 12, 10, 0, 0)
+    service._on_tick(_make_tick(symbol="600519.SH", server_time_ms=_ms(t)))
+
+    # 连续竞价段 → tick 回调被触发，且 K 线也被合成
+    assert len(tick_calls) == 1
+    assert tick_calls[0][0] == "600519.SH"
+
+
+def test_subscribe_tick_dedup():
+    """同一个 tick 回调重复 subscribe_tick 不应出现多次。"""
+    service = QuoteService()
+    cb = lambda symbol, st, tick: None
+
+    service.subscribe_tick(cb)
+    service.subscribe_tick(cb)
+    assert len(service._tick_callbacks) == 1
+
+    service.unsubscribe_tick(cb)
+    service.unsubscribe_tick(cb)
+    assert len(service._tick_callbacks) == 0
+

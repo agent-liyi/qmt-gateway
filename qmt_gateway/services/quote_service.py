@@ -46,6 +46,10 @@ class QuoteService:
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._callbacks: list[Callable] = []
+        # 原始 tick 回调列表：在 K 线合成之前触发，载荷为 (symbol, server_time, tick)。
+        # 与 _callbacks（K 线载荷）分离，专供 /ws/auction 等"不合成 K 线、直接转发原始
+        # tick"的下游使用。详见 apis/auction.py、issue #81。
+        self._tick_callbacks: list[Callable] = []
         self._bars_1m: dict[str, dict] = defaultdict(dict)
         self._bars_30m: dict[str, dict] = defaultdict(dict)
         self._bars_1d: dict[str, dict] = defaultdict(dict)
@@ -182,10 +186,25 @@ class QuoteService:
     def _on_tick(self, data: dict) -> None:
         """处理 tick 数据
 
+        xtquant 全推 tick 行为（详见 wiki "xtquant 全推 Tick 行为"）：
+        - 订阅瞬间会推送 1 条 server_time=0 的快照 tick（OHLV=0、lastClose=昨收）→ 必须剔除
+        - 09:15-09:25 集合竞价：lastPrice 是虚拟撮合价，open=high=low=0、volume=0、status=2
+        - 09:25 ± 几秒撮合那一帧：⭐ open/high/low/volume 同时首次填入，
+          open=high=low=lastPrice=撮合成交价
+        - 09:25-09:30 静默期：OHLV 锁定，仅 lastPrice 偶有微调
+        - 09:30 起：连续竞价，open 恒定，high/low 单调扩张，volume/amount 累计
+
+        本方法的分流策略：
+        1. 订阅快照（tick.time<=0 或日期不是今天）→ 直接 return
+        2. 09:15 ~ 09:29:59（基于 server_time）→ 仅广播给 _tick_callbacks
+           （/ws/auction 消费），不进 _update_bar
+        3. 09:30 起 → 走 K 线合成路径（/ws/quotes）
+
         Args:
             data: tick 数据字典
         """
-        # 非交易时间不处理数据
+        # 非交易时间不处理数据（_is_trade_time 用本地时钟做粗筛，避免在
+        # 非交易日浪费 CPU；细粒度的 server_time 闸门在下面）
         if not self._is_trade_time():
             return
 
@@ -194,19 +213,44 @@ class QuoteService:
             if not symbol:
                 return
 
-            # 取一次 now，三个 K 线级别共享；同时也用于回调载荷。
-            # 避免每个 _update_bar / 回调都再 datetime.now() —— 全市场 tick 时
-            # 这能省下 ~15000 次系统调用 / 3 秒。
-            now = datetime.datetime.now()
-
-            # 集合竞价期间（09:15~09:29:59）不合成 K 线。
-            # 第一根 1m bar 必须是 09:31（包含 09:30:00~09:30:59 的成交，open
-            # = 集合竞价开盘价、volume 包含集合竞价撮合量）；30m / 1d 同理。
-            # 集合竞价撮合行情走独立 endpoint /ws/auction（见 issue #81）。
-            # 详见 docs/know-how.md §1.2 / §1.3。
-            if now.time() < datetime.time(9, 30):
+            # 剔除订阅快照：xtquant 在订阅瞬间会推一条 time=0 的初始 tick。
+            # 这条 tick 解析后 server_time 落在 1970-01-01 凌晨，OHLV 全为 0、
+            # lastPrice = open = lastClose（即昨收价），如不剔除会污染下游
+            # "取首条非零 open"的逻辑。
+            tick_time_ms = data.get("time")
+            if not isinstance(tick_time_ms, (int, float)) or tick_time_ms <= 0:
                 return
 
+            try:
+                server_time = datetime.datetime.fromtimestamp(tick_time_ms / 1000)
+            except (OverflowError, OSError, ValueError):
+                return
+
+            # 与本地时钟做日期对比：如果 server_time 不是"今天"，多半是订阅快照
+            # 的残留或异常数据，丢弃。这里允许 ±1 天容差，避免跨零点边界误伤。
+            local_today = datetime.date.today()
+            if abs((server_time.date() - local_today).days) > 1:
+                return
+
+            # 集合竞价时段（09:15:00 ~ 09:29:59，按 server_time 判定）：
+            # 不合成 K 线，仅广播原始 tick 给 _tick_callbacks（/ws/auction）。
+            # 第一根 1m bar 落在 09:31，包含 09:30:00~09:30:59 的成交。
+            # 详见 docs/know-how.md §1.2 / §1.3、issue #80 / #81。
+            srv_t = server_time.time()
+            in_auction = datetime.time(9, 15) <= srv_t < datetime.time(9, 30)
+
+            if in_auction:
+                # 仅推原始 tick，不进 _update_bar、不触发 K 线回调
+                self._fire_tick_callbacks(symbol, server_time, data)
+                return
+
+            # 09:30 起：原始 tick 也广播一份（auction_ws 自己会过滤掉非集合竞价时段）
+            self._fire_tick_callbacks(symbol, server_time, data)
+
+            # 取一次 now，三个 K 线级别共享；同时也用于回调载荷。
+            # 用 server_time 做 bar 时间索引（与下游量化客户端对齐：bar.time
+            # 反映"这一笔成交在交易所发生的时刻"，而非"我们收到这条消息的时刻"）。
+            now = server_time
             timestamp_iso = now.isoformat()
 
             # 更新 1分钟 K 线
@@ -370,6 +414,38 @@ class QuoteService:
         """取消订阅"""
         if callback in self._callbacks:
             self._callbacks.remove(callback)
+
+    def subscribe_tick(self, callback: Callable) -> None:
+        """订阅原始 tick（K 线合成之前），载荷为 (symbol, server_time, tick)。
+
+        与 subscribe 的区别：
+        - subscribe：拿到的是合成后的 K 线载荷，仅在 server_time>=09:30 触发
+        - subscribe_tick：拿到的是原始 tick，从 09:15 开始（集合竞价段）就触发；
+          下游需要自行做时段过滤（参考 apis/auction.py 的 is_auction_time）
+
+        Args:
+            callback: 回调函数，签名 (symbol: str, server_time: datetime, tick: dict)
+        """
+        if callback not in self._tick_callbacks:
+            self._tick_callbacks.append(callback)
+
+    def unsubscribe_tick(self, callback: Callable) -> None:
+        """取消订阅原始 tick"""
+        if callback in self._tick_callbacks:
+            self._tick_callbacks.remove(callback)
+
+    def _fire_tick_callbacks(
+        self,
+        symbol: str,
+        server_time: datetime.datetime,
+        tick: dict,
+    ) -> None:
+        """安全触发原始 tick 回调；单个回调失败不影响其他。"""
+        for callback in self._tick_callbacks:
+            try:
+                callback(symbol, server_time, tick)
+            except Exception as e:
+                logger.error(f"原始 tick 回调错误: {e}")
 
     def is_running(self) -> bool:
         """检查服务是否运行中"""
