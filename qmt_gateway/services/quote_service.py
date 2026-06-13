@@ -315,6 +315,9 @@ class QuoteService:
             更新后的 K 线数据
         """
         price = tick.get("lastPrice", 0)
+        raw_open = tick.get("open")
+        raw_high = tick.get("high")
+        raw_low = tick.get("low")
         # K 线合成（xtquant 末 tick 锁定语义，跨 bar 时切换 ref）见 docs/know-how.md §1.4。
         raw_volume = tick.get("volume")
         raw_amount = tick.get("amount")
@@ -335,6 +338,27 @@ class QuoteService:
             bar_timestamp = ((timestamp // interval) + 1) * interval
             bar_time = datetime.datetime.fromtimestamp(bar_timestamp)
 
+        is_first_intraday_bar = (
+            (interval == 60 and bar_time.time() == datetime.time(9, 31))
+            or (interval == 1800 and bar_time.time() == datetime.time(10, 0))
+        )
+        use_cumulative_price_fields = interval == 86400 or is_first_intraday_bar
+        open_price = (
+            raw_open
+            if isinstance(raw_open, (int, float)) and raw_open > 0
+            else price
+        )
+        tick_high = (
+            raw_high
+            if isinstance(raw_high, (int, float)) and raw_high > 0
+            else price
+        )
+        tick_low = (
+            raw_low
+            if isinstance(raw_low, (int, float)) and raw_low > 0
+            else price
+        )
+
         bar_key = bar_time.isoformat()
 
         if bar_key not in bar_cache:
@@ -353,9 +377,9 @@ class QuoteService:
                 prev_ref_amount = old_bar.get("last_tick_amount", 0.0) or 0.0
             bar_cache.clear()
             bar_cache[bar_key] = {
-                "open": price,
-                "high": price,
-                "low": price,
+                "open": open_price if use_cumulative_price_fields else price,
+                "high": tick_high if use_cumulative_price_fields else price,
+                "low": tick_low if use_cumulative_price_fields else price,
                 "close": price,
                 "volume": 0,
                 "amount": 0.0,
@@ -369,8 +393,12 @@ class QuoteService:
             # 同区间内的 tick：更新 OHLC。
             # 注意：ref_volume 在本 bar 区间内**不更新**（与 docs/know-how.md §1.4 规则 3 一致）。
             bar = bar_cache[bar_key]
-            bar["high"] = max(bar["high"], price)
-            bar["low"] = min(bar["low"], price)
+            if use_cumulative_price_fields:
+                bar["high"] = max(bar["high"], tick_high)
+                bar["low"] = min(bar["low"], tick_low)
+            else:
+                bar["high"] = max(bar["high"], price)
+                bar["low"] = min(bar["low"], price)
             bar["close"] = price
 
         # 1d 走覆盖；日内级别走 ref 减法。详细见 docs/know-how.md。
@@ -393,11 +421,10 @@ class QuoteService:
         # 这是"本 bar 区间内的最后一个 tick"的真实记录：同 bar 内多 tick 时它会被
         # 反复刷新；跨 bar 时新 bar 读取它作为自己的 ref_volume 起点。
         # 缺字段（None / 0）时不更新，避免把坏值灌进基线。
-        if interval != 86400:
-            if has_volume:
-                bar_cache[bar_key]["last_tick_volume"] = new_volume
-            if has_amount:
-                bar_cache[bar_key]["last_tick_amount"] = new_amount
+        if has_volume:
+            bar_cache[bar_key]["last_tick_volume"] = new_volume
+        if has_amount:
+            bar_cache[bar_key]["last_tick_amount"] = new_amount
 
         return bar_cache[bar_key]
 

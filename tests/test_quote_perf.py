@@ -25,6 +25,9 @@ _DEFAULT_SERVER_MS = int(_DEFAULT_SERVER_DT.timestamp() * 1000)
 def _make_tick(
     symbol: str = "600000.SH",
     last_price: float = 10.0,
+    open_price: float | None = None,
+    high_price: float | None = None,
+    low_price: float | None = None,
     volume: int = 1000,
     amount: float = 10000.0,
     server_time_ms: int | None = None,
@@ -39,9 +42,9 @@ def _make_tick(
         "code": symbol,
         "time": server_time_ms if server_time_ms is not None else _DEFAULT_SERVER_MS,
         "lastPrice": last_price,
-        "open": last_price,
-        "high": last_price,
-        "low": last_price,
+        "open": last_price if open_price is None else open_price,
+        "high": last_price if high_price is None else high_price,
+        "low": last_price if low_price is None else low_price,
         "volume": volume,
         "amount": amount,
         "lastClose": last_price,
@@ -115,6 +118,8 @@ def test_update_bar_1d_uses_overwrite_with_cumulative():
     # 1d 走覆盖：bar.volume = tick.volume（最新累计）
     assert bar["volume"] == 5000
     assert bar["amount"] == 50000.0
+    assert bar["last_tick_volume"] == 5000
+    assert bar["last_tick_amount"] == 50000.0
 
 
 def test_update_bar_1m_xtquant_standard_kline_semantics():
@@ -278,6 +283,115 @@ def test_on_tick_synthesizes_at_0930(monkeypatch):
 
     # 三个级别（1m / 30m / 1d）都进了 _update_bar
     assert sorted(update_bar_calls) == [60, 1800, 86400]
+
+
+def test_on_tick_first_bar_inherits_auction_ohlc_and_volume():
+    """首根连续竞价 bar 应承接集合竞价价格语义与累计成交量。"""
+    service = QuoteService()
+    service._is_trade_time = lambda: True
+
+    symbol = "600000.SH"
+    tick1_ms = _ms(datetime.datetime(2026, 6, 12, 9, 30, 5))
+    tick2_ms = _ms(datetime.datetime(2026, 6, 12, 9, 30, 35))
+
+    service._on_tick(
+        _make_tick(
+            symbol=symbol,
+            last_price=10.02,
+            open_price=10.00,
+            high_price=10.03,
+            low_price=10.00,
+            volume=100000,
+            amount=1000000.0,
+            server_time_ms=tick1_ms,
+        )
+    )
+    service._on_tick(
+        _make_tick(
+            symbol=symbol,
+            last_price=10.01,
+            open_price=10.00,
+            high_price=10.05,
+            low_price=9.98,
+            volume=100300,
+            amount=1003500.0,
+            server_time_ms=tick2_ms,
+        )
+    )
+
+    bar_1m = next(iter(service._bars_1m[symbol].values()))
+    bar_30m = next(iter(service._bars_30m[symbol].values()))
+    bar_1d = next(iter(service._bars_1d[symbol].values()))
+
+    for bar in (bar_1m, bar_30m, bar_1d):
+        assert bar["open"] == 10.00
+        assert bar["high"] == 10.05
+        assert bar["low"] == 9.98
+        assert bar["close"] == 10.01
+
+    # 首根日内 bar 的累计成交应自然包含集合竞价撮合量。
+    assert bar_1m["volume"] == 100300
+    assert bar_30m["volume"] == 100300
+    assert bar_1d["volume"] == 100300
+
+
+def test_update_bar_non_first_intraday_bar_uses_last_price_extremes():
+    """非首根日内 bar 的 high/low 继续按区间内 lastPrice 估算。"""
+    service = QuoteService()
+    bar_cache: dict = {}
+
+    # 先走完首根 09:31 bar。
+    service._update_bar(
+        bar_cache,
+        _make_tick(
+            last_price=10.02,
+            open_price=10.00,
+            high_price=10.05,
+            low_price=9.98,
+            volume=100300,
+            amount=1003500.0,
+            server_time_ms=_ms(datetime.datetime(2026, 6, 12, 9, 30, 35)),
+        ),
+        datetime.datetime(2026, 6, 12, 9, 30, 35),
+        60,
+    )
+
+    # 进入下一根 09:32 bar；tick.high/tick.low 虽然带着当日累计极值，
+    # 但这一根应只按该区间内 lastPrice 做 max/min。
+    service._update_bar(
+        bar_cache,
+        _make_tick(
+            last_price=10.20,
+            open_price=10.00,
+            high_price=11.00,
+            low_price=9.50,
+            volume=100500,
+            amount=1005500.0,
+            server_time_ms=_ms(datetime.datetime(2026, 6, 12, 9, 31, 5)),
+        ),
+        datetime.datetime(2026, 6, 12, 9, 31, 5),
+        60,
+    )
+    bar = service._update_bar(
+        bar_cache,
+        _make_tick(
+            last_price=10.10,
+            open_price=10.00,
+            high_price=11.20,
+            low_price=9.40,
+            volume=100700,
+            amount=1007500.0,
+            server_time_ms=_ms(datetime.datetime(2026, 6, 12, 9, 31, 35)),
+        ),
+        datetime.datetime(2026, 6, 12, 9, 31, 35),
+        60,
+    )
+
+    assert bar["time"] == "2026-06-12T09:32:00"
+    assert bar["open"] == 10.20
+    assert bar["high"] == 10.20
+    assert bar["low"] == 10.10
+    assert bar["close"] == 10.10
 
 
 def test_on_tick_drops_subscription_snapshot():
