@@ -2,15 +2,22 @@
 
 09:15 ~ 09:29:59 推送原始撮合快照，**不做 K 线合成**。
 设计意图：让"开盘瞬间需要立即产生策略信号"的客户端（打板、跳空策略）
-在 09:25 撮合那一帧立刻拿到稳定开盘价，无需等到 09:30 第一个 tick。
+在 09:25 撮合那一帧立刻拿到稳定开盘价，无需等到 09:30 第一个 tick；
+同时让需要观察可撤单段撮合趋势的客户端也能拿到原始数据。
 
 参考 xtquant 全推 tick 行为实测（见 wiki "xtquant 全推 Tick 行为"）：
-- 09:15-09:20 (auction A 段，可撤单)：lastPrice 是虚拟撮合价，OHLV 全 0
-- 09:20-09:25 (auction B 段，不可撤单)：行为同 A 段
-- 09:25:00 ± 几秒：⭐ 撮合那一帧，open/high/low/volume 同时首次填入，
-  open = high = low = lastPrice = 撮合成交价
-- 09:25-09:30 静默期：OHLV 锁定，仅 lastPrice 偶有微调
-- 09:30:00 起：连续竞价（走 /ws/quotes）
+
+- 09:15 - 09:20（可撤单段，``phase = "auction_a"``）：lastPrice 是
+  虚拟撮合价，价格剧烈波动且大量虚假报单；OHLV 仍为 0；status=2。
+  **风险段**——简单策略应过滤，撮合大单监控类策略可能仍有用。
+- 09:20 - 09:25（不可撤单段，``phase = "auction_b"``）：lastPrice
+  是虚拟撮合价（已稳定收敛）；OHLV 仍为 0；status=2。
+- 09:25:00 ± 几秒（撮合那一帧 ⭐，``phase = "matching"``）：open /
+  high / low / volume 同时首次填入，``open = high = low = lastPrice
+  = 撮合成交价``。
+- 09:25 - 09:30（静默期，``phase = "matching"``）：OHLV 锁定，仅
+  lastPrice 偶有微调；status=3。
+- 09:30 起：连续竞价（走 /ws/quotes）。
 
 数据格式（每 tick 一条消息，不聚合）：
 ```json
@@ -27,7 +34,8 @@
 }
 ```
 
-撮合帧（09:25 ± 几秒）特征：open != 0 且 volume > 0，客户端可据此识别。
+撮合帧（09:25 ± 几秒）特征：``phase == "matching"`` 且 ``open != 0``
+且 ``volume > 0``，客户端可据此识别。
 """
 
 import asyncio
@@ -51,23 +59,34 @@ def _dumps_text(obj: Any) -> str:
     return _dumps(obj).decode("utf-8")
 
 
-# 集合竞价时段闸门
+# 集合竞价时段闸门。
+#
+# 起点 09:15、终点 09:30：诚实转发 xtquant 全推 tick 在集合竞价段（含
+# 09:15-09:20 的可撤单段）的所有数据。客户端通过 ``phase`` 字段判断
+# 当前在哪个阶段，自行决定是否使用：
+#
+# - ``auction_a``（09:15-09:20，可撤单段）：价格剧烈波动且大量虚假
+#   报单，**风险段**——简单策略可丢弃，撮合大单监控类策略可能仍有用。
+# - ``auction_b``（09:20-09:25，不可撤单段）：撮合价稳定收敛。
+# - ``matching``（09:25-09:30，含 09:25 撮合那一帧 ⭐）：开盘价权威定价时刻。
+#
+# >= 09:30 走 /ws/quotes 的 K 线合成路径，本通道不再发布。
 AUCTION_START = datetime.time(9, 15, 0)
-AUCTION_END = datetime.time(9, 30, 0)  # 不含（>= 09:30 走 /ws/quotes）
+AUCTION_END = datetime.time(9, 30, 0)
 
 
 def is_auction_time(server_time: datetime.datetime) -> bool:
-    """判断 server_time 是否在集合竞价时段（09:15 ~ 09:29:59）。"""
+    """判断 server_time 是否在集合竞价发布窗口（09:15 ~ 09:29:59）。"""
     t = server_time.time()
     return AUCTION_START <= t < AUCTION_END
 
 
 def auction_phase(server_time: datetime.datetime) -> str:
-    """返回集合竞价子阶段标签，便于客户端识别撮合时刻。
+    """返回集合竞价子阶段标签，便于客户端识别撮合时刻并按阶段过滤。
 
-    - auction_a: 09:15 ~ 09:19:59（可撤单）
-    - auction_b: 09:20 ~ 09:24:59（不可撤单）
-    - matching:  09:25 ~ 09:29:59（撮合后静默期，open/volume 锁定）
+    - ``auction_a``: 09:15 ~ 09:19:59（可撤单段；价格剧烈波动 + 虚假报单）
+    - ``auction_b``: 09:20 ~ 09:24:59（不可撤单段；撮合价稳定收敛）
+    - ``matching``:  09:25 ~ 09:29:59（含 09:25 ± 几秒撮合那一帧 ⭐ + 静默期）
     """
     t = server_time.time()
     if t < datetime.time(9, 20):
