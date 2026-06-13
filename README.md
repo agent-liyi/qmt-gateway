@@ -23,16 +23,24 @@
 | QMT | 安装在本机，已完成授权 |
 | xtquant | 通过配置的 QMT 路径可加载 |
 
-## 快速开始
+## 安装
 
-### 1. 克隆仓库
+### 方式一：Windows 安装程序（推荐）
+
+从 [Releases](https://github.com/zillionare/qmt-gateway/releases) 页面下载最新的 Windows 安装程序，双击运行即可。安装程序会自动完成 Python 环境配置、依赖安装和服务启动。
+
+<!-- TODO: 补充安装程序截图 -->
+
+### 方式二：从源码安装
+
+#### 1. 克隆仓库
 
 ```bat
 git clone https://github.com/zillionare/qmt-gateway.git
 cd qmt-gateway
 ```
 
-### 2. 安装依赖
+#### 2. 安装依赖
 
 运行安装脚本，自动检测 Python 3.13+、创建虚拟环境并安装所有依赖：
 
@@ -40,17 +48,26 @@ cd qmt-gateway
 setup-venv.bat
 ```
 
-### 3. 启动服务
+#### 3. 启动服务
 
 ```bat
 start-qmt-gateway.bat
 ```
 
-服务启动后访问 **http://localhost:8130**。首次运行会进入初始化向导，引导你配置 QMT 路径、创建管理员账号、设置交易密码和可选的自动启动。
+## 首次使用
 
-### 4. 使用
+服务启动后访问 **http://localhost:8130**。首次运行会进入初始化向导，引导你完成以下配置：
 
-- **浏览器** — 打开 `http://localhost:8130`，用向导中设置的管理员密码登录
+1. **QMT 路径** — 指定 QMT 客户端安装目录
+2. **管理员账号** — 设置 Web 管理界面的登录密码
+3. **QMT 交易密码**（可选）— 用于自动启动 QMT 时填入密码
+4. **自动启动**（可选）— 网关启动时自动拉起 QMT 并完成登录
+
+<!-- TODO: 补充初始化向导截图 -->
+
+配置完成后：
+
+- **浏览器** — 打开 `http://localhost:8130`，用设置的管理员密码登录
 - **程序化访问** — 在 Web UI 中创建 API Key，请求时带上 `X-API-Key` 请求头
 
 ## 配置说明
