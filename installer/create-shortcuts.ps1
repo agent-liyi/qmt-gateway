@@ -69,12 +69,89 @@ $smAppDir = Join-Path $startMenuRoot $StartMenuDir
 $desktopRoot = [Environment]::GetFolderPath('Desktop')
 
 # 清理可能存在的旧乱码快捷方式（重装场景）
+# 匹配规则：
+#   1. 文件名含 QMT（英文）
+#   2. 文件名含 "交易" 等中文
+#   3. 文件名匹配老/新命名（qmt-gateway / 匡醍 / Uninstall / Website）
+# mojibake 的 .lnk 文件名（"匡醍" UTF-8 字节被当 GBK 解码后的乱码）
+# 也被 qmt-gateway / QMT / 交易 之一命中，不需要单独处理
 Get-ChildItem -LiteralPath $startMenuRoot -Filter '*.lnk' -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match 'QMT' -or $_.Name -match 'æŠ•' -or $_.Name -match '交易' } |
-    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    Where-Object {
+        $n = $_.Name
+        $n -match 'qmt-gateway' -or `
+        $n -match 'QMT' -or `
+        $n -match '交易' -or `
+        $n -match '匡醍' -or `
+        $n -match 'Uninstall' -or `
+        $n -match 'Website'
+    } |
+    ForEach-Object {
+        try {
+            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+            Write-Host "Cleaned stale shortcut: $($_.FullName)"
+        } catch {
+            Write-Warning "Failed to remove $($_.FullName): $_"
+        }
+    }
+
+# 同时清掉旧版留下的"qmt-gateway" / 中文名空目录（含死链的目录本身要删）
+# 也清掉双重编码的 mojibake 目录——UTF-8 字节被再次 UTF-8 编码后会变成
+# 'C3 A8 C2 BF ...' 这种模式，文件名校验逻辑里硬编码这个 hex 模式匹配。
+foreach ($stale_dir_name in @('qmt-gateway', '匡醍 QMT 交易网关', '迅投 QMT 交易网关')) {
+    $stale_dir = Join-Path $startMenuRoot $stale_dir_name
+    if (Test-Path -LiteralPath $stale_dir) {
+        try {
+            $resolved = (Resolve-Path -LiteralPath $stale_dir).Path
+            $target = (Resolve-Path -LiteralPath $smAppDir -ErrorAction SilentlyContinue)
+            if (-not $target -or $resolved -ne $target.Path) {
+                Remove-Item -LiteralPath $stale_dir -Recurse -Force -ErrorAction Stop
+                Write-Host "Cleaned stale start menu folder: $stale_dir"
+            }
+        } catch {
+            Write-Warning "Failed to remove stale folder $stale_dir : $_"
+        }
+    }
+}
+
+# 清掉双重 UTF-8 编码的 mojibake 目录。判定标准：
+#   文件名含 QMT 字符串 + 文件名字节同时含 0xC2/0xC3（UTF-8 双字节前缀）
+#   典型输出就是 '匡醍' 被错误地当作 ASCII 再编码一次的结果
+Get-ChildItem -LiteralPath $startMenuRoot -Directory -ErrorAction SilentlyContinue |
+    Where-Object {
+        $n = $_.Name
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($n)
+        $has_c2_c3 = ($bytes -contains 0xC2) -or ($bytes -contains 0xC3)
+        $has_qmt = $n -match 'QMT'
+        $has_qmt -and $has_c2_c3
+    } |
+    ForEach-Object {
+        try {
+            $target = (Resolve-Path -LiteralPath $smAppDir -ErrorAction SilentlyContinue)
+            if (-not $target -or $_.FullName -ne $target.Path) {
+                Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop
+                Write-Host "Cleaned mojibake start menu folder: $($_.FullName)"
+            }
+        } catch {
+            Write-Warning "Failed to remove mojibake folder $($_.FullName): $_"
+        }
+    }
+
 Get-ChildItem -LiteralPath $desktopRoot -Filter '*.lnk' -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match 'QMT' -or $_.Name -match 'æŠ•' -or $_.Name -match '交易' } |
-    ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+    Where-Object {
+        $n = $_.Name
+        $n -match 'qmt-gateway' -or `
+        $n -match 'QMT' -or `
+        $n -match '交易' -or `
+        $n -match '匡醍'
+    } |
+    ForEach-Object {
+        try {
+            Remove-Item -LiteralPath $_.FullName -Force -ErrorAction Stop
+            Write-Host "Cleaned stale desktop shortcut: $($_.FullName)"
+        } catch {
+            Write-Warning "Failed to remove $($_.FullName): $_"
+        }
+    }
 
 # 1. 启动：打开浏览器（带端口探测）
 if ($Actions -contains 'Start') {
