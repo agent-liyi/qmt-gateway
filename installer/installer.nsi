@@ -257,8 +257,13 @@ Section "-Core" SEC_CORE
     CreateDirectory "$INSTDIR\data"
 
     !insertmacro LogStep "Core: copy embedded Python"
-    ; Copy embedded Python distribution
+    ; Copy embedded Python distribution. RMDir MUST run before File "python-embed.zip":
+    ; previous installs may leave python.exe / python313.dll etc. locked, which makes
+    ; the tar extract later report "Can't unlink already-existing object" and exit 1.
+    ; If we File the zip first and then RMDir, the zip gets wiped along with the
+    ; old python dir, and tar then fails with "Failed to open '...python-embed.zip'".
     DetailPrint "正在释放内嵌 Python 3.13..."
+    RMDir /r "$INSTDIR\python"
     SetOutPath "$INSTDIR\python"
     File "python-embed.zip"
 
@@ -268,10 +273,6 @@ Section "-Core" SEC_CORE
     ; tar -xf supports zip archives and handles Unicode paths reliably,
     ; unlike PowerShell 5.1's Expand-Archive which intermittently fails with
     ; 'Cannot access path' under CJK install paths.
-    ; 先把 $INSTDIR\python 下旧文件清掉，否则 tar 报 "Can't unlink already-existing object"
-    ; 退出 1——这是 build 77→78 安装失败的根因。
-    RMDir /r "$INSTDIR\python"
-    SetOutPath "$INSTDIR\python"
     nsExec::ExecToLog 'cmd.exe /c tar -xf "$INSTDIR\python\python-embed.zip" -C "$INSTDIR\python"'
     !insertmacro AbortOnExecFailure "Extract embedded Python"
     Delete "$INSTDIR\python\python-embed.zip"
