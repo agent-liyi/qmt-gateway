@@ -134,6 +134,100 @@ def _submit_login_attempt(window, password: str) -> str:
         ) from exc
 
 
+def _minimize_browser_windows() -> list[tuple[int, bool]]:
+    """把当前桌面上所有 chromium / edge / chrome / firefox 顶层窗口最小化，
+    返回 ``[(hwnd, was_visible), ...]`` 用于登录完成后 restore。
+
+    实现思路：
+    - 枚举所有顶层可见窗口
+    - 用进程命令行（通过 WMI）判断该窗口是否属于主流浏览器
+    - 是的话 ``ShowWindow(hwnd, SW_MINIMIZE)`` 并记下 was_visible 状态
+
+    为什么不只最小化我们识别的浏览器？init-wizard 在用户默认浏览器里开，
+    但用户可能同时打开了别的浏览器窗口；只最小化 wizard 那个窗口的话，
+    用户看的其他 tab 仍可能挡住 miniqmt。
+    """
+    if sys.platform != "win32":
+        return []
+
+    import ctypes
+    import ctypes.wintypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    EnumWindows = user32.EnumWindows
+    EnumWindowsProc = ctypes.WINFUNCTYPE(
+        ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+    )
+    IsWindowVisible = user32.IsWindowVisible
+
+    candidates: list[int] = []
+    GetWindowTextW = user32.GetWindowTextW
+    GetWindowThreadProcessId = user32.GetWindowThreadProcessId
+
+    def collect(hwnd, _lparam):
+        if not IsWindowVisible(hwnd):
+            return True
+        pid = ctypes.wintypes.DWORD()
+        GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        try:
+            result = subprocess.run(
+                [
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-Command",
+                    f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid.value}').Name",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            proc_name = (result.stdout or "").strip().lower()
+        except Exception:
+            return True
+        browser_markers = (
+            "msedge.exe",
+            "chrome.exe",
+            "firefox.exe",
+            "browser_broker.exe",
+            "brave.exe",
+            "opera.exe",
+        )
+        if proc_name in browser_markers:
+            candidates.append(hwnd)
+        return True
+
+    EnumWindows(EnumWindowsProc(collect), 0)
+
+    minimized: list[tuple[int, bool]] = []
+    SW_MINIMIZE = 6
+    for hwnd in candidates:
+        try:
+            user32.ShowWindow(hwnd, SW_MINIMIZE)
+            minimized.append((hwnd, True))
+            logger.info(
+                "helper: 临时最小化浏览器窗口 hwnd=0x{:X}，登录完成后恢复",
+                hwnd,
+            )
+        except Exception:
+            pass
+    return minimized
+
+
+def _restore_minimized_windows(windows: list[tuple[int, bool]]) -> None:
+    """把 ``_minimize_browser_windows`` 之前最小化的窗口 restore。"""
+    if sys.platform != "win32" or not windows:
+        return
+    import ctypes
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    SW_RESTORE = 9
+    for hwnd, _was_visible in windows:
+        try:
+            user32.ShowWindow(hwnd, SW_RESTORE)
+        except Exception:
+            pass
+
+
 def _wait_for_login_completion(desktop, process_ids: list[int] | set[int], submitted_window, timeout_sec: float) -> bool:
     submitted_handle = _window_handle(submitted_window)
     deadline = time.monotonic() + max(float(timeout_sec), 0.5)
@@ -169,61 +263,85 @@ def restart_qmt_in_interactive_session(
 
     current_pids = _wait_for_new_process(executable.name, before_pids, launch_timeout)
 
-    max_attempts = 2
-    attempt = 0
-    for backend in ("uia", "win32"):
-        if attempt >= max_attempts:
-            break
-        desktop = Desktop(backend=backend)
-        deadline = time.monotonic() + max(float(login_timeout), 1.0)
-        last_error: Exception | None = None
-        while time.monotonic() < deadline and attempt < max_attempts:
-            windows = _get_probable_login_windows(desktop, current_pids)
-            if not windows:
-                current_pids = _list_process_ids(executable.name) or current_pids
-                time.sleep(0.5)
-                continue
+    # 临时把浏览器最小化，避免 init-wizard 的浏览器页面挡住 QMT 登录窗口。
+    # 登录流程结束后无论成败都会 restore，所以即使中途出错也不影响用户。
+    # 修复 #94：方案 4 + 2 组合（HWND_TOPMOST + 临时最小化浏览器）
+    minimized_browser = _minimize_browser_windows()
 
-            for window in windows:
-                if attempt >= max_attempts:
-                    break
-                attempt += 1
-                try:
-                    strategy = _submit_login_attempt(window, password)
-                except Exception as exc:
-                    last_error = exc
+    def _restore_browser():
+        _restore_minimized_windows(minimized_browser)
+
+    def _release_topmost(window):
+        try:
+            from qmt_gateway.qmt_login_automation import _deactivate_topmost
+            _deactivate_topmost(window)
+        except Exception:
+            pass
+
+    try:
+        max_attempts = 2
+        attempt = 0
+        for backend in ("uia", "win32"):
+            if attempt >= max_attempts:
+                break
+            desktop = Desktop(backend=backend)
+            deadline = time.monotonic() + max(float(login_timeout), 1.0)
+            last_error: Exception | None = None
+            while time.monotonic() < deadline and attempt < max_attempts:
+                windows = _get_probable_login_windows(desktop, current_pids)
+                if not windows:
+                    current_pids = _list_process_ids(executable.name) or current_pids
+                    time.sleep(0.5)
+                    continue
+
+                for window in windows:
+                    if attempt >= max_attempts:
+                        break
+                    attempt += 1
+                    try:
+                        strategy = _submit_login_attempt(window, password)
+                    except Exception as exc:
+                        last_error = exc
+                        # 当前窗口处理失败，撤掉它的 TOPMOST 再试下一个
+                        _release_topmost(window)
+                        _report_status(
+                            base_url,
+                            token,
+                            f"WARN: 第 {attempt}/{max_attempts} 次自动登录失败: {exc}; window={describe_window(window)}",
+                        )
+                        continue
+
+                    window_description = describe_window(window)
+                    ready_timeout = min(8.0, max(deadline - time.monotonic(), 0.5))
+                    login_ok = _wait_for_login_completion(desktop, current_pids, window, ready_timeout)
+                    # 无论登录是否成功，先撤掉 TOPMOST 恢复 Z-order
+                    _release_topmost(window)
+
+                    if login_ok:
+                        _report_status(base_url, token, f"INFO: 已通过{strategy}填入并提交 QMT 登录，登录窗口已消失: {window_description}")
+                        return
+
+                    last_error = RuntimeError(f"已通过{strategy}填入并提交 QMT 登录，但登录窗口仍然可见: {window_description}")
                     _report_status(
                         base_url,
                         token,
-                        f"WARN: 第 {attempt}/{max_attempts} 次自动登录失败: {exc}; window={describe_window(window)}",
+                        f"INFO: 登录窗口在提交后仍然可见，准备重试一次（等待 {retry_delay:.1f} 秒以避开干扰）: {window_description}",
                     )
-                    continue
+                    break
 
-                window_description = describe_window(window)
-                ready_timeout = min(8.0, max(deadline - time.monotonic(), 0.5))
-                if _wait_for_login_completion(desktop, current_pids, window, ready_timeout):
-                    _report_status(base_url, token, f"INFO: 已通过{strategy}填入并提交 QMT 登录，登录窗口已消失: {window_description}")
-                    return
+                if last_error is not None and attempt < max_attempts and time.monotonic() < deadline:
+                    _report_status(
+                        base_url,
+                        token,
+                        f"INFO: 等待 {retry_delay:.1f} 秒后进行第 {attempt + 1}/{max_attempts} 次重试",
+                    )
+                    time.sleep(max(float(retry_delay), 0.0))
+            if last_error is not None:
+                raise RuntimeError(f"自动填入 QMT 密码失败: {last_error}") from last_error
 
-                last_error = RuntimeError(f"已通过{strategy}填入并提交 QMT 登录，但登录窗口仍然可见: {window_description}")
-                _report_status(
-                    base_url,
-                    token,
-                    f"INFO: 登录窗口在提交后仍然可见，准备重试一次（等待 {retry_delay:.1f} 秒以避开干扰）: {window_description}",
-                )
-                break
-
-            if last_error is not None and attempt < max_attempts and time.monotonic() < deadline:
-                _report_status(
-                    base_url,
-                    token,
-                    f"INFO: 等待 {retry_delay:.1f} 秒后进行第 {attempt + 1}/{max_attempts} 次重试",
-                )
-                time.sleep(max(float(retry_delay), 0.0))
-        if last_error is not None:
-            raise RuntimeError(f"自动填入 QMT 密码失败: {last_error}") from last_error
-
-    raise RuntimeError("自动填入 QMT 密码失败：未找到登录窗口")
+        raise RuntimeError("自动填入 QMT 密码失败：未找到登录窗口")
+    finally:
+        _restore_browser()
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

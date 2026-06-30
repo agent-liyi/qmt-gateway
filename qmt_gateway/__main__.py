@@ -7,9 +7,11 @@ import argparse
 import atexit
 import ctypes
 import ctypes.wintypes
+import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from loguru import logger
@@ -83,93 +85,157 @@ def _is_pid_alive(pid: int) -> bool:
     return True
 
 
-def _spawn_tray_process(home: Path) -> None:
-    """拉起托盘子进程。
+def _pid_command_line(pid: int) -> str | None:
+    """通过 WMI 拿指定 PID 的完整命令行。失败返回 None。
 
-    托盘是独立进程而不是线程：pystray 的 win32 消息循环会阻塞当前线程，
-    与 uvicorn 的 asyncio 事件循环互相干扰。独立进程最简单，也最稳。
-    托盘会在父进程退出时被 job object 一起带走，所以不用担心孤儿进程。
+    用 PowerShell + CIM 是因为 pywin32 的 WMI 路径不在依赖里，而且
+    PowerShell 在 Windows 10+ 自带。命令 1~2 秒返回，足够用来验证单实例锁。
     """
     if sys.platform != "win32":
-        return
-    # 安装包里的 python 是 embeddable，没有 .pyc 缓存路径问题；
-    # 这里走 sys.executable，等价于"和 gateway 同一个解释器"。
-    env = os.environ.copy()
-    env["QMT_GATEWAY_HOME"] = str(home)
+        return None
     try:
-        subprocess.Popen(  # noqa: S603
-            [sys.executable, "-m", "qmt_gateway.tray"],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            close_fds=True,
-            creationflags=(
-                subprocess.DETACHED_PROCESS  # noqa: F821
-                | subprocess.CREATE_NEW_PROCESS_GROUP  # noqa: F821
-            ),
+        result = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-Command",
+                f"Get-CimInstance Win32_Process -Filter 'ProcessId={pid}' "
+                f"| Select-Object -ExpandProperty CommandLine",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
-        logger.info("托盘进程已拉起")
-    except OSError as exc:
-        logger.warning(f"托盘进程拉起失败（不影响 gateway 运行）: {exc}")
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    out = (result.stdout or "").strip()
+    return out or None
+
+
+def _pid_belongs_to_gateway(pid: int) -> bool:
+    """``pid`` 仍在跑 + 它的命令行包含 ``qmt_gateway``——证明是我们的进程，
+    而不是 PID 被 Windows 复用后巧合分配给另一个进程。
+
+    这是单实例锁防 PID 冲突的关键。2026-06-30 现场：用户点托盘"停止" →
+    gateway 死 → ``.lock`` 文件没及时清理（atexit 路径竞争） → 同号 PID
+    被 smartscreen.exe 复用 → 新 gateway 启动时被 ``_is_pid_alive`` 误判为
+    "另一个实例还在跑" → 退出码 2 → 用户从开始菜单启动无效。
+    """
+    if not _is_pid_alive(pid):
+        return False
+    cmd = _pid_command_line(pid)
+    if cmd is None:
+        # WMI 拿不到命令行（权限 / 进程已退出）——保守起见，假设不是我们的进程
+        return False
+    return "qmt_gateway" in cmd
+
+
+def _read_lock_payload(lock_path: Path) -> dict[str, object] | None:
+    """读 .lock 文件并解析为 dict。文件不存在 / 解析失败返回 None。
+
+    锁文件结构：
+        {"pid": <int>, "started_at": <float>, "argv_substring": "qmt_gateway"}
+
+    老格式（裸 PID 数字）也能读，向后兼容。
+    """
+    try:
+        raw = lock_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    # 新格式：JSON
+    if raw.startswith("{"):
+        try:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                pid_value = payload.get("pid")
+                if isinstance(pid_value, int):
+                    return payload
+        except (ValueError, TypeError):
+            pass
+        return None
+    # 老格式：纯 PID 数字
+    if raw.isdigit():
+        return {"pid": int(raw), "started_at": 0.0, "argv_substring": ""}
+    return None
 
 
 def _acquire_single_instance_lock(home: Path) -> bool:
     """用 ``data\\home\\.lock`` 确保只有一个 gateway 进程在跑。
 
-    锁文件里写当前 PID。后续启动时如果发现锁文件存在且对应进程仍存活，
-    就直接返回 False，由调用方决定如何提示用户。如果锁文件存在但 PID 已死
-    （上次进程被 kill -9 / 崩溃 / 断电），就清理掉重新占锁。
+    锁文件里写 JSON ``{pid, started_at, argv_substring}``。后续启动时如果
+    发现锁文件存在且对应进程仍是我们的（PID 活 + 命令行含 qmt_gateway），
+    就直接返回 False，由调用方决定如何提示用户。否则清理掉重新占锁。
 
     用 ``O_CREAT | O_EXCL`` 原子创建，避免两个进程同时通过"检查+创建"的
     竞态条件。
     """
     lock_path = home / ".lock"
     pid = os.getpid()
+    payload = {
+        "pid": pid,
+        "started_at": time.time(),
+        "argv_substring": "qmt_gateway",
+    }
+
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     try:
         fd = os.open(str(lock_path), flags, 0o644)
     except FileExistsError:
-        # 锁文件已存在，检查里面记录的 PID 是否还活着
-        existing_pid: int | None = None
-        try:
-            raw = lock_path.read_text(encoding="utf-8").strip()
-            if raw.isdigit():
-                existing_pid = int(raw)
-        except OSError:
-            existing_pid = None
-        if existing_pid and _is_pid_alive(existing_pid):
-            logger.error(
-                f"另一个 QMT Gateway 进程已在运行 (pid={existing_pid})，本次启动退出"
+        # 锁文件已存在——解析它，判断是否还有效
+        existing = _read_lock_payload(lock_path)
+        if existing is None:
+            # 文件损坏或不可读，删除后重试
+            logger.warning("单实例锁文件损坏，清理后重试")
+            try:
+                lock_path.unlink()
+            except OSError:
+                logger.error("无法清理损坏的单实例锁文件")
+                return False
+            try:
+                fd = os.open(str(lock_path), flags, 0o644)
+            except FileExistsError:
+                logger.error("锁文件被其他进程抢占，放弃本次启动")
+                return False
+        else:
+            existing_pid = int(existing.get("pid", 0))
+            if existing_pid > 0 and _pid_belongs_to_gateway(existing_pid):
+                logger.error(
+                    f"另一个 QMT Gateway 进程已在运行 (pid={existing_pid})，本次启动退出"
+                )
+                return False
+            logger.warning(
+                f"发现过期的单实例锁 (pid={existing_pid}，进程已不在或不是我们)，"
+                f"清理后重新占锁"
             )
-            return False
-        logger.warning(
-            f"发现过期的单实例锁 (pid={existing_pid})，清理后重新占锁"
-        )
-        try:
-            lock_path.unlink()
-        except OSError:
-            logger.error(f"无法清理过期锁文件 {lock_path}，请手动删除")
-            return False
-        try:
-            fd = os.open(str(lock_path), flags, 0o644)
-        except FileExistsError:
-            logger.error("锁文件被其他进程抢占，放弃本次启动")
-            return False
+            try:
+                lock_path.unlink()
+            except OSError:
+                logger.error("无法清理过期单实例锁文件，请手动删除")
+                return False
+            try:
+                fd = os.open(str(lock_path), flags, 0o644)
+            except FileExistsError:
+                logger.error("锁文件被其他进程抢占，放弃本次启动")
+                return False
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(f"{pid}\n")
+        json.dump(payload, f)
     logger.info(f"已获取单实例锁: {lock_path} (pid={pid})")
     return True
 
 
 def _release_single_instance_lock(home: Path) -> None:
+    """atexit 释放锁。只删自己写的锁，避免误删别人刚拿到的锁。"""
     lock_path = home / ".lock"
     try:
-        if lock_path.exists():
-            # 只删自己写的锁，避免误删别人刚拿到的锁
-            raw = lock_path.read_text(encoding="utf-8").strip()
-            if raw == str(os.getpid()):
-                lock_path.unlink()
+        if not lock_path.exists():
+            return
+        existing = _read_lock_payload(lock_path)
+        if existing is None:
+            return
+        if int(existing.get("pid", 0)) == os.getpid():
+            lock_path.unlink()
     except OSError:
         pass
 

@@ -224,6 +224,14 @@ def _activate_window(window) -> None:
     """Bring ``window`` to the foreground so that subsequent keystrokes
     and clicks reach it instead of whatever window the user is currently
     looking at.
+
+    关键修复（issue #94）：当 init-wizard 在浏览器中打开时，浏览器是前台
+    进程，``SetForegroundWindow`` 会被 Foreground Lock Timeout 静默拒绝。
+    单纯切 foreground 不够——必须把 miniqmt 登录窗口 HWND_TOPMOST，让它
+    Z-order 上盖住浏览器，pywinauto 才能稳定输入密码。
+
+    副作用：登录窗口在屏幕最顶层约 2-3 秒。然后立刻撤掉 TOPMOST 恢复
+    正常 Z-order。
     """
 
     handle = _window_handle(window)
@@ -234,6 +242,8 @@ def _activate_window(window) -> None:
             user32 = ctypes.windll.user32
             if _is_window_minimized(window):
                 user32.ShowWindow(handle, 9)
+            # 1. 强制 TOPMOST，绕过 foreground lock 和遮挡
+            user32.SetWindowPos(handle, -1, 0, 0, 0, 0, 0x0003)  # HWND_TOPMOST | SWP_NOMOVE|SWP_NOSIZE
             user32.ShowWindow(handle, 5)
             user32.BringWindowToTop(handle)
             user32.SetForegroundWindow(handle)
@@ -242,6 +252,24 @@ def _activate_window(window) -> None:
 
     try:
         window.set_focus()
+    except Exception:
+        pass
+
+
+def _deactivate_topmost(window) -> None:
+    """撤销 ``_activate_window`` 设置的 HWND_TOPMOST，恢复正常 Z-order。
+
+    必须在登录完成（或失败）后调用，否则 miniqmt 会一直浮在最顶层。
+    """
+    handle = _window_handle(window)
+    if not handle:
+        return
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        # HWND_NOTOPMOST = -2; SWP_NOMOVE|SWP_NOSIZE = 0x0003
+        user32.SetWindowPos(handle, -2, 0, 0, 0, 0, 0x0003)
     except Exception:
         pass
 

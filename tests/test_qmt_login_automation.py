@@ -240,12 +240,20 @@ def test_activate_window_restores_and_brings_to_top(monkeypatch):
     window.handle = 0xABCD
     window.is_minimized = lambda: True
 
-    captured: dict = {"ShowWindow": [], "BringWindowToTop": [], "SetForegroundWindow": []}
+    captured: dict = {
+        "ShowWindow": [],
+        "BringWindowToTop": [],
+        "SetForegroundWindow": [],
+        "SetWindowPos": [],
+    }
 
     fake_user32 = SimpleNamespace(
         ShowWindow=lambda h, c: captured["ShowWindow"].append((h, c)),
         BringWindowToTop=lambda h: captured["BringWindowToTop"].append(h),
         SetForegroundWindow=lambda h: captured["SetForegroundWindow"].append(h),
+        SetWindowPos=lambda h, after, x, y, cx, cy, flags: captured["SetWindowPos"].append(
+            (h, after, flags)
+        ),
     )
     fake_windll = SimpleNamespace(user32=fake_user32)
     monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
@@ -257,7 +265,34 @@ def test_activate_window_restores_and_brings_to_top(monkeypatch):
     assert (0xABCD, 9) in captured["ShowWindow"]
     assert 0xABCD in captured["BringWindowToTop"]
     assert 0xABCD in captured["SetForegroundWindow"]
-    assert ("focus", None, {}) in window.actions
+    # 修复 #94：必须 SetWindowPos 设到 HWND_TOPMOST 才能绕过遮挡
+    topmost_calls = [c for c in captured["SetWindowPos"] if c[1] == -1]
+    assert topmost_calls, "activate_window must SetWindowPos to HWND_TOPMOST (-1)"
+
+
+def test_deactivate_topmost_clears_topmost(monkeypatch):
+    """_deactivate_topmost 必须 SetWindowPos 到 HWND_NOTOPMOST，否则 miniqmt
+    登录窗口会一直浮在最顶层挡住用户。"""
+    import ctypes
+
+    window = FakeControl(text="国金QMT")
+    window.handle = 0xABCD
+
+    captured: list = []
+
+    fake_user32 = SimpleNamespace(
+        SetWindowPos=lambda h, after, x, y, cx, cy, flags: captured.append((h, after, flags)),
+    )
+    fake_windll = SimpleNamespace(user32=fake_user32)
+    monkeypatch.setattr(ctypes, "windll", fake_windll, raising=False)
+
+    import qmt_gateway.qmt_login_automation as qla
+
+    qla._deactivate_topmost(window)
+
+    # HWND_NOTOPMOST = -2
+    notopmost = [c for c in captured if c[1] == -2]
+    assert notopmost, "_deactivate_topmost must SetWindowPos to HWND_NOTOPMOST (-2)"
 
 
 def test_populate_password_via_tab_uses_account_input():

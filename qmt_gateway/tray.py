@@ -66,24 +66,87 @@ def _read_port() -> int:
 
 
 def _read_pid() -> int | None:
-    """读单实例锁文件拿 PID；不存在或读不到返回 None。"""
+    """读单实例锁文件拿 PID；不存在或读不到返回 None。
+
+    锁文件可能是 JSON（新格式）或纯数字（旧格式）。
+    """
     lock_path = _lock_file()
     try:
-        if lock_path.exists():
-            raw = lock_path.read_text(encoding="utf-8").strip()
-            if raw.isdigit():
-                return int(raw)
+        if not lock_path.exists():
+            return None
+        raw = lock_path.read_text(encoding="utf-8").strip()
     except OSError:
-        pass
+        return None
+    if not raw:
+        return None
+    # 新格式：{"pid": 1234, ...}
+    if raw.startswith("{"):
+        try:
+            import json
+
+            payload = json.loads(raw)
+            pid_value = payload.get("pid")
+            if isinstance(pid_value, int):
+                return pid_value
+        except (ValueError, TypeError, ImportError):
+            pass
+        return None
+    # 老格式：纯数字
+    if raw.isdigit():
+        return int(raw)
     return None
+
+
+def _is_pid_alive_windows(pid: int) -> bool:
+    """OpenProcess 探测 PID 是否存活（Windows 专用，避免依赖 psutil）。"""
+    if sys.platform != "win32" or pid <= 0:
+        return False
+    import ctypes
+    import ctypes.wintypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    kernel32.CloseHandle(handle)
+    return True
+
+
+def _clear_stale_lock() -> None:
+    """如果 .lock 指向的进程已经死了，把 .lock 和 .port 都删掉。
+
+    场景：gateway 被 SIGKILL / 断电 / 任务管理器结束 → atexit 没机会跑 →
+    残留 .lock 文件指向已不存在的 PID。新 gateway 启动时（无论是手动
+    start.bat 还是托盘重启）会被这个过期的 .lock 挡住。
+    """
+    pid = _read_pid()
+    if pid is None:
+        return
+    if _is_pid_alive_windows(pid):
+        return
+    # 进程已经死了，锁是过期的
+    for path in (_lock_file(), _port_file()):
+        try:
+            if path.exists():
+                path.unlink()
+                logger.info(f"已清理过期文件: {path}")
+        except OSError as exc:
+            logger.warning(f"清理过期文件失败 {path}: {exc}")
 
 
 def _kill_gateway(timeout: float = 5.0) -> bool:
     """杀掉 lock 文件里记录的 gateway 进程；返回是否成功。
 
-    用 ``taskkill /F /T`` 而不是 ``os.kill``，因为：
-    - 子进程也会一起杀，避免孤儿 worker
-    - 权限足够，不需要 SeDebugPrivilege
+    用 ``taskkill /F /PID``（不带 ``/T``）而不是带 ``/T`` 的进程树杀：
+    - ``/T`` 会把 gateway 启动时 fork 的托盘子进程（即便它用了
+      DETACHED_PROCESS / CREATE_NEW_PROCESS_GROUP）一起带走——结果用户
+      点"停止"之后，托盘图标也消失，从开始菜单重启无效
+    - 不带 ``/T`` 只杀 gateway 自己，托盘保持可见，可以继续监控或重启
+
+    如果 .lock 指向的 PID 已经死了（gateway 被 kill -9 / 崩溃 / 断电），
+    taskkill 会失败但这不算 error——此时清理掉过期的 .lock / .port，
+    调用方可以继续 spawn 新 gateway。
     """
     pid = _read_pid()
     if pid is None:
@@ -92,7 +155,7 @@ def _kill_gateway(timeout: float = 5.0) -> bool:
     logger.info(f"正在终止 gateway 进程 (PID={pid})...")
     try:
         result = subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            ["taskkill", "/F", "/PID", str(pid)],
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -104,9 +167,16 @@ def _kill_gateway(timeout: float = 5.0) -> bool:
         logger.error("taskkill 不在 PATH 上，无法终止进程")
         return False
     if result.returncode == 0:
-        logger.info(f"gateway (PID={pid}) 已停止")
+        logger.info(f"gateway (PID={pid}) 已停止（托盘保持运行）")
+        # 等 taskkill 真正生效（清理 kernel 句柄）
+        time.sleep(0.3)
         return True
-    logger.error(f"taskkill 失败: {result.stdout} {result.stderr}")
+    # taskkill 失败：可能是 PID 已不存在——这正好是 stale lock 场景
+    logger.warning(f"taskkill 返回 {result.returncode}: {result.stdout.strip()} {result.stderr.strip()}")
+    if not _is_pid_alive_windows(pid):
+        logger.info(f"PID {pid} 已不存在，清理过期单实例锁")
+        _clear_stale_lock()
+        return True
     return False
 
 
@@ -166,6 +236,8 @@ def _open_browser(icon: pystray.Icon, item: pystray.MenuItem) -> None:
 def _restart_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
     port = _read_port()
     logger.info("用户触发重启")
+    # 先清过期锁（gateway 已被外部 kill -9 / 任务管理器结束的场景）
+    _clear_stale_lock()
     if _kill_gateway() and _wait_for_port_free(port, timeout=10.0):
         _spawn_gateway()
     else:
