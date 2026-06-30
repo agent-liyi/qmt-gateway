@@ -11,7 +11,7 @@
 Unicode True
 SetCompress off
 !define PRODUCT_NAME "匡醍 QMT 交易网关"
-!define PRODUCT_VERSION "0.1.0"
+!define PRODUCT_VERSION "0.2.0"
 !define BUILD_NUMBER "0"  ; Replaced by CI with github.run_number
 !define PRODUCT_PUBLISHER "zillionare"
 !define PRODUCT_WEB_SITE "https://github.com/zillionare/qmt-gateway"
@@ -239,14 +239,24 @@ Section "-Core" SEC_CORE
     CreateDirectory "$INSTDIR"
     SetOutPath "$INSTDIR"
     File /oname=${INSTALLER_SCRIPT_NAME} "install-python.ps1"
+    File "scrub-stale-installs.ps1"
     !insertmacro LogInit
-    !insertmacro LogStep "Core: create install dir"
     !insertmacro LogStep "Core: write uninstall registry"
     ; Publish InstallLocation immediately so PowerShell child processes can
     ; recover the install path from the registry without going through NSIS
     ; string expansion (which corrupts CJK under the system ANSI code page).
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "InstallLocation" "$INSTDIR"
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_INSTALL_STATE_KEY}" "InstallLocation" "$INSTDIR"
+    ; 清理旧版本安装残留——旧版 NSIS 安装器会写 DisplayName 到注册表，但不会
+    ; 在用户重装时自动清掉。如果旧 entry 的 InstallLocation 跟当前 $INSTDIR 不同
+    ; （例如用户从 'C:\Program Files\ѸͶ QMT 交易网关' 升级到
+    ; 'C:\Program Files\quantide-gateway'），用户从控制面板点卸载会触发
+    ; "Windows 正在查找 uninstall.bat" 因为旧路径下的 uninstall.exe 已经不存在了。
+    ; scrub-stale-installs.ps1 扫描 HKLM Uninstall 子键，删掉 InstallLocation 与
+    ; 当前 $INSTDIR 不一致的同名 entry，并清理它们指向的残留目录。
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scrub-stale-installs.ps1" -InstallDir "$INSTDIR"'
+    Delete "$INSTDIR\scrub-stale-installs.ps1"
+    !insertmacro LogStep "Core: create install dir"
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage InitLogs'
     !insertmacro AbortOnExecFailure "Initialize install logs"
     !insertmacro LogStep "Core: create directories"
@@ -429,44 +439,19 @@ Section Uninstall
         RMDir /r "$INSTDIR\data"
         RMDir /r "$APPDATA\qmt-gateway"
         DetailPrint "数据目录已删除"
+        ; 把 install 目录整个删掉——单个 Delete 一个文件太慢（pip 一堆 .dist-info、
+        ; .whl、site-packages 上千个文件），cmd /c rmdir /s /q 一次性系统调用搞定。
+        nsExec::ExecToLog 'cmd.exe /c rmdir /s /q "$INSTDIR"'
+        Goto DoneUninstall
 
     KeepData:
         DetailPrint "数据目录已保留"
+        ; 保留 $INSTDIR\data，把其余整个删掉。先把 data 临时改名，rmdir 完再改名回来
+        ; ——避免 rmdir /s /q 把 data 也带走。
+        nsExec::ExecToLog 'cmd.exe /c if exist "$INSTDIR\data" (rename "$INSTDIR\data" "$INSTDIR\.data_keep" & rmdir /s /q "$INSTDIR" & rename "$INSTDIR\.data_keep" "data") else (rmdir /s /q "$INSTDIR")'
+        Goto DoneUninstall
 
-    ; Remove install directory (everything except data/, which user chose above)
-    RMDir /r "$INSTDIR\python"
-    RMDir /r "$INSTDIR\.venv"
-    RMDir /r "$INSTDIR\app"
-    Delete "$INSTDIR\start.bat"
-    Delete "$INSTDIR\start-silent.bat"
-    Delete "$INSTDIR\start-silent.vbs"
-    Delete "$INSTDIR\task-template.xml"
-    Delete "$INSTDIR\register-task.ps1"
-    Delete "$INSTDIR\create-shortcuts.ps1"
-    Delete "$INSTDIR\qmt-gateway.ico"
-    Delete "$INSTDIR\generate-icon.py"
-    Delete "$INSTDIR\uninstall.exe"
-    Delete "$INSTDIR\${PRODUCT_NAME}.url"
-    ; Clean any other top-level files (e.g. qmt_gateway sources installed at root)
-    Delete "$INSTDIR\__init__.py"
-    Delete "$INSTDIR\__main__.py"
-    Delete "$INSTDIR\app.py"
-    Delete "$INSTDIR\config.py"
-    Delete "$INSTDIR\init_wizard.py"
-    Delete "$INSTDIR\pyproject.toml"
-    Delete "$INSTDIR\qmt_init_helpers.py"
-    Delete "$INSTDIR\qmt_login_automation.py"
-    Delete "$INSTDIR\qmt_restart_helper.py"
-    Delete "$INSTDIR\README.md"
-    Delete "$INSTDIR\runtime.py"
-    Delete "$INSTDIR\trading.py"
-    Delete "$INSTDIR\xtquant_probe.py"
-    RMDir "$INSTDIR\apis"
-    RMDir "$INSTDIR\core"
-    RMDir "$INSTDIR\db"
-    RMDir "$INSTDIR\services"
-    RMDir "$INSTDIR\web"
-    RMDir "$INSTDIR"
+    DoneUninstall:
 
     ; Remove registry keys
     DeleteRegKey ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}"

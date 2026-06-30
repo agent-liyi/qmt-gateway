@@ -1,6 +1,6 @@
 [project]
 name = "qmt-gateway"
-version = "0.1.0"
+version = "0.2.0"
 description = "Windows-only QMT gateway service for live trading and real-time market data"
 readme = "README.md"
 requires-python = ">=3.13,<4.0"
