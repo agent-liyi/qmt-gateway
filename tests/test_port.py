@@ -1,5 +1,6 @@
 """端口冲突检测与自动切换测试 (#49)"""
 
+import os
 import socket
 from unittest.mock import patch
 
@@ -55,3 +56,29 @@ def test_find_available_port_with_limited_tries():
     with patch("qmt_gateway.services.port.is_port_available", side_effect=mock_available):
         result = find_available_port(default=8130, max_tries=10)
         assert result == 8135
+
+
+def test_find_available_port_logs_all_busy_ports(caplog):
+    """日志应列出所有被占用的端口，而不是只写默认端口。"""
+
+    import io
+
+    import loguru
+
+    sink = io.StringIO()
+    logger = loguru.logger
+    handler_id = logger.add(sink, level="INFO", format="{message}")
+    try:
+        def mock_available(port, host="0.0.0.0"):
+            return port == 8132
+
+        with patch(
+            "qmt_gateway.services.port.is_port_available",
+            side_effect=mock_available,
+        ):
+            result = find_available_port(default=8130, max_tries=5)
+    finally:
+        logger.remove(handler_id)
+    assert result == 8132
+    output = sink.getvalue()
+    assert "8130,8131" in output and "8132" in output, output

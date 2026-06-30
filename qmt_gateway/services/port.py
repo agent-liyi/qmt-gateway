@@ -37,12 +37,16 @@ def find_available_port(
         RuntimeError: 所有端口均不可用
 
     """
+    busy_ports: list[int] = []
     for offset in range(max_tries):
         port = default + offset
         if is_port_available(port, host):
-            if offset > 0:
-                logger.info(f"端口 {default} 被占用，自动切换到 {port}")
+            if busy_ports:
+                logger.info(
+                    f"端口 {','.join(str(p) for p in busy_ports)} 被占用，自动切换到 {port}"
+                )
             return port
+        busy_ports.append(port)
 
     raise RuntimeError(
         f"未找到可用端口 (尝试范围 {default}-{default + max_tries - 1})"

@@ -421,7 +421,7 @@ def test_installer_powershell_commands_use_normal_single_quotes():
     assert all("''" not in line for line in powershell_lines), (
         "Wrap -Command with NSIS $\\\"...$\\\" so PowerShell can keep plain single-quoted literals"
     )
-    assert "[ValidateSet('InitLogs', 'Runtime', 'BootstrapPip', 'InstallDependencies')]" in helper
+    assert "[ValidateSet('InitLogs', 'Runtime', 'BootstrapPip', 'InstallDependencies', 'WaitForBrowser')]" in helper
 
 
 def test_installer_aborts_on_critical_exec_failures():
@@ -601,5 +601,65 @@ def test_installer_brand_and_website_link():
     )
     assert "https://github.com/quantclaws/qmt-gateway" not in text, (
         "Old quantclaws website must be replaced (#64)"
+    )
+
+
+def test_app_assets_are_served_locally():
+    """前端依赖（htmx / daisyui）必须从本地 /static/ 提供，避开跨域
+    Tracking Prevention 拦截 localStorage 导致 htmx 历史缓存失效。
+    自包含 Tailwind 见单独的 issue。
+    """
+    from pathlib import Path
+
+    app_py = ROOT / "qmt_gateway" / "app.py"
+    theme_py = ROOT / "qmt_gateway" / "web" / "theme.py"
+    static_dir = ROOT / "qmt_gateway" / "web" / "static"
+
+    for src in (app_py, theme_py):
+        text = src.read_text(encoding="utf-8")
+        assert "cdn.tailwindcss.com" not in text, (
+            f"{src.name}: Tailwind CDN removed (separate issue for self-contained CSS)"
+        )
+        assert "unpkg.com" not in text, (
+            f"{src.name}: htmx must be served from local /static/"
+        )
+        assert "cdn.jsdelivr.net" not in text, (
+            f"{src.name}: daisyui must be served from local /static/"
+        )
+        assert "/static/htmx.min.js" in text, (
+            f"{src.name}: must reference local /static/htmx.min.js"
+        )
+        assert "/static/daisyui.min.css" in text, (
+            f"{src.name}: must reference local /static/daisyui.min.css"
+        )
+
+    assert static_dir.is_dir(), f"Missing static assets dir: {static_dir}"
+
+
+def test_fetch_static_assets_script_exists():
+    """fetch-static-assets.py 由 CI 在 makensis 之前调用，把 htmx / daisyui
+    下载到 qmt_gateway/web/static/。"""
+    script = ROOT / "installer" / "fetch-static-assets.py"
+    assert script.is_file(), f"Missing fetch script: {script}"
+    text = script.read_text(encoding="utf-8")
+    assert "unpkg.com/htmx.org" in text
+    assert "daisyui" in text
+    assert "web/static" in text
+
+
+def test_ci_workflow_runs_fetch_static_assets():
+    """CI 必须在 makensis 之前调用 fetch-static-assets.py，否则安装包
+    里就没有 htmx.min.js / daisyui.min.css。"""
+    workflow = ROOT / ".github" / "workflows" / "build-installer.yml"
+    text = workflow.read_text(encoding="utf-8")
+    assert "fetch-static-assets" in text, (
+        "build-installer.yml must call fetch-static-assets.py before makensis"
+    )
+    # 必须出现在 makensis 之前
+    fetch_pos = text.find("fetch-static-assets")
+    makensis_pos = text.find("makensis")
+    assert fetch_pos != -1 and makensis_pos != -1
+    assert fetch_pos < makensis_pos, (
+        "fetch-static-assets.py must run before makensis"
     )
 

@@ -4,7 +4,12 @@
 """
 
 import argparse
+import atexit
+import ctypes
+import ctypes.wintypes
+import os
 import sys
+from pathlib import Path
 
 from loguru import logger
 
@@ -14,6 +19,122 @@ from qmt_gateway.db import db
 from qmt_gateway.runtime import runtime
 from qmt_gateway.services.pip_mirror import ensure_pip_conf
 from qmt_gateway.services.port import find_available_port
+
+
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_OpenProcess = _kernel32.OpenProcess
+_OpenProcess.restype = ctypes.wintypes.HANDLE
+_OpenProcess.argtypes = [
+    ctypes.wintypes.DWORD,
+    ctypes.wintypes.BOOL,
+    ctypes.wintypes.DWORD,
+]
+_CloseHandle = _kernel32.CloseHandle
+_CloseHandle.restype = ctypes.wintypes.BOOL
+_CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _is_pid_alive(pid: int) -> bool:
+    """检查指定 PID 的进程是否仍在运行（Windows）。
+
+    用 ``OpenProcess`` + ``PROCESS_QUERY_LIMITED_INFORMATION`` 探测，避免
+    引入 ``psutil``。返回 False 时可能是权限不足，但我们只关心"明确不存在"
+    的情况——权限不足会让 OpenProcess 失败，我们仍然当作"进程不在"处理，
+    反正也无法接管它的锁。
+    """
+    if pid <= 0:
+        return False
+    handle = _OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not handle:
+        return False
+    _CloseHandle(handle)
+    return True
+
+
+def _acquire_single_instance_lock(home: Path) -> bool:
+    """用 ``data\\home\\.lock`` 确保只有一个 gateway 进程在跑。
+
+    锁文件里写当前 PID。后续启动时如果发现锁文件存在且对应进程仍存活，
+    就直接返回 False，由调用方决定如何提示用户。如果锁文件存在但 PID 已死
+    （上次进程被 kill -9 / 崩溃 / 断电），就清理掉重新占锁。
+
+    用 ``O_CREAT | O_EXCL`` 原子创建，避免两个进程同时通过"检查+创建"的
+    竞态条件。
+    """
+    lock_path = home / ".lock"
+    pid = os.getpid()
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    try:
+        fd = os.open(str(lock_path), flags, 0o644)
+    except FileExistsError:
+        # 锁文件已存在，检查里面记录的 PID 是否还活着
+        existing_pid: int | None = None
+        try:
+            raw = lock_path.read_text(encoding="utf-8").strip()
+            if raw.isdigit():
+                existing_pid = int(raw)
+        except OSError:
+            existing_pid = None
+        if existing_pid and _is_pid_alive(existing_pid):
+            logger.error(
+                f"另一个 QMT Gateway 进程已在运行 (pid={existing_pid})，本次启动退出"
+            )
+            return False
+        logger.warning(
+            f"发现过期的单实例锁 (pid={existing_pid})，清理后重新占锁"
+        )
+        try:
+            lock_path.unlink()
+        except OSError:
+            logger.error(f"无法清理过期锁文件 {lock_path}，请手动删除")
+            return False
+        try:
+            fd = os.open(str(lock_path), flags, 0o644)
+        except FileExistsError:
+            logger.error("锁文件被其他进程抢占，放弃本次启动")
+            return False
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(f"{pid}\n")
+    logger.info(f"已获取单实例锁: {lock_path} (pid={pid})")
+    return True
+
+
+def _release_single_instance_lock(home: Path) -> None:
+    lock_path = home / ".lock"
+    try:
+        if lock_path.exists():
+            # 只删自己写的锁，避免误删别人刚拿到的锁
+            raw = lock_path.read_text(encoding="utf-8").strip()
+            if raw == str(os.getpid()):
+                lock_path.unlink()
+    except OSError:
+        pass
+
+
+def _write_port_file(port: int) -> None:
+    r"""把实际监听的端口写到 ``data\home\.port``。
+
+    桌面快捷方式 / 安装器的等待循环都依赖这个文件来知道真正可用的端口，
+    避免 8130 被占用自动跳到 8131 之后快捷方式仍然打开 8130 而连不上的情况。
+    """
+    port_path = runtime.home_path / ".port"
+    try:
+        port_path.write_text(f"{port}\n", encoding="utf-8")
+        logger.info(f"已写入端口文件: {port_path} ({port})")
+    except Exception as exc:
+        logger.warning(f"写入端口文件失败: {exc}")
+
+
+def _remove_port_file() -> None:
+    if not runtime.is_initialized():
+        return
+    port_path = runtime.home_path / ".port"
+    try:
+        if port_path.exists():
+            port_path.unlink()
+    except Exception:
+        pass
 
 
 def main():
@@ -53,6 +174,11 @@ def main():
     # 初始化运行时
     runtime.init(args.home)
 
+    # 单实例锁：必须在写端口文件之前拿，否则两个进程都写 .port 后互相覆盖
+    if not _acquire_single_instance_lock(runtime.home_path):
+        sys.exit(2)
+    atexit.register(_release_single_instance_lock, runtime.home_path)
+
     # 确保 pip 镜像源配置存在
     ensure_pip_conf()
 
@@ -71,6 +197,10 @@ def main():
             logger.info(f"端口已更新为 {port}")
         except Exception:
             pass
+
+    # 暴露端口文件，供 start.bat / 安装器等待循环读取
+    _write_port_file(port)
+    atexit.register(_remove_port_file)
 
     # 检查是否需要强制初始化
     if args.force and args.init_wizard:

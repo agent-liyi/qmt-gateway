@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('InitLogs', 'Runtime', 'BootstrapPip', 'InstallDependencies')]
+    [ValidateSet('InitLogs', 'Runtime', 'BootstrapPip', 'InstallDependencies', 'WaitForBrowser')]
     [string]$Stage
 )
 
@@ -228,12 +228,67 @@ function Invoke-InstallDependenciesStage {
     exit $exitCode
 }
 
+function Invoke-WaitForBrowserStage {
+    # 等待 gateway 写入 data\home\.port（实际监听端口），然后探活并打开浏览器。
+    # 8130 被占用时 gateway 会自动跳到 8131-8139；如果继续打开 8130，
+    # 用户就会看到"无法连接"。所以必须从 .port 读真实端口。
+    $portFile = Join-Path $InstallDir 'data\home\.port'
+    $defaultPort = 8130
+    $port = $defaultPort
+
+    Add-InstallerLogLines @(
+        'WAIT_FOR_BROWSER_START',
+        ('PORT_FILE=' + $portFile)
+    )
+
+    $waited = 0
+    while ($waited -lt 15) {
+        if (Test-Path -LiteralPath $portFile) {
+            $raw = Get-Content -LiteralPath $portFile -ErrorAction SilentlyContinue
+            if ($raw -and $raw -match '^\d+$') {
+                $port = [int]$raw
+                Add-InstallerLogLine ('PORT_FILE_READ=' + $port)
+                break
+            }
+        }
+        Start-Sleep -Seconds 1
+        $waited++
+    }
+
+    if ($port -eq $defaultPort) {
+        Add-InstallerLogLine 'PORT_FILE_NOT_FOUND_FALLBACK=8130'
+    }
+
+    $ready = $false
+    $waited = 0
+    while ($waited -lt 30) {
+        try {
+            $client = New-Object System.Net.Sockets.TcpClient('localhost', $port)
+            $client.Close()
+            $ready = $true
+            break
+        } catch {
+            Start-Sleep -Seconds 1
+            $waited++
+        }
+    }
+
+    if ($ready) {
+        $url = 'http://localhost:' + $port
+        Add-InstallerLogLine ('BROWSER_OPEN=' + $url)
+        Start-Process $url
+    } else {
+        Add-InstallerLogLine 'BROWSER_OPEN_SKIPPED=gateway_not_ready'
+    }
+}
+
 try {
     switch ($Stage) {
         'InitLogs' { Initialize-InstallerLogs }
         'Runtime' { Invoke-RuntimeStage }
         'BootstrapPip' { Invoke-BootstrapPipStage }
         'InstallDependencies' { Invoke-InstallDependenciesStage }
+        'WaitForBrowser' { Invoke-WaitForBrowserStage }
     }
 } catch {
     Add-InstallerLogLine ('ERROR: ' + $_.Exception.Message)

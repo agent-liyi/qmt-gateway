@@ -345,7 +345,9 @@ SectionEnd
 Section "Firewall" SEC_FIREWALL
     !insertmacro LogStep "Firewall: add inbound rule"
     DetailPrint "正在添加防火墙入站规则..."
-    nsExec::ExecToLog 'netsh advfirewall firewall add rule name="QMT Gateway" dir=in action=allow protocol=tcp localport=8130 profile=private enable=yes'
+    ; 端口 8130-8139：覆盖 qmt_gateway.services.port.find_available_port 的整个
+    ; 探测范围，避免 8130 被占用自动跳到 8131 时防火墙规则变成"放行空端口"。
+    nsExec::ExecToLog 'netsh advfirewall firewall add rule name="QMT Gateway" dir=in action=allow protocol=tcp localport=8130-8139 profile=private enable=yes'
 SectionEnd
 
 ; Section descriptions are defined earlier, before MUI_PAGE_COMPONENTS,
@@ -377,7 +379,11 @@ Section -Post
     !insertmacro LogLine "Gateway launch initiated (non-blocking)"
 
     DetailPrint "等待服务就绪，即将打开浏览器..."
-    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$r=0;while($$r -lt 30){try{$$c=New-Object Net.Sockets.TcpClient(''localhost'',8130);$$c.Close();break}catch{Start-Sleep 1;$$r++}};if($$r -lt 30){Start-Process ''http://localhost:8130''}"'
+    ; 通过 install-python.ps1 的 WaitForBrowser stage 完成：它会读
+    ; data\home\.port 拿到 gateway 实际监听的端口（8130 被占用时可能是
+    ; 8131-8139），再探活并打开浏览器。
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage WaitForBrowser'
+    !insertmacro AbortOnExecFailure "Wait for gateway and open browser"
 SectionEnd
 
 ; Uninstaller
