@@ -8,6 +8,7 @@ import atexit
 import ctypes
 import ctypes.wintypes
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -19,6 +20,36 @@ from qmt_gateway.db import db
 from qmt_gateway.runtime import runtime
 from qmt_gateway.services.pip_mirror import ensure_pip_conf
 from qmt_gateway.services.port import find_available_port
+
+
+# ---------------------------------------------------------------------------
+# 修复 build 76 安装器里 qmt-gateway 启动崩溃的问题。
+#
+# 现场：`task-launcher.log` 出现
+#   AttributeError: module 'resource' has no attribute 'getrusage'
+#   at apsw/ext.py:1109 in ShowResourceUsage
+#
+# 触发链：`from qmt_gateway.app import app` -> `from fasthtml.common import *`
+#   -> `from apswutils import Database` -> `import apsw, apsw.ext, apsw.bestpractice`
+#   -> `apsw/ext.py` 在 ShowResourceUsage 类体里 `import resource`，
+#     然后 `_get_resource = resource.getrusage`。
+#
+# `apsw/ext.py` 用 `try / except ImportError:` 包住了这段——如果 `import resource`
+# 抛 ImportError，except 会把 `_get_resource = None` 走掉。Windows 上
+# `resource` 是 POSIX-only 模块，正常应该抛 ModuleNotFoundError（ImportError
+# 子类）。
+#
+# 但在某些环境下（安装器在 scheduled task 里通过 wscript 拉起时复现），`import
+# resource` 居然成功，但 `resource.getrusage` 不存在，导致 AttributeError
+# 直接炸出来——而 `except ImportError:` 抓不住它。
+#
+# 修复策略：如果 sys.modules 里已经有一个 `resource` 但它没有 `getrusage`，
+# 把它从 sys.modules 删掉，这样下次 `import resource` 会重新走模块查找，
+# 找不到就抛 ImportError，让 apsw.ext 的 except 接管。
+# ---------------------------------------------------------------------------
+_existing_resource = sys.modules.get("resource")
+if _existing_resource is not None and not hasattr(_existing_resource, "getrusage"):
+    del sys.modules["resource"]
 
 
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -50,6 +81,37 @@ def _is_pid_alive(pid: int) -> bool:
         return False
     _CloseHandle(handle)
     return True
+
+
+def _spawn_tray_process(home: Path) -> None:
+    """拉起托盘子进程。
+
+    托盘是独立进程而不是线程：pystray 的 win32 消息循环会阻塞当前线程，
+    与 uvicorn 的 asyncio 事件循环互相干扰。独立进程最简单，也最稳。
+    托盘会在父进程退出时被 job object 一起带走，所以不用担心孤儿进程。
+    """
+    if sys.platform != "win32":
+        return
+    # 安装包里的 python 是 embeddable，没有 .pyc 缓存路径问题；
+    # 这里走 sys.executable，等价于"和 gateway 同一个解释器"。
+    env = os.environ.copy()
+    env["QMT_GATEWAY_HOME"] = str(home)
+    try:
+        subprocess.Popen(  # noqa: S603
+            [sys.executable, "-m", "qmt_gateway.tray"],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=(
+                subprocess.DETACHED_PROCESS  # noqa: F821
+                | subprocess.CREATE_NEW_PROCESS_GROUP  # noqa: F821
+            ),
+        )
+        logger.info("托盘进程已拉起")
+    except OSError as exc:
+        logger.warning(f"托盘进程拉起失败（不影响 gateway 运行）: {exc}")
 
 
 def _acquire_single_instance_lock(home: Path) -> bool:
@@ -219,6 +281,11 @@ def main():
     import uvicorn
 
     configure_access_log(config.log_path)
+
+    # 托盘子进程必须在 uvicorn 启动前拉起——uvicorn.run() 阻塞主线程，
+    # 此后再 fork 会出问题。注意托盘是 *可选* 的：如果创建失败（比如
+    # 跑在 Linux/macOS 调试环境、或 pystray 不可用），gateway 仍然要正常服务。
+    _spawn_tray_process(runtime.home_path)
 
     uvicorn.run(
         "qmt_gateway.app:app",

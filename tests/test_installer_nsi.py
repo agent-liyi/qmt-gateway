@@ -663,3 +663,83 @@ def test_ci_workflow_runs_fetch_static_assets():
         "fetch-static-assets.py must run before makensis"
     )
 
+
+def test_create_shortcuts_script_exists():
+    """NSIS 自带 CreateShortCut 写出的 .lnk 文件名会落到系统 ANSI 代码页，
+    中文系统下显示为乱码。create-shortcuts.ps1 走 WScript.Shell 写 UTF-16 LE。
+    """
+    script = ROOT / "installer" / "create-shortcuts.ps1"
+    assert script.is_file(), f"Missing create-shortcuts.ps1: {script}"
+    text = script.read_text(encoding="utf-8-sig")
+    assert "WScript.Shell" in text
+    assert "CreateShortcut" in text
+    # 必须包含中文名称
+    assert "匡醍" in text, "Shortcut names must use the 匡醍 brand"
+    assert "停止" in text, "Stop action must produce a 停止 shortcut"
+    assert "卸载" in text, "Uninstall action must produce a 卸载 shortcut"
+
+
+def test_tray_module_exists():
+    """托盘模块：qmt_gateway.tray 提供 pystray 菜单和子进程入口。"""
+    tray = ROOT / "qmt_gateway" / "tray.py"
+    assert tray.is_file(), f"Missing tray module: {tray}"
+    text = tray.read_text(encoding="utf-8")
+    # 关键功能：菜单动作、子进程启动、读 .port
+    for needle in (
+        "pystray",
+        "打开管理界面",
+        "重启 QMT Gateway",
+        "停止 QMT Gateway",
+        "_kill_gateway",
+        "_spawn_gateway",
+        "_read_port",
+        "QMT_GATEWAY_HOME",
+        "taskkill",
+    ):
+        assert needle in text, f"tray.py missing: {needle}"
+
+
+def test_icon_file_and_generator():
+    """托盘图标 + 生成脚本：红底"匡"字。"""
+    ico = ROOT / "installer" / "qmt-gateway.ico"
+    gen = ROOT / "installer" / "generate-icon.py"
+    assert ico.is_file(), f"Missing icon: {ico}"
+    assert ico.stat().st_size > 0, "icon is empty"
+    assert gen.is_file(), f"Missing icon generator: {gen}"
+    text = gen.read_text(encoding="utf-8")
+    assert "匡" in text, "Icon must use 匡 character"
+    assert "D13527" in text or (209, 53, 39, 255) in text, (
+        "Icon must use brand red (#D13527 or 209,53,39)"
+    )
+
+
+def test_installer_nsi_bundles_tray_assets():
+    """托盘相关文件（图标 + 生成脚本）必须打包进安装器。"""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    assert 'File "qmt-gateway.ico"' in text, (
+        "installer.nsi must bundle the tray icon"
+    )
+    assert 'File "generate-icon.py"' in text, (
+        "installer.nsi must bundle the icon generator"
+    )
+    # stop.bat 已经被托盘取代，不应再打包
+    assert 'File "stop.bat"' not in text, (
+        "stop.bat is obsolete (tray menu handles stop)"
+    )
+
+
+def test_installer_nsi_no_ansi_create_shortcut():
+    """# 乱码修复：installer.nsi 必须不再直接用 CreateShortCut 写开始菜单
+    快捷方式（中文系统下显示乱码），改成调 create-shortcuts.ps1。"""
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    product_token = "${PRODUCT_NAME}"
+    for line_no, line in enumerate(text.splitlines(), start=1):
+        if "CreateShortCut" in line and product_token in line:
+            pytest.fail(
+                "installer.nsi line " + str(line_no) + ": CreateShortCut with "
+                + product_token + " still present (causes garbled Chinese)"
+            )
+    assert "create-shortcuts.ps1" in text, (
+        "installer.nsi must invoke create-shortcuts.ps1 to build start menu"
+    )
+

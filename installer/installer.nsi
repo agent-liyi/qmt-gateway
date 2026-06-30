@@ -301,6 +301,9 @@ Section "-Core" SEC_CORE
     File "start-silent.vbs"
     File "task-template.xml"
     File "register-task.ps1"
+    File "create-shortcuts.ps1"
+    File "qmt-gateway.ico"
+    File "generate-icon.py"
 
     !insertmacro LogStep "Core: bootstrap pip"
     ; Embed Python does not ship with venv/pip. Bootstrap pip with get-pip.py and
@@ -317,15 +320,14 @@ Section "-Core" SEC_CORE
     !insertmacro AbortOnExecFailure "Install Python dependencies"
 
     !insertmacro LogStep "Core: write shortcuts"
-    ; Shortcuts - since the gateway runs at logon and the UI is just a
-    ; web page on http://localhost:8130, the desktop shortcut opens the
-    ; URL directly. start.bat is kept for advanced/debug usage but is
-    ; not exposed as a shortcut to avoid confusing users who would then
-    ; run a second copy in a console.
+    ; NSIS 自带的 CreateShortCut 即便在 Unicode 模式下，写出的 .lnk
+    ; 文件名也只能落到系统 ANSI 代码页，中文系统下 Start Menu / Desktop
+    ; 会显示成乱码。改走 PowerShell + WScript.Shell.CreateShortcut，
+    ; 通过 IShellLinkW 写 UTF-16 LE 名称。
     !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
-    CreateDirectory "$SMPROGRAMS\$ICONS_GROUP"
-    CreateShortCut "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME}.lnk" "$INSTDIR\start.bat"
-    CreateShortCut "$DESKTOP\${PRODUCT_NAME}.lnk" "$INSTDIR\start.bat"
+    WriteIniStr "$INSTDIR\${PRODUCT_NAME}.url" "InternetShortcut" "URL" "${PRODUCT_WEB_SITE}"
+    nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\create-shortcuts.ps1" -InstallDir "$INSTDIR" -StartMenuDir "$ICONS_GROUP"'
+    !insertmacro AbortOnExecFailure "Create start menu shortcuts"
     !insertmacro MUI_STARTMENU_WRITE_END
 
     !insertmacro LogStep "Core: done"
@@ -340,6 +342,8 @@ Section "Autostart" SEC_AUTOSTART
 
     Delete "$INSTDIR\task-template.xml"
     Delete "$INSTDIR\register-task.ps1"
+    ; create-shortcuts.ps1 只在安装期用一次，之后不再需要
+    Delete "$INSTDIR\create-shortcuts.ps1"
 SectionEnd
 
 Section "Firewall" SEC_FIREWALL
@@ -358,13 +362,9 @@ SectionEnd
     !insertmacro MUI_DESCRIPTION_TEXT ${SEC_FIREWALL} $(DESC_SEC_FIREWALL)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
-Section -AdditionalIcons
-    !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
-    WriteIniStr "$INSTDIR\${PRODUCT_NAME}.url" "InternetShortcut" "URL" "${PRODUCT_WEB_SITE}"
-    CreateShortCut "$SMPROGRAMS\$ICONS_GROUP\Website.lnk" "$INSTDIR\${PRODUCT_NAME}.url"
-    CreateShortCut "$SMPROGRAMS\$ICONS_GROUP\Uninstall.lnk" "$INSTDIR\uninstall.bat"
-    !insertmacro MUI_STARTMENU_WRITE_END
-SectionEnd
+; 全部快捷方式（启动 / 停止 / 卸载 / Website / 桌面）都由
+; Core 阶段的 create-shortcuts.ps1 写，避免 NSIS CreateShortCut 在
+; 中文系统下产生乱码。
 
 Section -Post
     WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -405,13 +405,15 @@ Section Uninstall
     DetailPrint "正在删除防火墙规则..."
     nsExec::ExecToLog 'netsh advfirewall firewall delete rule name="QMT Gateway"'
 
-    ; Remove shortcuts
+    ; Remove shortcuts (Unicode-named, created by create-shortcuts.ps1)
     !insertmacro MUI_STARTMENU_GETFOLDER Application $ICONS_GROUP
     Delete "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME}.lnk"
-    Delete "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME} (静默启动).lnk"
+    Delete "$SMPROGRAMS\$ICONS_GROUP\${PRODUCT_NAME} - 停止.lnk"
     Delete "$SMPROGRAMS\$ICONS_GROUP\Website.lnk"
+    Delete "$SMPROGRAMS\$ICONS_GROUP\卸载.lnk"
     Delete "$SMPROGRAMS\$ICONS_GROUP\Uninstall.lnk"
     Delete "$DESKTOP\${PRODUCT_NAME}.lnk"
+    Delete "$DESKTOP\${PRODUCT_NAME}.url"
     RMDir "$SMPROGRAMS\$ICONS_GROUP"
 
     ; Ask about data directory
@@ -436,6 +438,9 @@ Section Uninstall
     Delete "$INSTDIR\start-silent.vbs"
     Delete "$INSTDIR\task-template.xml"
     Delete "$INSTDIR\register-task.ps1"
+    Delete "$INSTDIR\create-shortcuts.ps1"
+    Delete "$INSTDIR\qmt-gateway.ico"
+    Delete "$INSTDIR\generate-icon.py"
     Delete "$INSTDIR\uninstall.exe"
     Delete "$INSTDIR\${PRODUCT_NAME}.url"
     ; Clean any other top-level files (e.g. qmt_gateway sources installed at root)
