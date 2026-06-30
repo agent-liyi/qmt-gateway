@@ -318,10 +318,18 @@ def create_app():
     # 创建 FastHTML 应用
     app = FastHTML(
         hdrs=[
-            # DaisyUI（Tailwind 主题层；本地静态文件，避开跨域 Tracking Prevention）
+            # Tailwind v2（预编译，~3 MB；覆盖 .flex .text-sm .w-9 等原子类）
+            # 必须先于 DaisyUI——DaisyUI 的 .btn .card 等组件依赖 Tailwind 变量
+            Link(rel="stylesheet", href="/static/tailwind.min.css"),
+            # DaisyUI（主题层；.btn .loading .text-primary 等组件）
             Link(rel="stylesheet", href="/static/daisyui.min.css"),
             # HTMX
             Script(src="/static/htmx.min.js"),
+            # v3-only 工具类 polyfill（tailwind v2 没有 .shrink-0 简写）
+            Style(
+                ".shrink-0 { flex-shrink: 0; }\n"
+                ".flex-shrink-0 { flex-shrink: 0; }"
+            ),
         ],
         session_cookie="qmt_gateway_session",
     )

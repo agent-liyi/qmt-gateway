@@ -605,9 +605,12 @@ def test_installer_brand_and_website_link():
 
 
 def test_app_assets_are_served_locally():
-    """前端依赖（htmx / daisyui）必须从本地 /static/ 提供，避开跨域
-    Tracking Prevention 拦截 localStorage 导致 htmx 历史缓存失效。
-    自包含 Tailwind 见单独的 issue。
+    """前端依赖（tailwind / htmx / daisyui）必须从本地 /static/ 提供，避开
+    跨域 Tracking Prevention 拦截 localStorage 导致 htmx 历史缓存失效，
+    以及 Tailwind CDN 输出 \"should not be used in production\" 警告。
+
+    当前用 Tailwind v2.2.19 预编译 CSS（最后一个发布预编译包的版本）；
+    生产 Tailwind CLI 按需编译见单独的 issue。
     """
     from pathlib import Path
 
@@ -632,18 +635,25 @@ def test_app_assets_are_served_locally():
         assert "/static/daisyui.min.css" in text, (
             f"{src.name}: must reference local /static/daisyui.min.css"
         )
+        assert "/static/tailwind.min.css" in text, (
+            f"{src.name}: must reference local /static/tailwind.min.css"
+        )
 
     assert static_dir.is_dir(), f"Missing static assets dir: {static_dir}"
 
 
 def test_fetch_static_assets_script_exists():
-    """fetch-static-assets.py 由 CI 在 makensis 之前调用，把 htmx / daisyui
-    下载到 qmt_gateway/web/static/。"""
+    """fetch-static-assets.py 由 CI 在 makensis 之前调用，把 tailwind /
+    htmx / daisyui 下载到 qmt_gateway/web/static/。"""
     script = ROOT / "installer" / "fetch-static-assets.py"
     assert script.is_file(), f"Missing fetch script: {script}"
     text = script.read_text(encoding="utf-8")
     assert "unpkg.com/htmx.org" in text
     assert "daisyui" in text
+    assert "tailwindcss@2" in text, (
+        "fetch script must download Tailwind v2.2.19 (last version with "
+        "pre-built CSS, JIT-free)"
+    )
     assert "web/static" in text
 
 

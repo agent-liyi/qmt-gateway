@@ -26,9 +26,11 @@ class AppTheme:
         构建时下载到 ``qmt_gateway/web/static/``。
         """
         return [
+            # Tailwind v2（必须先于 DaisyUI）
+            Link(rel="stylesheet", href="/static/tailwind.min.css"),
             # DaisyUI（Tailwind 主题层）
             Link(rel="stylesheet", href="/static/daisyui.min.css"),
-            # 自定义主题 CSS
+            # 自定义主题 CSS + Tailwind v2→v3 兼容 polyfill
             Style(f"""
                 :root {{
                     --p: 4 90% 58%;  /* primary color in HSL: #D13527 approx */
@@ -48,6 +50,9 @@ class AppTheme:
                 .border-primary {{
                     border-color: {PRIMARY_COLOR} !important;
                 }}
+                /* Tailwind v3-only utility polyfill for v2 compat */
+                .shrink-0 {{ flex-shrink: 0; }}
+                .flex-shrink-0 {{ flex-shrink: 0; }}
             """),
             # HTMX
             Script(src="/static/htmx.min.js"),

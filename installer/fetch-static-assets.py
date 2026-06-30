@@ -1,9 +1,16 @@
 #!/usr/bin/env python3
 """下载前端静态资源到 ``qmt_gateway/web/static/``。
 
-CI 构建 NSIS 安装包前会运行本脚本，把 htmx 和 daisyui 打包进应用目录，
-避免运行时从 unpkg/jsdelivr 拉取（Tracking Prevention 会拦截跨域
-localStorage，导致 htmx 历史缓存失效）。
+CI 构建 NSIS 安装包前会运行本脚本，把 Tailwind / DaisyUI / htmx 打包进
+应用目录，避免运行时从 unpkg/jsdelivr 拉取（Tracking Prevention 会拦截
+跨域 localStorage，导致 htmx 历史缓存失效；同时 Tailwind CDN 会输出
+"should not be used in production" 警告）。
+
+为什么用 Tailwind v2.2.19 而不是 v3？v3 之后 Tailwind 切到 JIT 模式，不再
+发布预编译的 CSS——必须跑 Tailwind CLI 在构建期扫源码才能产出 CSS。
+v2.2.19 是最后支持"开箱即用预编译 CSS"的版本，CSS 体积约 3 MB（包含
+全部原子类），对桌面应用完全够用。生产 Tailwind（CLI + 按需生成 ~50 KB）
+是另一个 issue 的内容。
 
 本脚本也可在本地手动执行：
 
@@ -23,6 +30,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = REPO_ROOT / "qmt_gateway" / "web" / "static"
 
 ASSETS: list[tuple[str, str]] = [
+    (
+        "https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css",
+        "tailwind.min.css",
+    ),
     (
         "https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js",
         "htmx.min.js",
