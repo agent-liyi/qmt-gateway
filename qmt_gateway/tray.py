@@ -1,0 +1,234 @@
+"""QMT Gateway 系统托盘图标。
+
+启动后会在 Windows 系统托盘（任务栏右下角通知区）显示一个红色"匡"字图标，
+右键菜单：
+
+  - 打开管理界面  →  浏览器打开 http://localhost:<port>（.port 文件）
+  - 重启 Gateway  →  杀掉旧 PID，等端口空闲，再启动新的 gateway
+  - 停止 Gateway  →  杀掉 gateway 进程（托盘自身保留，可手动重启）
+  - 退出托盘      →  关闭托盘（gateway 继续运行）
+
+入口由 ``__main__`` 在 lifespan startup 阶段以独立子进程拉起，确保
+uvicorn 的事件循环不被 pystray 的 win32 消息循环阻塞。子进程在
+gateway 退出时也会自动结束。
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import threading
+import time
+import webbrowser
+from pathlib import Path
+from typing import Callable
+
+import pystray
+from loguru import logger
+from PIL import Image
+
+# 注意：这些路径在模块导入时初始化——但在 Windows embeddable 环境下
+# QMT_GATEWAY_HOME 是在 __main__.py 里 runtime.init() 之后才设置的。
+# 因此下面的 *_path() 辅助函数每次调用都重读环境变量，确保配置和
+# 运行时一致（__main__ 也会在拉起托盘前 export QMT_GATEWAY_HOME）。
+def _home_path() -> Path:
+    return Path(
+        os.environ.get("QMT_GATEWAY_HOME", str(Path.home() / ".qmt-gateway"))
+    )
+
+
+def _lock_file() -> Path:
+    return _home_path() / ".lock"
+
+
+def _port_file() -> Path:
+    return _home_path() / ".port"
+
+
+# 保留旧名以兼容外部导入；新代码用 _lock_file() / _port_file()
+LOCK_FILE = _lock_file()  # may be stale if env changes
+PORT_FILE = _port_file()
+ICON_PATH = Path(__file__).resolve().parent.parent / "installer" / "qmt-gateway.ico"
+
+
+def _read_port() -> int:
+    """读 .port 拿真实监听端口；没有就退回 8130。"""
+    port_path = _port_file()
+    try:
+        if port_path.exists():
+            raw = port_path.read_text(encoding="utf-8").strip()
+            if raw.isdigit():
+                return int(raw)
+    except OSError:
+        pass
+    return 8130
+
+
+def _read_pid() -> int | None:
+    """读单实例锁文件拿 PID；不存在或读不到返回 None。"""
+    lock_path = _lock_file()
+    try:
+        if lock_path.exists():
+            raw = lock_path.read_text(encoding="utf-8").strip()
+            if raw.isdigit():
+                return int(raw)
+    except OSError:
+        pass
+    return None
+
+
+def _kill_gateway(timeout: float = 5.0) -> bool:
+    """杀掉 lock 文件里记录的 gateway 进程；返回是否成功。
+
+    用 ``taskkill /F /T`` 而不是 ``os.kill``，因为：
+    - 子进程也会一起杀，避免孤儿 worker
+    - 权限足够，不需要 SeDebugPrivilege
+    """
+    pid = _read_pid()
+    if pid is None:
+        logger.warning("未找到单实例锁，跳过 kill")
+        return False
+    logger.info(f"正在终止 gateway 进程 (PID={pid})...")
+    try:
+        result = subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        logger.error("taskkill 超时")
+        return False
+    except FileNotFoundError:
+        logger.error("taskkill 不在 PATH 上，无法终止进程")
+        return False
+    if result.returncode == 0:
+        logger.info(f"gateway (PID={pid}) 已停止")
+        return True
+    logger.error(f"taskkill 失败: {result.stdout} {result.stderr}")
+    return False
+
+
+def _wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
+    """等待指定端口空闲。"""
+    import socket
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", port))
+                return True
+            except OSError:
+                time.sleep(0.3)
+    return False
+
+
+def _spawn_gateway() -> bool:
+    """启动一个新的 gateway 进程（用当前 Python 解释器）。"""
+    python = sys.executable
+    # 同一个 .exe、同一个 PYTHONPATH、同一个 QMT_GATEWAY_HOME
+    env = os.environ.copy()
+    try:
+        subprocess.Popen(
+            [python, "-m", "qmt_gateway"],
+            env=env,
+            creationflags=subprocess.DETACHED_PROCESS
+            if sys.platform == "win32"
+            else 0,
+        )
+        logger.info("新的 gateway 进程已拉起")
+        return True
+    except OSError as exc:
+        logger.error(f"启动 gateway 失败: {exc}")
+        return False
+
+
+def _load_icon() -> Image.Image:
+    """加载托盘图标；失败则退化为纯色方块。"""
+    try:
+        if ICON_PATH.is_file():
+            return Image.open(ICON_PATH)
+    except Exception as exc:
+        logger.warning(f"加载图标失败 ({ICON_PATH}): {exc}，使用占位图")
+    img = Image.new("RGBA", (32, 32), (209, 53, 39, 255))
+    return img
+
+
+def _open_browser(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    port = _read_port()
+    url = f"http://localhost:{port}"
+    logger.info(f"打开浏览器: {url}")
+    webbrowser.open(url)
+
+
+def _restart_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    port = _read_port()
+    logger.info("用户触发重启")
+    if _kill_gateway() and _wait_for_port_free(port, timeout=10.0):
+        _spawn_gateway()
+    else:
+        logger.warning("重启失败：旧进程未退出或端口仍占用")
+
+
+def _stop_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    logger.info("用户触发停止")
+    _kill_gateway()
+
+
+def _quit_tray(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    """退出托盘本身；gateway 继续运行（用户可从开始菜单重启托盘）。"""
+    logger.info("退出托盘；gateway 保持运行")
+    icon.stop()
+
+
+def _build_menu() -> pystray.Menu:
+    return pystray.Menu(
+        pystray.MenuItem("打开管理界面", _open_browser, default=True),
+        pystray.MenuItem("重启 QMT Gateway", _restart_gateway),
+        pystray.MenuItem("停止 QMT Gateway", _stop_gateway),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("退出托盘", _quit_tray),
+    )
+
+
+def run(
+    on_ready: Callable[[], None] | None = None,
+    on_stopped: Callable[[], None] | None = None,
+) -> None:
+    """同步入口：阻塞运行 pystray 消息循环。"""
+    icon = pystray.Icon(
+        "qmt-gateway",
+        icon=_load_icon(),
+        title="QMT Gateway",
+        menu=_build_menu(),
+    )
+    # 在另一个线程里触发 on_ready，避免 pystray.detect_double_click
+    # 之类的延迟回调阻塞启动
+    if on_ready is not None:
+
+        def _ready_signal():
+            time.sleep(0.5)
+            try:
+                on_ready()
+            except Exception as exc:
+                logger.error(f"on_ready 回调异常: {exc}")
+
+        threading.Thread(target=_ready_signal, daemon=True).start()
+
+    try:
+        icon.run()
+    finally:
+        if on_stopped is not None:
+            try:
+                on_stopped()
+            except Exception as exc:
+                logger.error(f"on_stopped 回调异常: {exc}")
+
+
+if __name__ == "__main__":
+    logger.remove()
+    logger.add(sys.stderr, level="INFO")
+    logger.info("QMT Gateway 托盘启动")
+    run()
