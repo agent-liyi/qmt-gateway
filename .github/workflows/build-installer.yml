@@ -25,6 +25,12 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile installer\python-embed.zip
         shell: pwsh
 
+      - name: Fetch frontend static assets
+        # 把 htmx / daisyui 下载到 qmt_gateway\web\static\，避免运行时跨域
+        # 加载触发浏览器 Tracking Prevention（参考 commit message）
+        run: python installer\fetch-static-assets.py
+        shell: pwsh
+
       - name: Set BUILD_NUMBER
         run: |
           $buildNumber = "${{ github.run_number }}"

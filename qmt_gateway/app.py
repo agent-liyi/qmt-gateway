@@ -318,18 +318,20 @@ def create_app():
     # 创建 FastHTML 应用
     app = FastHTML(
         hdrs=[
-            # Tailwind CSS
-            Script(src="https://cdn.tailwindcss.com"),
-            # DaisyUI
-            Link(
-                rel="stylesheet",
-                href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css",
-            ),
+            # DaisyUI（Tailwind 主题层；本地静态文件，避开跨域 Tracking Prevention）
+            Link(rel="stylesheet", href="/static/daisyui.min.css"),
             # HTMX
-            Script(src="https://unpkg.com/htmx.org@1.9.12"),
+            Script(src="/static/htmx.min.js"),
         ],
         session_cookie="qmt_gateway_session",
     )
+
+    # 本地静态资源（/static/* -> qmt_gateway/web/static/*）。
+    # 使用绝对路径而不是相对路径，避开"以哪个目录为 cwd"的歧义——
+    # 安装后 cwd 是 $INSTDIR，开发时是仓库根，只有绝对路径两种场景都正确。
+    _static_dir = Path(__file__).resolve().parent / "web" / "static"
+    if _static_dir.is_dir():
+        app.static_route_exts(prefix="/static/", static_path=str(_static_dir))
 
     # 注册 API 路由
     register_auth_routes(app)

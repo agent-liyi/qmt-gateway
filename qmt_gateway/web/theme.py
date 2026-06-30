@@ -18,15 +18,16 @@ class AppTheme:
 
     @staticmethod
     def headers():
-        """获取主题 headers（CSS 和脚本）"""
+        """获取主题 headers（CSS 和脚本）
+
+        所有静态资源都从本地 ``/static/`` 提供，避免运行时跨域加载触发
+        浏览器 Tracking Prevention（跨域 localStorage 被拦截会导致 htmx
+        历史缓存失效）。静态文件由 ``installer/fetch-static-assets.py`` 在
+        构建时下载到 ``qmt_gateway/web/static/``。
+        """
         return [
-            # Tailwind CSS
-            Script(src="https://cdn.tailwindcss.com"),
-            # DaisyUI
-            Link(
-                rel="stylesheet",
-                href="https://cdn.jsdelivr.net/npm/daisyui@4.12.10/dist/full.min.css",
-            ),
+            # DaisyUI（Tailwind 主题层）
+            Link(rel="stylesheet", href="/static/daisyui.min.css"),
             # 自定义主题 CSS
             Style(f"""
                 :root {{
@@ -49,7 +50,7 @@ class AppTheme:
                 }}
             """),
             # HTMX
-            Script(src="https://unpkg.com/htmx.org@1.9.12"),
+            Script(src="/static/htmx.min.js"),
         ]
 
 
