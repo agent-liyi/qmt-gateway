@@ -209,6 +209,13 @@ Function .onInit
     ; Chinese-only installer. The single registered language table above is
     ; used directly; NSIS will not pop a language picker because no picker
     ; macro is invoked here.
+    ;
+    ; 升级安装前先把已注册的开机自启计划任务停掉——避免它在我们解压
+    ; embedded Python 时拉起 start-silent.bat → python.exe 持有
+    ; python313.dll 等文件，导致 tar 报 "Can't unlink already-existing
+    ; object" 整个安装失败。停掉后计划任务的定义还在，install 完成
+    ; 后用户可以重新启用"开机自启"组件（它会 register-task.ps1 重新注册）。
+    nsExec::ExecToLog 'schtasks /end /tn "QMT Gateway" >nul 2>&1 & exit 0'
 FunctionEnd
 
 Function .onVerifyInstDir
@@ -256,6 +263,17 @@ Section "-Core" SEC_CORE
     ; 当前 $INSTDIR 不一致的同名 entry，并清理它们指向的残留目录。
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scrub-stale-installs.ps1" -InstallDir "$INSTDIR"'
     Delete "$INSTDIR\scrub-stale-installs.ps1"
+    !insertmacro LogStep "Core: wipe stale install dir"
+
+    ; 上一次 install 中途崩溃后可能留下半套残留文件（python.exe / .pyd / .dll
+    ; 仍被进程持有，或被 TrustedInstaller / AV 接管所有者），NSIS 自带的
+    ; RMDir /r 拿不动这些文件——结果后续 tar -xf 报 "Can't unlink
+    ; already-existing object" 整个安装中止。先用 takeown + icacls + cmd
+    ; rmdir 强制清掉 $INSTDIR（保留可能的 data 子目录除外）。如果 cmd rmdir
+    ; 也因为文件锁失败，我们继续往下走——新文件会被 SetOverwrite on 覆盖，
+    ; 残留的旧文件不会阻塞后续 Stage。
+    nsExec::ExecToLog 'cmd.exe /c takeown /f "$INSTDIR" /a /r /d y >nul 2>&1 & icacls "$INSTDIR" /grant Administrators:F /t /c /q >nul 2>&1 & cd /d "%TEMP%" & rmdir /s /q "$INSTDIR" >nul 2>&1 & exit 0'
+    SetOutPath "$INSTDIR"
     !insertmacro LogStep "Core: create install dir"
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage InitLogs'
     !insertmacro AbortOnExecFailure "Initialize install logs"
