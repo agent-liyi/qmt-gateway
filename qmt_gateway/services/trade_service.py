@@ -1254,7 +1254,11 @@ class TradeService:
         Returns:
             委托列表（字典列表）
         """
-        if not self._ensure_connected():
+        # 不要在同步 HTTP 路径里触发 _ensure_connected() —— 那是阻塞路径，
+        # 会同步启动 QMT 客户端（10+ 秒），导致 / 和 /trading 页面首次
+        # 加载卡住。断线场景由 mark_disconnected → _schedule_auto_reconnect
+        # 异步处理；这里只读已连接状态。
+        if not self._connected or self._trader is None or self._account is None:
             return []
 
         try:
@@ -1300,7 +1304,8 @@ class TradeService:
         Returns:
             成交列表（字典列表）
         """
-        if not self._ensure_connected():
+        # 同 get_orders：避免在同步路径里同步 connect()。
+        if not self._connected or self._trader is None or self._account is None:
             return []
 
         try:

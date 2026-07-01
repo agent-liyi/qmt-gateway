@@ -23,6 +23,9 @@ from qmt_gateway.tray import (
     _kill_gateway,
     _read_pid,
     _read_port,
+    _restart_gateway,
+    _spawn_gateway,
+    _start_gateway,
     _wait_for_port_free,
 )
 
@@ -175,3 +178,80 @@ def test_kill_gateway_handles_missing_taskkill(home: Path):
         side_effect=FileNotFoundError,
     ):
         assert _kill_gateway() is False
+
+
+# ---------- _restart_gateway / _start_gateway ----------
+#
+# 用户场景：托盘点"停止" → gateway 被 taskkill /F /PID 杀掉，.lock 残留
+# 指向死 PID，atexit 没机会跑。再点"启动"或"重启"必须能从这种状态恢复。
+# 之前的 bug 是 _restart_gateway 在 _kill_gateway() 返回 False 时短路掉了
+# _spawn_gateway()——结果什么也没发生。新实现加了 try/except + 显式
+# "pid 为 None 直接 spawn"分支。
+
+def test_restart_gateway_with_no_running_pid_calls_spawn(home: Path):
+    """停止后场景：.lock 不存在（atexit 已删）→ 直接 spawn，不调 kill。"""
+    assert _read_pid() is None
+    with patch("qmt_gateway.tray._spawn_gateway") as mock_spawn:
+        _restart_gateway(None, None)  # type: ignore[arg-type]
+        mock_spawn.assert_called_once()
+
+
+def test_restart_gateway_clears_stale_lock_then_kills_then_spawns(home: Path):
+    """.lock 指向死 PID → 先清过期锁，然后走 kill-and-spawn 路径。"""
+    (home / ".lock").write_text("99999\n", encoding="utf-8")
+    with patch("qmt_gateway.tray._is_pid_alive_windows", return_value=False), \
+         patch("qmt_gateway.tray._clear_stale_lock") as mock_clear, \
+         patch("qmt_gateway.tray._kill_gateway", return_value=True), \
+         patch("qmt_gateway.tray._wait_for_port_free", return_value=True), \
+         patch("qmt_gateway.tray._spawn_gateway") as mock_spawn:
+        _restart_gateway(None, None)  # type: ignore[arg-type]
+        mock_clear.assert_called_once()
+        mock_spawn.assert_called_once()
+
+
+def test_start_gateway_with_no_pid_calls_spawn(home: Path):
+    """停止后场景（.lock 已被 atexit 删）→ 直接 spawn。"""
+    assert _read_pid() is None
+    with patch("qmt_gateway.tray._clear_stale_lock") as mock_clear, \
+         patch("qmt_gateway.tray._spawn_gateway") as mock_spawn:
+        _start_gateway(None, None)  # type: ignore[arg-type]
+        mock_spawn.assert_called_once()
+
+
+def test_start_gateway_when_already_running_opens_browser(home: Path):
+    """gateway 已在跑 → 只打开浏览器，不重复 spawn。"""
+    (home / ".lock").write_text("99999\n", encoding="utf-8")
+    fake_icon = object()
+    fake_item = object()
+    with patch("qmt_gateway.tray._is_pid_alive_windows", return_value=True), \
+         patch("qmt_gateway.tray._open_browser") as mock_open, \
+         patch("qmt_gateway.tray._spawn_gateway") as mock_spawn:
+        _start_gateway(fake_icon, fake_item)  # type: ignore[arg-type]
+        mock_open.assert_called_once_with(fake_icon, fake_item)
+        mock_spawn.assert_not_called()
+
+
+def test_start_gateway_clears_stale_lock_before_spawn(home: Path):
+    """.lock 指向死 PID（taskkill /F 没给 atexit 机会）→ 必须先清再 spawn。"""
+    (home / ".lock").write_text("99999\n", encoding="utf-8")
+    with patch("qmt_gateway.tray._is_pid_alive_windows", return_value=False), \
+         patch("qmt_gateway.tray._clear_stale_lock") as mock_clear, \
+         patch("qmt_gateway.tray._spawn_gateway") as mock_spawn:
+        _start_gateway(None, None)  # type: ignore[arg-type]
+        mock_clear.assert_called_once()
+        mock_spawn.assert_called_once()
+
+
+def test_restart_gateway_swallows_callback_exceptions(home: Path):
+    """pystray 菜单回调抛异常时必须被 try/except 兜住——否则整个
+    tray 消息循环挂掉，用户只能从任务管理器杀进程。"""
+    (home / ".lock").write_text("99999\n", encoding="utf-8")
+    with patch("qmt_gateway.tray._clear_stale_lock", side_effect=RuntimeError("boom")):
+        # 不应抛出
+        _restart_gateway(None, None)  # type: ignore[arg-type]
+
+
+def test_start_gateway_swallows_callback_exceptions(home: Path):
+    """同 test_restart_gateway_swallows_callback_exceptions。"""
+    with patch("qmt_gateway.tray._clear_stale_lock", side_effect=RuntimeError("boom")):
+        _start_gateway(None, None)  # type: ignore[arg-type]

@@ -3,14 +3,20 @@
 
 CI 构建 NSIS 安装包前会运行本脚本，把 Tailwind / DaisyUI / htmx 打包进
 应用目录，避免运行时从 unpkg/jsdelivr 拉取（Tracking Prevention 会拦截
-跨域 localStorage，导致 htmx 历史缓存失效；同时 Tailwind CDN 会输出
-"should not be used in production" 警告）。
+跨域 localStorage，导致 htmx 历史缓存失效）。
 
-为什么用 Tailwind v2.2.19 而不是 v3？v3 之后 Tailwind 切到 JIT 模式，不再
-发布预编译的 CSS——必须跑 Tailwind CLI 在构建期扫源码才能产出 CSS。
-v2.2.19 是最后支持"开箱即用预编译 CSS"的版本，CSS 体积约 3 MB（包含
-全部原子类），对桌面应用完全够用。生产 Tailwind（CLI + 按需生成 ~50 KB）
-是另一个 issue 的内容。
+为什么用 Tailwind Play CDN 而不是 v2 预编译 CSS 或 v3 CLI？
+- Play CDN（cdn.tailwindcss.com）是 Tailwind 官方提供的运行时 JIT 编译器，
+  客户端首次加载后扫一遍 DOM、按需生成 CSS。400 KB（含编译器本体），
+  比 v2 预编译的 ~3 MB CSS 小一档，跟原来 CDN 时代的渲染行为完全一致。
+- v2 预编译 CSS 缺少 v3 新增的若干原子类（.shrink-0 .gap-x-* .focus:ring-*
+  等），会导致"原本正常的 UI"在 vendoring 后变样，需要写一堆 polyfill
+  维护成本高。
+- v3 CLI 必须构建期扫源码，对 fasthtml 生成的 HTML（运行时才有内容）
+  不友好；要在构建期处理就得把模板里所有 class 枚举出来，可行性差。
+
+Play CDN 本地化是速度（比外网 CDN 快）+ 稳定性（不依赖网络）+ 设计保真
+（与原 CDN 渲染完全一致）的折中点。
 
 本脚本也可在本地手动执行：
 
@@ -31,8 +37,10 @@ STATIC_DIR = REPO_ROOT / "qmt_gateway" / "web" / "static"
 
 ASSETS: list[tuple[str, str]] = [
     (
-        "https://unpkg.com/tailwindcss@2.2.19/dist/tailwind.min.css",
-        "tailwind.min.css",
+        # Tailwind Play CDN（含 v3 JIT 编译器，~400 KB）。
+        # 比 v2 预编译 CSS 小，渲染行为与原 CDN 时代一致，保留所有 v3 原子类。
+        "https://cdn.tailwindcss.com",
+        "tailwind.min.js",
     ),
     (
         "https://unpkg.com/htmx.org@1.9.12/dist/htmx.min.js",

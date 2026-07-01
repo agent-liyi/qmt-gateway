@@ -228,43 +228,57 @@ def _load_icon() -> Image.Image:
 
 
 def _open_browser(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-    port = _read_port()
-    url = f"http://localhost:{port}"
-    logger.info(f"打开浏览器: {url}")
-    webbrowser.open(url)
+    try:
+        port = _read_port()
+        url = f"http://localhost:{port}"
+        logger.info(f"打开浏览器: {url}")
+        webbrowser.open(url)
+    except Exception as exc:
+        logger.exception(f"打开浏览器失败: {exc}")
 
 
 def _restart_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-    logger.info("用户触发重启")
-    # 先清过期锁（gateway 已被外部 kill -9 / 任务管理器结束的场景）
-    _clear_stale_lock()
-    # "停止"之后 gateway 已死、.lock 已被 atexit 删掉，_read_pid() 返回 None。
-    # 此时 _kill_gateway() 返回 False，旧实现会短路掉 _spawn_gateway()——
-    # 结果用户点"重启"什么也没发生。这里改成：没有正在跑的进程就直接拉起。
-    # 注意不调 _wait_for_port_free：停止后 .port 已被删，_read_port() 退回
-    # 8130，但 8130 可能被别的应用占用——此时等它空闲会误判为"端口占用"。
-    # gateway 内部的 find_available_port 会自己探测可用端口，托盘不需要干预。
-    pid = _read_pid()
-    if pid is None:
-        logger.info("未发现正在运行的 gateway，直接启动新实例")
-        _spawn_gateway()
-        return
-    port = _read_port()
-    if _kill_gateway() and _wait_for_port_free(port, timeout=10.0):
-        _spawn_gateway()
-    else:
-        logger.warning("重启失败：旧进程未退出或端口仍占用")
+    try:
+        logger.info("用户触发重启")
+        # 先清过期锁（gateway 已被外部 kill -9 / 任务管理器结束的场景）
+        _clear_stale_lock()
+        # "停止"之后 gateway 已死、.lock 已被 atexit 删掉，_read_pid() 返回 None。
+        # 此时 _kill_gateway() 返回 False，旧实现会短路掉 _spawn_gateway()——
+        # 结果用户点"重启"什么也没发生。这里改成：没有正在跑的进程就直接拉起。
+        # 注意不调 _wait_for_port_free：停止后 .port 已被删，_read_port() 退回
+        # 8130，但 8130 可能被别的应用占用——此时等它空闲会误判为"端口占用"。
+        # gateway 内部的 find_available_port 会自己探测可用端口，托盘不需要干预。
+        pid = _read_pid()
+        if pid is None:
+            logger.info("未发现正在运行的 gateway，直接启动新实例")
+            if not _spawn_gateway():
+                logger.error("重启失败：spawn 返回 False")
+            return
+        port = _read_port()
+        if _kill_gateway() and _wait_for_port_free(port, timeout=10.0):
+            if not _spawn_gateway():
+                logger.error("重启失败：spawn 返回 False")
+        else:
+            logger.warning("重启失败：旧进程未退出或端口仍占用")
+    except Exception as exc:
+        logger.exception(f"重启失败: {exc}")
 
 
 def _stop_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-    logger.info("用户触发停止")
-    _kill_gateway()
+    try:
+        logger.info("用户触发停止")
+        _kill_gateway()
+    except Exception as exc:
+        logger.exception(f"停止失败: {exc}")
 
 
 def _quit_tray(icon: pystray.Icon, item: pystray.MenuItem) -> None:
     """退出托盘本身；gateway 继续运行（用户可从开始菜单重启托盘）。"""
-    logger.info("退出托盘；gateway 保持运行")
-    icon.stop()
+    try:
+        logger.info("退出托盘；gateway 保持运行")
+        icon.stop()
+    except Exception as exc:
+        logger.exception(f"退出托盘失败: {exc}")
 
 
 def _start_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
@@ -275,15 +289,19 @@ def _start_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
     探测可用端口，托盘不需要预先等端口空闲（否则 8130 被别的应用占用时
     会误判为"无法启动"）。
     """
-    logger.info("用户触发启动")
-    _clear_stale_lock()
-    pid = _read_pid()
-    if pid is not None and _is_pid_alive_windows(pid):
-        # 已经在跑——直接打开浏览器，不重复拉起
-        logger.info("gateway 已在运行，打开浏览器")
-        _open_browser(icon, item)
-        return
-    _spawn_gateway()
+    try:
+        logger.info("用户触发启动")
+        _clear_stale_lock()
+        pid = _read_pid()
+        if pid is not None and _is_pid_alive_windows(pid):
+            # 已经在跑——直接打开浏览器，不重复拉起
+            logger.info("gateway 已在运行，打开浏览器")
+            _open_browser(icon, item)
+            return
+        if not _spawn_gateway():
+            logger.error("启动失败：spawn 返回 False")
+    except Exception as exc:
+        logger.exception(f"启动失败: {exc}")
 
 
 def _build_menu() -> pystray.Menu:
@@ -334,5 +352,24 @@ def run(
 if __name__ == "__main__":
     logger.remove()
     logger.add(sys.stderr, level="INFO")
+    # 托盘是 DETACHED_PROCESS 启动的，stderr 在父进程上下文里没有可见
+    # 的控制台——所有诊断信息会消失。这里把 INFO 及以上级别的日志镜像
+    # 到 $INSTDIR\logs\tray.log（开发态为仓库根的 logs\tray.log），
+    # 出问题时有据可查。
+    try:
+        log_dir = Path(__file__).resolve().parent.parent / "logs"
+        # 安装态：qmt_gateway/tray.py 在 $INSTDIR\app\qmt_gateway\，
+        # parent.parent 是 $INSTDIR\app，所以这里指向 app\logs。
+        # 退而求其次写到 logs\tray.log（cwd 视角）。
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            log_dir / "tray.log",
+            level="INFO",
+            rotation="1 MB",
+            retention=3,
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
     logger.info("QMT Gateway 托盘启动")
     run()

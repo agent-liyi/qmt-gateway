@@ -313,6 +313,7 @@ Section "-Core" SEC_CORE
     File "start.bat"
     File "start-silent.bat"
     File "start-silent.vbs"
+    File "wait-and-open-browser.ps1"
     File "task-template.xml"
     File "register-task.ps1"
     File "create-shortcuts.ps1"

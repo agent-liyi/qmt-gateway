@@ -606,11 +606,11 @@ def test_installer_brand_and_website_link():
 
 def test_app_assets_are_served_locally():
     """前端依赖（tailwind / htmx / daisyui）必须从本地 /static/ 提供，避开
-    跨域 Tracking Prevention 拦截 localStorage 导致 htmx 历史缓存失效，
-    以及 Tailwind CDN 输出 \"should not be used in production\" 警告。
+    跨域 Tracking Prevention 拦截 localStorage 导致 htmx 历史缓存失效。
 
-    当前用 Tailwind v2.2.19 预编译 CSS（最后一个发布预编译包的版本）；
-    生产 Tailwind CLI 按需编译见单独的 issue。
+    当前用 Tailwind Play CDN（cdn.tailwindcss.com）的本地拷贝——
+    ~400 KB 的 v3 JIT 运行时，与原 CDN 渲染完全一致，比 v2 预编译 CSS
+    （~3 MB，缺 v3 原子类）更小更保真。
     """
     from pathlib import Path
 
@@ -621,7 +621,7 @@ def test_app_assets_are_served_locally():
     for src in (app_py, theme_py):
         text = src.read_text(encoding="utf-8")
         assert "cdn.tailwindcss.com" not in text, (
-            f"{src.name}: Tailwind CDN removed (separate issue for self-contained CSS)"
+            f"{src.name}: Tailwind must be served from local /static/"
         )
         assert "unpkg.com" not in text, (
             f"{src.name}: htmx must be served from local /static/"
@@ -635,8 +635,8 @@ def test_app_assets_are_served_locally():
         assert "/static/daisyui.min.css" in text, (
             f"{src.name}: must reference local /static/daisyui.min.css"
         )
-        assert "/static/tailwind.min.css" in text, (
-            f"{src.name}: must reference local /static/tailwind.min.css"
+        assert "/static/tailwind.min.js" in text, (
+            f"{src.name}: must reference local /static/tailwind.min.js"
         )
 
     assert static_dir.is_dir(), f"Missing static assets dir: {static_dir}"
@@ -650,10 +650,11 @@ def test_fetch_static_assets_script_exists():
     text = script.read_text(encoding="utf-8")
     assert "unpkg.com/htmx.org" in text
     assert "daisyui" in text
-    assert "tailwindcss@2" in text, (
-        "fetch script must download Tailwind v2.2.19 (last version with "
-        "pre-built CSS, JIT-free)"
+    assert "cdn.tailwindcss.com" in text, (
+        "fetch script must download Tailwind Play CDN (cdn.tailwindcss.com) "
+        "for local v3 JIT rendering"
     )
+    assert "tailwind.min.js" in text
     assert "web/static" in text
 
 

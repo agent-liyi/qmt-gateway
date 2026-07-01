@@ -318,18 +318,14 @@ def create_app():
     # 创建 FastHTML 应用
     app = FastHTML(
         hdrs=[
-            # Tailwind v2（预编译，~3 MB；覆盖 .flex .text-sm .w-9 等原子类）
-            # 必须先于 DaisyUI——DaisyUI 的 .btn .card 等组件依赖 Tailwind 变量
-            Link(rel="stylesheet", href="/static/tailwind.min.css"),
+            # Tailwind Play CDN（v3 JIT 编译器，本地化；与原 CDN 渲染行为完全一致，
+            # 保留全部 v3 原子类，包括 .shrink-0 .gap-x-* .focus:ring-* 等）。
+            # 体积 ~400 KB（含编译器），小于 v2 预编译的 ~3 MB CSS。
+            Script(src="/static/tailwind.min.js"),
             # DaisyUI（主题层；.btn .loading .text-primary 等组件）
             Link(rel="stylesheet", href="/static/daisyui.min.css"),
             # HTMX
             Script(src="/static/htmx.min.js"),
-            # v3-only 工具类 polyfill（tailwind v2 没有 .shrink-0 简写）
-            Style(
-                ".shrink-0 { flex-shrink: 0; }\n"
-                ".flex-shrink-0 { flex-shrink: 0; }"
-            ),
         ],
         session_cookie="qmt_gateway_session",
     )
