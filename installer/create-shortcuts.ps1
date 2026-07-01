@@ -169,15 +169,19 @@ if ($Actions -contains 'Start') {
 }
 
 # 2. 卸载：托盘菜单接管了"停止"/"重启"，开始菜单不再列停止入口
+# NSIS 的 WriteUninstaller 生成的是 uninstall.exe（见 installer.nsi -Post
+# 段），而不是 uninstall.bat。早期版本误指向 uninstall.bat，导致开始菜单
+# 的 Uninstall.lnk 点击后提示找不到文件（控制面板走的是注册表
+# UninstallString，指向 uninstall.exe，所以控制面板卸载正常）。
 if ($Actions -contains 'Uninstall') {
     New-Shortcut `
         -Path (Join-Path $smAppDir '卸载.lnk') `
-        -Target (Join-Path $InstallDir 'uninstall.bat') `
+        -Target (Join-Path $InstallDir 'uninstall.exe') `
         -WorkingDirectory $InstallDir `
         -Description '卸载 QMT Gateway'
     New-Shortcut `
         -Path (Join-Path $smAppDir 'Uninstall.lnk') `
-        -Target (Join-Path $InstallDir 'uninstall.bat') `
+        -Target (Join-Path $InstallDir 'uninstall.exe') `
         -WorkingDirectory $InstallDir `
         -Description 'Uninstall QMT Gateway'
 }

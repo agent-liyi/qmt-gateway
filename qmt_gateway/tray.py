@@ -4,8 +4,9 @@
 右键菜单：
 
   - 打开管理界面  →  浏览器打开 http://localhost:<port>（.port 文件）
+  - 启动 Gateway  →  停止后重新拉起 gateway（若已在跑则打开浏览器）
   - 重启 Gateway  →  杀掉旧 PID，等端口空闲，再启动新的 gateway
-  - 停止 Gateway  →  杀掉 gateway 进程（托盘自身保留，可手动重启）
+  - 停止 Gateway  →  杀掉 gateway 进程（托盘自身保留，可手动启动/重启）
   - 退出托盘      →  关闭托盘（gateway 继续运行）
 
 入口由 ``__main__`` 在 lifespan startup 阶段以独立子进程拉起，确保
@@ -234,10 +235,21 @@ def _open_browser(icon: pystray.Icon, item: pystray.MenuItem) -> None:
 
 
 def _restart_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
-    port = _read_port()
     logger.info("用户触发重启")
     # 先清过期锁（gateway 已被外部 kill -9 / 任务管理器结束的场景）
     _clear_stale_lock()
+    # "停止"之后 gateway 已死、.lock 已被 atexit 删掉，_read_pid() 返回 None。
+    # 此时 _kill_gateway() 返回 False，旧实现会短路掉 _spawn_gateway()——
+    # 结果用户点"重启"什么也没发生。这里改成：没有正在跑的进程就直接拉起。
+    # 注意不调 _wait_for_port_free：停止后 .port 已被删，_read_port() 退回
+    # 8130，但 8130 可能被别的应用占用——此时等它空闲会误判为"端口占用"。
+    # gateway 内部的 find_available_port 会自己探测可用端口，托盘不需要干预。
+    pid = _read_pid()
+    if pid is None:
+        logger.info("未发现正在运行的 gateway，直接启动新实例")
+        _spawn_gateway()
+        return
+    port = _read_port()
     if _kill_gateway() and _wait_for_port_free(port, timeout=10.0):
         _spawn_gateway()
     else:
@@ -255,9 +267,29 @@ def _quit_tray(icon: pystray.Icon, item: pystray.MenuItem) -> None:
     icon.stop()
 
 
+def _start_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
+    """启动 gateway（停止后用来重新拉起服务）。
+
+    与 _restart_gateway 的区别：这里假定当前没有正在运行的 gateway，
+    不做 kill，直接 spawn。gateway 内部的 find_available_port 会自己
+    探测可用端口，托盘不需要预先等端口空闲（否则 8130 被别的应用占用时
+    会误判为"无法启动"）。
+    """
+    logger.info("用户触发启动")
+    _clear_stale_lock()
+    pid = _read_pid()
+    if pid is not None and _is_pid_alive_windows(pid):
+        # 已经在跑——直接打开浏览器，不重复拉起
+        logger.info("gateway 已在运行，打开浏览器")
+        _open_browser(icon, item)
+        return
+    _spawn_gateway()
+
+
 def _build_menu() -> pystray.Menu:
     return pystray.Menu(
         pystray.MenuItem("打开管理界面", _open_browser, default=True),
+        pystray.MenuItem("启动 QMT Gateway", _start_gateway),
         pystray.MenuItem("重启 QMT Gateway", _restart_gateway),
         pystray.MenuItem("停止 QMT Gateway", _stop_gateway),
         pystray.Menu.SEPARATOR,
