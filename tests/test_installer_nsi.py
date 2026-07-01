@@ -588,7 +588,7 @@ def test_installer_preserves_qmt_gateway_package_layout():
 
 
 def test_installer_brand_and_website_link():
-    """#59 (branding) and #64 (link target) use 匡醍 + the zillionare repo URL."""
+    """#59 (branding) and #64 (link target) use 匡醍 + the quantide blog URL."""
     text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
     assert "匡醍 QMT 交易网关" in text, (
         "Installer title must use 匡醍 QMT 交易网关 (#59)"
@@ -596,8 +596,8 @@ def test_installer_brand_and_website_link():
     assert "迅投 QMT 交易网关" not in text, (
         "Old 迅投 brand string must no longer appear in the installer (#59)"
     )
-    assert "https://github.com/zillionare/qmt-gateway" in text, (
-        "Website link must point to zillionare/qmt-gateway (#64)"
+    assert "https://blog.quantide.cn" in text, (
+        "Website link must point to https://blog.quantide.cn"
     )
     assert "https://github.com/quantclaws/qmt-gateway" not in text, (
         "Old quantclaws website must be replaced (#64)"

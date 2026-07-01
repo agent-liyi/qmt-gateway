@@ -20,7 +20,7 @@ param(
 
     [string[]]$Actions = @('Start', 'Uninstall', 'Website'),
 
-    [string]$WebsiteUrl = 'https://github.com/zillionare/qmt-gateway',
+    [string]$WebsiteUrl = 'https://blog.quantide.cn',
 
     [string]$AppName = '匡醍 QMT 交易网关'
 )
@@ -153,19 +153,22 @@ Get-ChildItem -LiteralPath $desktopRoot -Filter '*.lnk' -ErrorAction SilentlyCon
         }
     }
 
-# 1. 启动：打开浏览器（带端口探测）
+# 1. 启动：静默拉起 gateway + 托盘 + 打开浏览器
+# 用 start-silent.vbs（和开机自启一样的路径），不弹控制台窗口——
+# 用户关掉资源管理器窗口或锁屏都不会杀掉 gateway。
+# start.bat 保留给开发者调试（需要看日志时手动跑）。
 if ($Actions -contains 'Start') {
-    $startBat = Join-Path $InstallDir 'start.bat'
+    $startSilentVbs = Join-Path $InstallDir 'start-silent.vbs'
     New-Shortcut `
         -Path (Join-Path $smAppDir "$AppName.lnk") `
-        -Target $startBat `
+        -Target $startSilentVbs `
         -WorkingDirectory $InstallDir `
-        -Description '打开 QMT 交易网关管理界面'
+        -Description '启动 QMT 交易网关（静默）'
     New-Shortcut `
         -Path (Join-Path $desktopRoot "$AppName.lnk") `
-        -Target $startBat `
+        -Target $startSilentVbs `
         -WorkingDirectory $InstallDir `
-        -Description '打开 QMT 交易网关管理界面'
+        -Description '启动 QMT 交易网关（静默）'
 }
 
 # 2. 卸载：托盘菜单接管了"停止"/"重启"，开始菜单不再列停止入口

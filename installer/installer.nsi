@@ -14,7 +14,7 @@ SetCompress off
 !define PRODUCT_VERSION "0.2.0"
 !define BUILD_NUMBER "0"  ; Replaced by CI with github.run_number
 !define PRODUCT_PUBLISHER "zillionare"
-!define PRODUCT_WEB_SITE "https://github.com/zillionare/qmt-gateway"
+!define PRODUCT_WEB_SITE "https://blog.quantide.cn"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\qmt-gateway.exe"
 !define PRODUCT_DIR_REGKEY_WOW "Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\qmt-gateway.exe"
 !define PRODUCT_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${PRODUCT_NAME}"

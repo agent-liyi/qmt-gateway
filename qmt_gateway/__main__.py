@@ -265,6 +265,28 @@ def _remove_port_file() -> None:
         pass
 
 
+def _is_tray_already_running() -> bool:
+    """检查是否已有 qmt_gateway.tray 进程在跑（避免重复拉起多个托盘图标）。
+
+    用 WMI 查 CommandLine 含 "qmt_gateway.tray" 的 python.exe 进程。
+    只在 win32 上做检查；其它平台直接返回 False。
+    """
+    if sys.platform != "win32":
+        return False
+    import subprocess
+
+    try:
+        out = subprocess.check_output(
+            'wmic process where "name=\'python.exe\'" get commandline /format:list',
+            shell=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        ).decode("utf-8", errors="replace")
+    except (subprocess.SubprocessError, OSError):
+        return False
+    return "qmt_gateway.tray" in out
+
+
 def _spawn_tray_process(home: Path) -> None:
     """拉起托盘子进程。
 
@@ -274,6 +296,15 @@ def _spawn_tray_process(home: Path) -> None:
     """
     if sys.platform != "win32":
         return
+
+    # 避免重复拉起：如果已有一个 qmt_gateway.tray 进程在跑（用户从托盘
+    # "重启"或从开始菜单再次启动 gateway），就不要再拉第二个——否则托盘
+    # 区会叠加多个图标。用 WMI 查 CommandLine 含 "qmt_gateway.tray" 的
+    # python.exe 进程。
+    if _is_tray_already_running():
+        logger.info("检测到已有托盘进程在运行，跳过拉起新托盘")
+        return
+
     # 安装包里的 python 是 embeddable，没有 .pyc 缓存路径问题；
     # 这里走 sys.executable，等价于"和 gateway 同一个解释器"。
     env = os.environ.copy()

@@ -2,7 +2,6 @@
 
 > 一个独立的 Windows 网关服务，封装 [QMT（迅投量化交易终端）](https://www.thinktrader.net/) 的 `xtquant` SDK，将交易、行情等功能以 HTTP / WebSocket API 的形式对外暴露。策略程序可以在任意平台运行，无需依赖 QMT 自带的 Python 环境。
 
-![托盘图标](docs/tray-icon.png)
 
 ## 功能概览
 
@@ -19,13 +18,13 @@
 
 ## 环境要求
 
-| 依赖 | 说明 |
-|---|---|
-| 操作系统 | Windows 10 / 11（64 位） |
-| QMT | 安装在本机，已完成授权 |
-| xtquant | 通过配置的 QMT 路径自动加载 |
+| 依赖     | 说明                        |
+| -------- | --------------------------- |
+| 操作系统 | Windows 10 / 11（64 位）    |
+| QMT      | 安装在本机，已完成授权      |
+| xtquant  | 通过配置的 QMT 路径自动加载 |
 
-不需要自己装 Python：安装程序自带嵌入式 Python 3.13。
+安装程序自带嵌入式 Python 3.13，不需要自己装 Python。
 
 ## 安装
 
@@ -46,7 +45,7 @@
 
 ### 二、首次配置
 
-服务启动后会自动打开浏览器到 `http://localhost:8130`，进入初始化向导：
+安装完成后，会自动打开浏览器到 `http://localhost:8130`，进入初始化向导：
 
 1. **QMT 路径** — 指定 QMT 客户端安装目录
 2. **管理员账号** — 设置 Web 管理界面的登录密码
@@ -63,12 +62,12 @@
 
 **右键菜单：**
 
-| 菜单项 | 作用 |
-|---|---|
-| **打开管理界面** | 浏览器打开当前网关的 Web UI（自动用实际端口，即使 8130 被占用跳到 8131 也对） |
-| **重启 QMT Gateway** | 终止当前网关进程，等待端口空闲，再启动新的 |
-| **停止 QMT Gateway** | 终止网关进程（托盘自身保留——选"退出托盘"才关托盘） |
-| **退出托盘** | 关闭托盘程序；网关继续运行 |
+| 菜单项               | 作用                                                                          |
+| -------------------- | ----------------------------------------------------------------------------- |
+| **打开管理界面**     | 浏览器打开当前网关的 Web UI（自动用实际端口，即使 8130 被占用跳到 8131 也对） |
+| **重启 QMT Gateway** | 终止当前网关进程，等待端口空闲，再启动新的                                    |
+| **停止 QMT Gateway** | 终止网关进程（托盘自身保留——选"退出托盘"才关托盘）                            |
+| **退出托盘**         | 关闭托盘程序；网关继续运行                                                    |
 
 **双击托盘** = 打开管理界面（同"打开管理界面"）。
 
@@ -111,21 +110,21 @@
     --home "C:\Users\you\.qmt-gateway"
 ```
 
-| 参数 | 说明 |
-|---|---|
-| `--host` | 监听地址（默认 `0.0.0.0`） |
-| `--port` | 端口（默认 8130，被占用则自动跳到 8131） |
-| `--home` | 数据主目录 |
-| `--init-wizard` | 显示初始化向导 |
-| `--force` | 强制重新初始化（配合 `--init-wizard`） |
+| 参数            | 说明                                     |
+| --------------- | ---------------------------------------- |
+| `--host`        | 监听地址（默认 `0.0.0.0`）               |
+| `--port`        | 端口（默认 8130，被占用则自动跳到 8131） |
+| `--home`        | 数据主目录                               |
+| `--init-wizard` | 显示初始化向导                           |
+| `--force`       | 强制重新初始化（配合 `--init-wizard`）   |
 
 ### 环境变量
 
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `QMT_GATEWAY_HOST` | `0.0.0.0` | 服务监听地址 |
-| `QMT_GATEWAY_PORT` | `8130` | 服务端口 |
-| `QMT_GATEWAY_HOME` | `~/.qmt-gateway` | 数据主目录 |
+| 变量               | 默认值           | 说明         |
+| ------------------ | ---------------- | ------------ |
+| `QMT_GATEWAY_HOST` | `0.0.0.0`        | 服务监听地址 |
+| `QMT_GATEWAY_PORT` | `8130`           | 服务端口     |
+| `QMT_GATEWAY_HOME` | `~/.qmt-gateway` | 数据主目录   |
 
 ## API 参考
 
@@ -133,14 +132,14 @@
 
 ### 认证
 
-| 方法 | 端点 | 说明 |
-|---|---|---|
-| `GET` | `/login` | 登录页面 |
-| `POST` | `/auth/login` | 用户名 + 密码登录 |
-| `GET` | `/auth/logout` | 登出 |
-| `POST` | `/api/api-keys` | 创建 API Key |
-| `GET` | `/api/api-keys` | 列出所有 API Key |
-| `DELETE` | `/api/api-keys/{key_id}` | 吊销 API Key |
+| 方法     | 端点                     | 说明              |
+| -------- | ------------------------ | ----------------- |
+| `GET`    | `/login`                 | 登录页面          |
+| `POST`   | `/auth/login`            | 用户名 + 密码登录 |
+| `GET`    | `/auth/logout`           | 登出              |
+| `POST`   | `/api/api-keys`          | 创建 API Key      |
+| `GET`    | `/api/api-keys`          | 列出所有 API Key  |
+| `DELETE` | `/api/api-keys/{key_id}` | 吊销 API Key      |
 
 程序化访问示例：
 ```bash
@@ -149,18 +148,18 @@ curl -H "X-API-Key: qmt_abc123..." http://localhost:8130/api/trade/asset
 
 ### 交易
 
-| 方法 | 端点 | 说明 |
-|---|---|---|
-| `GET` | `/api/trade/asset` | 账户资产 |
-| `GET` | `/api/trade/positions` | 当前持仓 |
-| `GET` | `/api/trade/orders` | 当日委托 |
-| `GET` | `/api/trade/trades` | 当日成交 |
-| `POST` | `/api/trade/buy` | 买入 |
-| `POST` | `/api/trade/sell` | 卖出 |
-| `POST` | `/api/trade/cancel` | 按 qtoid 撤单 |
-| `GET` | `/api/trade/connection-status` | QMT 连接状态 |
-| `POST` | `/api/trade/restart-qmt` | 重启 QMT 并自动登录 |
-| `POST` | `/api/asset/principal` | 修改本金 |
+| 方法   | 端点                           | 说明                |
+| ------ | ------------------------------ | ------------------- |
+| `GET`  | `/api/trade/asset`             | 账户资产            |
+| `GET`  | `/api/trade/positions`         | 当前持仓            |
+| `GET`  | `/api/trade/orders`            | 当日委托            |
+| `GET`  | `/api/trade/trades`            | 当日成交            |
+| `POST` | `/api/trade/buy`               | 买入                |
+| `POST` | `/api/trade/sell`              | 卖出                |
+| `POST` | `/api/trade/cancel`            | 按 qtoid 撤单       |
+| `GET`  | `/api/trade/connection-status` | QMT 连接状态        |
+| `POST` | `/api/trade/restart-qmt`       | 重启 QMT 并自动登录 |
+| `POST` | `/api/asset/principal`         | 修改本金            |
 
 买入示例：
 ```bash
@@ -205,37 +204,37 @@ curl -X POST "http://localhost:8130/api/trade/buy" \
 
 ### 股票
 
-| 方法 | 端点 | 说明 |
-|---|---|---|
-| `GET` | `/api/stocks` | 全部股票列表 |
+| 方法  | 端点                                       | 说明                 |
+| ----- | ------------------------------------------ | -------------------- |
+| `GET` | `/api/stocks`                              | 全部股票列表         |
 | `GET` | `/api/stocks/search?stock_search=<关键词>` | 按代码/名称/拼音搜索 |
-| `GET` | `/api/stock/info?symbol=<代码>` | 股票信息 + 昨收价 |
-| `GET` | `/api/stock/resolve?q=<关键词>` | 关键词解析为股票代码 |
+| `GET` | `/api/stock/info?symbol=<代码>`            | 股票信息 + 昨收价    |
+| `GET` | `/api/stock/resolve?q=<关键词>`            | 关键词解析为股票代码 |
 
 ### 历史数据
 
-| 方法 | 端点 | 说明 |
-|---|---|---|
-| `POST` | `/api/history/minutes/jobs` | 创建分钟线下载任务 |
-| `GET` | `/api/history/minutes/jobs/{job_id}` | 查询任务状态 |
-| `GET` | `/api/history/minutes/jobs/{job_id}/file` | 下载 Parquet 文件 |
+| 方法   | 端点                                      | 说明               |
+| ------ | ----------------------------------------- | ------------------ |
+| `POST` | `/api/history/minutes/jobs`               | 创建分钟线下载任务 |
+| `GET`  | `/api/history/minutes/jobs/{job_id}`      | 查询任务状态       |
+| `GET`  | `/api/history/minutes/jobs/{job_id}/file` | 下载 Parquet 文件  |
 
 ### 系统管理
 
-| 方法 | 端点 | 说明 |
-|---|---|---|
-| `GET` | `/api/ping` | 健康检查 |
-| `GET` | `/api/system/version` | 版本信息 |
-| `POST` | `/api/system/update` | 自动更新 |
-| `GET` | `/api/system/autostart` | 自启状态 |
-| `POST` | `/api/system/autostart` | 启用/禁用自启 |
-| `GET` | `/api/system/firewall` | 防火墙规则状态 |
-| `POST` | `/api/system/firewall` | 防火墙规则 |
+| 方法   | 端点                    | 说明           |
+| ------ | ----------------------- | -------------- |
+| `GET`  | `/api/ping`             | 健康检查       |
+| `GET`  | `/api/system/version`   | 版本信息       |
+| `POST` | `/api/system/update`    | 自动更新       |
+| `GET`  | `/api/system/autostart` | 自启状态       |
+| `POST` | `/api/system/autostart` | 启用/禁用自启  |
+| `GET`  | `/api/system/firewall`  | 防火墙规则状态 |
+| `POST` | `/api/system/firewall`  | 防火墙规则     |
 
 ### 日志
 
-| 方法 | 端点 | 说明 |
-|---|---|---|
+| 方法  | 端点           | 说明         |
+| ----- | -------------- | ------------ |
 | `GET` | `/logs/stream` | SSE 实时日志 |
 
 ## 架构
