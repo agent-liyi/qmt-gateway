@@ -321,7 +321,8 @@ def Step5_QMT(form_data: dict | None = None):
                     "向导会自动校验是否存在 bin.x64\\XtMiniQmt.exe。",
                     cls="text-xs text-gray-500 mt-1 ml-31",
                 ),
-                # xtquant 路径 - 横向布局
+                # xtquant 路径 - 横向布局（必填——必须明确指定，不能从 QMT
+                # 目录推断；qmt_path 仅用作 DLL 搜索目录，不进 sys.path）
                 Div(
                     Label("xtquant 路径", cls=label_cls),
                     Input(
@@ -330,6 +331,7 @@ def Step5_QMT(form_data: dict | None = None):
                         value=fd.get("xtquant_path", ""),
                         placeholder=r"包含 xtquant.py 的文件目录，例如: C:\apps\xtquant",
                         cls="input input-bordered flex-1",
+                        required="required",
                     ),
                     cls="flex items-center gap-3 mt-4",
                 ),

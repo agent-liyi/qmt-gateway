@@ -53,6 +53,23 @@ def seeded_initialized_db(in_memory_db):
 
 
 @pytest.fixture
+def seeded_uninitialized_db(in_memory_db):
+    """未初始化的 DB：包含 admin 用户 + init_completed=False 的 settings。
+    用于测试 wizard_complete 的路径校验错误（不走成功路径里的重定向）。
+    """
+    admin = User(username="admin", password_hash=auth_api.hash_password("old-pass-123"))
+    db.save_user(admin)
+
+    settings = db.get_settings()
+    settings.init_completed = False
+    settings.init_step = 0
+    settings.qmt_path = ""
+    settings.xtquant_path = ""
+    db.save_settings(settings)
+    return admin
+
+
+@pytest.fixture
 def client():
     return TestClient(app)
 
@@ -220,7 +237,7 @@ def test_complete_rolls_back_settings_when_test_fails_after_partial_form(
             "log_retention": "1",
             "qmt_account_id": "",
             "qmt_path": "",
-            "xtquant_path": "",
+            "xtquant_path": r"C:\apps\xtquant",
             "qmt_password": "trade-pass-123",
             "auto_start_qmt": "on",
             "principal": "500000",
@@ -274,7 +291,7 @@ def test_recovery_reports_invalid_path_without_launching(
             "log_retention": "3",
             "qmt_account_id": "",
             "qmt_path": r"C:\definitely\not\there",
-            "xtquant_path": "",
+            "xtquant_path": r"C:\apps\xtquant",
             "qmt_password": "trade-pass-123",
             "auto_start_qmt": "on",
             "principal": "2000000",
@@ -319,7 +336,7 @@ def test_recovery_attempts_launch_when_path_valid_but_qmt_not_running(
             "log_retention": "3",
             "qmt_account_id": "",
             "qmt_path": str(userdata),
-            "xtquant_path": "",
+            "xtquant_path": r"C:\apps\xtquant",
             "qmt_password": "trade-pass-123",
             "auto_start_qmt": "on",
             "principal": "2000000",
@@ -376,7 +393,7 @@ def test_recovery_succeeds_when_trade_service_restart_qmt(
             "log_retention": "3",
             "qmt_account_id": "new-account",
             "qmt_path": str(userdata),
-            "xtquant_path": "",
+            "xtquant_path": r"C:\apps\xtquant",
             "qmt_password": "trade-pass-123",
             "auto_start_qmt": "on",
             "principal": "3000000",
@@ -510,7 +527,7 @@ def test_recovery_forces_restart_when_qmt_is_running_but_connection_fails(
             "log_retention": "3",
             "qmt_account_id": "new-account",
             "qmt_path": str(userdata),
-            "xtquant_path": "",
+            "xtquant_path": r"C:\apps\xtquant",
             "qmt_password": "trade-pass-123",
             "auto_start_qmt": "on",
             "principal": "2000000",
@@ -564,7 +581,7 @@ def test_complete_without_qmt_password_skips_connection_test(
             "log_retention": "3",
             "qmt_account_id": "new-account",
             "qmt_path": str(valid_qmt),
-            "xtquant_path": "",
+            "xtquant_path": r"C:\apps\xtquant",
             "qmt_password": "",
             "principal": "2000000",
         },
@@ -800,7 +817,7 @@ def test_complete_rejects_empty_admin_password(seeded_initialized_db, client):
             "log_retention": "3",
             "qmt_account_id": "x",
             "qmt_path": r"C:\broker\userdata_mini",
-            "xtquant_path": "",
+            "xtquant_path": r"C:\apps\xtquant",
             "qmt_password": "",
             "principal": "1000000",
         },
@@ -850,7 +867,9 @@ def test_complete_short_circuits_on_invalid_qmt_path(
             "log_retention": "3",
             "qmt_account_id": "x",
             "qmt_path": r"C:\definitely\not\there",
-            "xtquant_path": "",
+            # 提供合法的 xtquant 路径（fake，但 wizard 不校验内容），
+            # 这样错误明确指向 qmt_path。
+            "xtquant_path": r"C:\apps\xtquant",
             "qmt_password": "trade-pass-123",
             "auto_start_qmt": "on",
             "principal": "1000000",
@@ -858,4 +877,36 @@ def test_complete_short_circuits_on_invalid_qmt_path(
     )
     assert response.status_code == 200
     assert "QMT 路径不正确" in response.text or "QMT 路径不存在" in response.text
+    assert db.get_settings().to_dict() == settings_before
+
+
+def test_complete_short_circuits_when_xtquant_path_missing(
+    seeded_uninitialized_db, client
+):
+    """xtquant_path 是必填项——不填应在完成初始化时立即返回错误。
+
+    使用 seeded_uninitialized_db（init_completed=False）——这样 wizard_complete
+    直接返回错误 fragment，不会触发后续成功路径里的重定向（重定向会
+    跟随到 /login 页面，让测试难以断言错误消息）。
+    """
+    settings_before = db.get_settings().to_dict()
+    response = client.post(
+        "/init-wizard/complete",
+        data={
+            "username": "admin",
+            "password": "new-pass-456",
+            "server_port": "8130",
+            "log_path": "logs",
+            "log_rotation": "10 MB",
+            "log_retention": "3",
+            "qmt_account_id": "x",
+            "qmt_path": r"C:\apps\qmt",
+            "xtquant_path": "",
+            "qmt_password": "trade-pass-123",
+            "auto_start_qmt": "on",
+            "principal": "1000000",
+        },
+    )
+    assert response.status_code == 200
+    assert "xtquant 路径" in response.text
     assert db.get_settings().to_dict() == settings_before

@@ -466,6 +466,19 @@ def create_app():
 
             # 1b. 提前校验 QMT/xtquant 路径（#63），避免无效输入触发自动重启
             preview_settings = _build_settings_from_wizard_data(_wizard_data)
+            # xtquant_path 必须显式填写——必须明确指定，不能从 QMT 目录推断
+            # （qmt_path 仅用作 DLL 搜索目录，不进 sys.path）
+            if not (preview_settings.xtquant_path or "").strip():
+                return _render_fragment(
+                    _build_wizard_failure_fragment(
+                        original_error="xtquant 路径未填写",
+                        recovery_reason="未指定 xtquant 路径",
+                        recovery_hint=(
+                            "请填写 xtquant.py 所在的目录（如 C:\\apps\\xtquant）。"
+                            "这一项必须显式指定——qmt 路径下推断不到 xtquant。"
+                        ),
+                    )
+                )
             path_probe = probe_qmt_path(preview_settings.qmt_path)
             if not path_probe["valid"]:
                 return _render_fragment(

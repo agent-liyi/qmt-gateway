@@ -61,20 +61,14 @@ def add_xtquant_path(xtquant_path: str | None = None, qmt_path: str | None = Non
             logger.warning(f"xtquant 路径不存在: {xtquant_path_obj}")
 
     if qmt_path:
-        # 规范化路径：展开用户目录并解析为绝对路径
+        # 注意：qmt_path 绝对不能加到 sys.path——QMT 根目录下有 resource /
+        # bin.x64 / bin 等子目录，Python 会把它们当成 namespace package，
+        # 导致标准库 `import resource` 拿到空壳模块（Windows 上不存在），
+        # apsw.ext 的 `resource.getrusage` 触发 AttributeError，整个
+        # gateway 启动失败。qmt_path 只用于 os.add_dll_directory 加载
+        # xtquant 的 C 扩展需要的 DLL，不需要进 sys.path。
         qmt_path_expanded = Path(qmt_path).expanduser().resolve()
         logger.info(f"处理 qmt_path: {qmt_path} -> {qmt_path_expanded}, exists={qmt_path_expanded.exists()}")
-        if qmt_path_expanded.exists():
-            paths_to_try.append(qmt_path_expanded)
-            # 常见的 xtquant 子目录
-            xtquant_subdir = qmt_path_expanded / "xtquant"
-            if xtquant_subdir.exists():
-                paths_to_try.append(xtquant_subdir)
-            python_xtquant = qmt_path_expanded / "python" / "xtquant"
-            if python_xtquant.exists():
-                paths_to_try.append(python_xtquant)
-        else:
-            logger.warning(f"QMT 路径不存在: {qmt_path_expanded}")
 
     logger.info(f"准备添加的路径列表: {paths_to_try}")
     

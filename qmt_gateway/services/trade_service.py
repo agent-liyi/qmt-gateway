@@ -483,12 +483,33 @@ class TradeService:
         return path.is_file()
 
     def _resolve_qmt_client_path(self, qmt_path: str | Path | None = None) -> Path:
-        configured_path = Path(str(qmt_path or self._qmt_path or config.qmt_path or "")).expanduser()
-        if not str(configured_path).strip():
+        """把用户在 wizard 中填写的 QMT 路径归一化，并解析出
+        bin.x64/XtMiniQmt.exe 的可执行路径。
+
+        支持四种入口粒度（与 init wizard placeholder 一致，与
+        qmt_init_helpers.resolve_qmt_executable 行为对齐）：
+          - XtMiniQmt.exe 本体（如 ...\\bin.x64\\XtMiniQmt.exe）
+          - bin.x64 目录
+          - userdata_mini 目录
+          - QMT 根目录（含 bin.x64/）
+        """
+        raw = str(qmt_path or self._qmt_path or config.qmt_path or "").strip()
+        if not raw:
             raise ValueError("未配置 QMT 路径")
 
+        configured_path = Path(raw).expanduser()
         base_dir = configured_path
-        if configured_path.name.lower() == "userdata_mini":
+
+        name_lower = configured_path.name.lower()
+        if name_lower == "xtminiqmt.exe":
+            # 用户填的是 .exe 本体——必须上跳两层到 QMT 根目录
+            if configured_path.parent.name.lower() != "bin.x64":
+                raise ValueError(
+                    f"XtMiniQmt.exe 必须位于 bin.x64 子目录下，得到: {configured_path}"
+                )
+            base_dir = configured_path.parent.parent
+        elif name_lower in ("userdata_mini", "bin.x64"):
+            # 用户填的是子目录——上跳一层到 QMT 根目录
             base_dir = configured_path.parent
 
         executable = base_dir / "bin.x64" / QMT_CLIENT_EXECUTABLE
