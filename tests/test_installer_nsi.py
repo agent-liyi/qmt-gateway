@@ -754,3 +754,41 @@ def test_installer_nsi_no_ansi_create_shortcut():
         "installer.nsi must invoke create-shortcuts.ps1 to build start menu"
     )
 
+
+def test_installer_kills_only_qmt_gateway_python_processes():
+    """installer.nsi 必须只杀 QMT Gateway 相关的 python.exe 进程，不能误杀
+    用户其它的 Python IDE / 脚本 / notebook / jupyter / venv 等。
+
+    历史 bug：曾用 taskkill /F /IM python.exe /T 杀掉全部 python 进程。
+    """
+    text = INSTALLER_NSI.read_text(encoding="utf-8-sig")
+    kill_ps1 = ROOT / "installer" / "kill-qmt-gateway-procs.ps1"
+
+    assert kill_ps1.is_file(), "Missing installer/kill-qmt-gateway-procs.ps1"
+    ps_text = kill_ps1.read_text(encoding="utf-8-sig")
+
+    # NSIS 必须把脚本放到 $PLUGINSDIR 然后用 -File 调用（不能用内联 -Command）
+    assert "kill-qmt-gateway-procs.ps1" in text, (
+        "installer.nsi must invoke kill-qmt-gateway-procs.ps1"
+    )
+    assert "InitPluginsDir" in text, (
+        "installer.nsi must call InitPluginsDir before File /oname=$PLUGINSDIR\\..."
+    )
+    assert "taskkill" not in text or "taskkill /F /IM python.exe" not in text, (
+        "installer.nsi must NOT use `taskkill /F /IM python.exe` — would kill "
+        "user's other Python processes (IDEs, notebooks, venvs)"
+    )
+
+    # kill-qmt-gateway-procs.ps1 必须精确过滤 CommandLine
+    assert "qmt_gateway" in ps_text and "quantide-gateway" in ps_text, (
+        "kill-procs.ps1 must filter CommandLine on both 'qmt_gateway' and "
+        "'quantide-gateway' to identify our processes"
+    )
+    assert "Get-CimInstance Win32_Process" in ps_text, (
+        "kill-procs.ps1 must use WMI (Get-CimInstance Win32_Process) to inspect "
+        "CommandLine before killing — taskkill /IM python.exe is too broad"
+    )
+    assert "Stop-Process" in ps_text, (
+        "kill-procs.ps1 must call Stop-Process on the filtered PIDs"
+    )
+

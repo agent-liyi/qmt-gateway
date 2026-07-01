@@ -210,12 +210,23 @@ Function .onInit
     ; used directly; NSIS will not pop a language picker because no picker
     ; macro is invoked here.
     ;
-    ; 升级安装前先把已注册的开机自启计划任务停掉——避免它在我们解压
-    ; embedded Python 时拉起 start-silent.bat → python.exe 持有
-    ; python313.dll 等文件，导致 tar 报 "Can't unlink already-existing
-    ; object" 整个安装失败。停掉后计划任务的定义还在，install 完成
-    ; 后用户可以重新启用"开机自启"组件（它会 register-task.ps1 重新注册）。
-    nsExec::ExecToLog 'schtasks /end /tn "QMT Gateway" >nul 2>&1 & exit 0'
+    ; 升级安装前必须杀掉本应用持有的 python.exe 进程——否则后续 tar -xf
+    ; 解压 python-embed.zip 会因为 .pyd/.dll 被进程持有而报
+    ; "Can't unlink already-existing object" 并段错误退出（HEAP_CORRUPTION
+    ; -1073740940）。
+    ;
+    ; 精确匹配：用 PowerShell + WMI 查询 CommandLine 含 "qmt_gateway" 或
+    ; "quantide-gateway" 的 python.exe，**只杀这些**。不动用户的其它
+    ; Python IDE / 脚本 / notebook / jupyter / venv 等。
+    ; 计划任务 schtasks /end 也在并行做——避免它在我们 kill 后立刻重新拉
+    ; 起 start-silent.bat → python.exe。停掉后计划任务定义还在，install
+    ; 完成后用户可以重新启用"开机自启"组件（它会 register-task.ps1 重建）。
+    ;
+    ; PowerShell 逻辑放到独立 .ps1 文件里——NSIS -Command 内联复杂 PowerShell
+    ; 会因为嵌套引号、CJK、$^ 转义等问题变得不可读且易错。
+    InitPluginsDir
+    File /oname=$PLUGINSDIR\kill-qmt-gateway-procs.ps1 "kill-qmt-gateway-procs.ps1"
+    nsExec::ExecToLog 'cmd.exe /c schtasks /end /tn "QMT Gateway" >nul 2>&1 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\kill-qmt-gateway-procs.ps1" >nul 2>&1 & exit 0'
 FunctionEnd
 
 Function .onVerifyInstDir
@@ -250,13 +261,16 @@ Section "-Core" SEC_CORE
     ; 上一次 install 中途崩溃后可能留下半套残留文件（python.exe / .pyd / .dll
     ; 仍被进程持有，或被 TrustedInstaller / AV 接管所有者），NSIS 自带的
     ; RMDir /r 拿不动这些文件——结果后续 tar -xf 报 "Can't unlink
-    ; already-existing object" 整个安装中止。先用 takeown + icacls + cmd
-    ; rmdir 强制清掉 $INSTDIR\python 子目录（不能清整个 $INSTDIR，否则会
-    ; 把接下来要复制的 install-python.ps1 也一起干掉）。如果 cmd rmdir
-    ; 因为文件锁失败也没关系——后续 SetOverwrite on 会覆盖大部分文件，
-    ; 残留的旧文件不会阻塞 tar 解压（tar -xf 会报 warning 但失败的文件
-    ; 在下一轮重装时再清）。
-    nsExec::ExecToLog 'cmd.exe /c takeown /f "$INSTDIR\python" /a /r /d y >nul 2>&1 & icacls "$INSTDIR\python" /grant Administrators:F /t /c /q >nul 2>&1 & cd /d "%TEMP%" & rmdir /s /q "$INSTDIR\python" >nul 2>&1 & exit 0'
+    ; already-existing object" 并以 STATUS_HEAP_CORRUPTION (-1073740940)
+    ; 段错误退出，导致整个安装中止。先用 takeown + icacls + cmd rmdir 强
+    ; 制清掉 $INSTDIR\python 子目录（不能清整个 $INSTDIR，否则会把接下
+    ; 来要复制的 install-python.ps1 也一起干掉）。如果 cmd rmdir 因为文
+    ; 件锁失败也没关系——后续 SetOverwrite on 会覆盖大部分文件，残留的
+    ; 旧文件不会阻塞 tar 解压（tar -xf 会报 warning 但失败的文件在下一
+    ; 轮重装时再清）。
+    ;
+    ; 重试 3 次：第一次可能因为某个文件刚被释放需要等 1s。
+    nsExec::ExecToLog 'cmd.exe /c for /l %i in (1,1,3) do (takeown /f "$INSTDIR\python" /a /r /d y >nul 2>&1 & icacls "$INSTDIR\python" /grant Administrators:F /t /c /q >nul 2>&1 & cd /d "%TEMP%" & rmdir /s /q "$INSTDIR\python" >nul 2>&1 & if not exist "$INSTDIR\python" exit 0 & ping -n 2 127.0.0.1 >nul) & exit 0'
 
     File /oname=${INSTALLER_SCRIPT_NAME} "install-python.ps1"
     File "scrub-stale-installs.ps1"
