@@ -265,6 +265,37 @@ def _remove_port_file() -> None:
         pass
 
 
+def _spawn_tray_process(home: Path) -> None:
+    """拉起托盘子进程。
+
+    托盘是独立进程而不是线程：pystray 的 win32 消息循环会阻塞当前线程，
+    与 uvicorn 的 asyncio 事件循环互相干扰。独立进程最简单，也最稳。
+    托盘会在父进程退出时被 job object 一起带走，所以不用担心孤儿进程。
+    """
+    if sys.platform != "win32":
+        return
+    # 安装包里的 python 是 embeddable，没有 .pyc 缓存路径问题；
+    # 这里走 sys.executable，等价于"和 gateway 同一个解释器"。
+    env = os.environ.copy()
+    env["QMT_GATEWAY_HOME"] = str(home)
+    try:
+        subprocess.Popen(  # noqa: S603
+            [sys.executable, "-m", "qmt_gateway.tray"],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            creationflags=(
+                subprocess.DETACHED_PROCESS  # noqa: F821
+                | subprocess.CREATE_NEW_PROCESS_GROUP  # noqa: F821
+            ),
+        )
+        logger.info("托盘进程已拉起")
+    except OSError as exc:
+        logger.warning(f"托盘进程拉起失败（不影响 gateway 运行）: {exc}")
+
+
 def main():
     """主入口函数"""
     parser = argparse.ArgumentParser(
