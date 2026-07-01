@@ -29,6 +29,31 @@ import pystray
 from loguru import logger
 from PIL import Image
 
+
+# tray 进程是 DETACHED_PROCESS / CREATE_NEW_PROCESS_GROUP 启动的，stderr
+# 在父进程上下文里没有可见的控制台——所有诊断信息会消失。这里在模块
+# 顶层就把 INFO 及以上级别的日志镜像到 logs\tray.log（开发态为仓库根的
+# logs\tray.log，安装态为 $INSTDIR\app\logs\tray.log），出问题时有据可查。
+# 必须在模块顶层而非 if __name__ == "__main__" 里注册，因为 tray 实际
+# 是用 `python -m qmt_gateway.tray` 走 import 路径拉起的。
+def _setup_file_logging() -> None:
+    try:
+        log_dir = Path(__file__).resolve().parent.parent / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        logger.add(
+            log_dir / "tray.log",
+            level="INFO",
+            rotation="1 MB",
+            retention=3,
+            encoding="utf-8",
+        )
+    except OSError:
+        # 安装态 parent.parent 可能因为某些安装布局不存在——忽略
+        pass
+
+
+_setup_file_logging()
+
 # 注意：这些路径在模块导入时初始化——但在 Windows embeddable 环境下
 # QMT_GATEWAY_HOME 是在 __main__.py 里 runtime.init() 之后才设置的。
 # 因此下面的 *_path() 辅助函数每次调用都重读环境变量，确保配置和
@@ -201,10 +226,28 @@ def _spawn_gateway() -> bool:
     python = sys.executable
     # 同一个 .exe、同一个 PYTHONPATH、同一个 QMT_GATEWAY_HOME
     env = os.environ.copy()
+    # 子进程的 stdout/stderr 必须显式重定向到 DEVNULL——DETACHED_PROCESS
+    # 让子进程脱离父进程控制台，默认 stdout/stderr 句柄是 NULL，导致
+    # Python 启动期某些 stderr flush 抛异常、子进程立即退出。把日志重
+    # 定向到 logs/spawn_gw.{out,err}（写入失败时降级 DEVNULL），让出
+    # 问题时有据可查。
+    out_path = Path(__file__).resolve().parent.parent / "logs" / "spawn_gw.out"
+    err_path = Path(__file__).resolve().parent.parent / "logs" / "spawn_gw.err"
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_f = open(out_path, "ab")
+        err_f = open(err_path, "ab")
+    except OSError:
+        out_f = subprocess.DEVNULL
+        err_f = subprocess.DEVNULL
     try:
         subprocess.Popen(
             [python, "-m", "qmt_gateway"],
             env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=out_f,
+            stderr=err_f,
+            close_fds=True,
             creationflags=subprocess.DETACHED_PROCESS
             if sys.platform == "win32"
             else 0,
@@ -352,24 +395,5 @@ def run(
 if __name__ == "__main__":
     logger.remove()
     logger.add(sys.stderr, level="INFO")
-    # 托盘是 DETACHED_PROCESS 启动的，stderr 在父进程上下文里没有可见
-    # 的控制台——所有诊断信息会消失。这里把 INFO 及以上级别的日志镜像
-    # 到 $INSTDIR\logs\tray.log（开发态为仓库根的 logs\tray.log），
-    # 出问题时有据可查。
-    try:
-        log_dir = Path(__file__).resolve().parent.parent / "logs"
-        # 安装态：qmt_gateway/tray.py 在 $INSTDIR\app\qmt_gateway\，
-        # parent.parent 是 $INSTDIR\app，所以这里指向 app\logs。
-        # 退而求其次写到 logs\tray.log（cwd 视角）。
-        log_dir.mkdir(parents=True, exist_ok=True)
-        logger.add(
-            log_dir / "tray.log",
-            level="INFO",
-            rotation="1 MB",
-            retention=3,
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
     logger.info("QMT Gateway 托盘启动")
     run()

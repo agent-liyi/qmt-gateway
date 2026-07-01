@@ -255,3 +255,258 @@ def test_start_gateway_swallows_callback_exceptions(home: Path):
     """同 test_restart_gateway_swallows_callback_exceptions。"""
     with patch("qmt_gateway.tray._clear_stale_lock", side_effect=RuntimeError("boom")):
         _start_gateway(None, None)  # type: ignore[arg-type]
+
+
+# ---------- 集成测试 ----------
+#
+# 真实 spawn 一个 mock gateway 子进程，端到端验证 _start_gateway /
+# _restart_gateway 的"停止后启动"路径。这个 mock 子进程不需要 QMT /
+# xtquant（CI 没装）——它只是写 .lock / .port / 监听端口 / 收到 taskkill
+# 清理退出，完全模拟 gateway 的最小行为。
+
+_MOCK_GATEWAY_SCRIPT = r'''
+"""测试用 mock gateway：模拟 qmt_gateway 的最小行为。
+
+不依赖 QMT/xtquant，纯标准库。在 CI / dev 环境下替代真正的 gateway，
+让 _start_gateway / _restart_gateway 可以被端到端测试。
+"""
+import atexit
+import json
+import os
+import socket
+import sys
+import time
+
+home = os.environ["MOCK_GATEWAY_HOME"]
+port = int(os.environ.get("MOCK_GATEWAY_PORT", "0"))
+lock_path = os.path.join(home, ".lock")
+port_path = os.path.join(home, ".port")
+
+# Find a free port
+srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+srv.bind(("127.0.0.1", port))
+port = srv.getsockname()[1]
+srv.listen(5)
+srv.settimeout(0.5)
+
+pid = os.getpid()
+lock_data = {"pid": pid, "started_at": time.time(), "argv_substring": "mock_gateway"}
+
+with open(lock_path, "w", encoding="utf-8") as f:
+    json.dump(lock_data, f)
+
+with open(port_path, "w", encoding="utf-8") as f:
+    f.write(f"{port}\n")
+
+
+def cleanup():
+    for p in (lock_path, port_path):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+
+
+atexit.register(cleanup)
+print(f"mock gateway pid={pid} port={port}", flush=True)
+
+deadline = time.time() + 8  # 最多跑 8 秒
+while time.time() < deadline:
+    try:
+        conn, _ = srv.accept()
+        conn.close()
+    except socket.timeout:
+        pass
+    except OSError:
+        break
+
+srv.close()
+cleanup()
+sys.exit(0)
+'''
+
+
+def _spawn_mock_gateway(home: Path, env_extra: dict | None = None, capture_output: bool = False) -> subprocess.Popen:
+    """在临时 home 启动 mock gateway 子进程，返回 Popen 句柄。
+
+    必须立刻返回——主进程不能阻塞在子进程上。
+    """
+    import sys as _sys
+
+    env = os.environ.copy()
+    env["MOCK_GATEWAY_HOME"] = str(home)
+    if env_extra:
+        env.update(env_extra)
+    script_path = home / "_mock_gateway.py"
+    script_path.write_text(_MOCK_GATEWAY_SCRIPT, encoding="utf-8")
+    if capture_output:
+        stdout = subprocess.PIPE
+        stderr = subprocess.PIPE
+    else:
+        stdout = subprocess.DEVNULL
+        stderr = subprocess.DEVNULL
+    return subprocess.Popen(
+        [_sys.executable, str(script_path)],
+        env=env,
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+
+def _wait_for_lock_file(home: Path, timeout: float = 5.0) -> bool:
+    """等 .lock 出现且包含有效 pid。"""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        lock = home / ".lock"
+        if lock.is_file():
+            try:
+                data = json.loads(lock.read_text(encoding="utf-8"))
+                pid = data.get("pid")
+                if pid and pid > 0:
+                    return True
+            except (OSError, json.JSONDecodeError, ValueError):
+                pass
+        time.sleep(0.05)
+    return False
+
+
+def _wait_for_port_listening(port: int, timeout: float = 5.0) -> bool:
+    """等 TCP 端口就绪。"""
+    import time
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except OSError:
+            time.sleep(0.05)
+    return False
+
+
+def _cleanup_mock(proc: subprocess.Popen, home: Path) -> None:
+    """收尾：kill mock gateway 子进程，等它退出。"""
+    import time
+
+    if proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+    # atexit 已经清 .lock / .port，这里防御性再清一次
+    for name in (".lock", ".port", "_mock_gateway.py"):
+        try:
+            (home / name).unlink()
+        except OSError:
+            pass
+
+
+def test_start_gateway_actually_spawns_running_child(home: Path):
+    """端到端：_start_gateway 在过期 .lock + 无运行进程场景下，
+    真正拉起一个 mock gateway 子进程，该子进程会写 .lock / .port 并
+    监听端口。
+
+    模拟用户场景：托盘"启动 QMT Gateway" → gateway 真的起来并被访问到。
+    """
+    # 场景：托盘被杀后启动，残留 .lock 指向死 pid（典型 stop 后状态）
+    (home / ".lock").write_text(
+        json.dumps({"pid": 99999, "started_at": 0.0, "argv_substring": "dead"}),
+        encoding="utf-8",
+    )
+
+    # 注入真 spawn：让 _start_gateway 真的拉起 mock 子进程
+    spawned_procs: list[subprocess.Popen] = []
+
+    def real_spawn():
+        p = _spawn_mock_gateway(home)
+        spawned_procs.append(p)
+        return True
+
+    with patch("qmt_gateway.tray._spawn_gateway", side_effect=real_spawn):
+        _start_gateway(None, None)  # type: ignore[arg-type]
+
+    try:
+        # 验证 mock 子进程写出了 .lock 和 .port
+        assert _wait_for_lock_file(home, timeout=5.0), "mock gateway did not write .lock"
+        assert (home / ".port").is_file(), "mock gateway did not write .port"
+        port = int((home / ".port").read_text(encoding="utf-8").strip())
+        assert _wait_for_port_listening(port, timeout=5.0), (
+            f"mock gateway not listening on {port}"
+        )
+    finally:
+        # 收尾 mock 子进程
+        for p in spawned_procs:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+
+
+def test_restart_gateway_kills_then_spawns_running_child(home: Path):
+    """端到端：_restart_gateway 在已有 gateway 跑着时，
+    先杀旧的、等端口空闲、再 spawn 新的。
+
+    模拟用户场景：托盘"重启 QMT Gateway" → 旧 gateway 被 kill，新 gateway 起来。
+    """
+    # 先启动 mock 子进程作为"旧 gateway"
+    old_proc = _spawn_mock_gateway(home)
+    assert _wait_for_lock_file(home, timeout=5.0)
+    port = int((home / ".port").read_text(encoding="utf-8").strip())
+    assert _wait_for_port_listening(port, timeout=5.0)
+    old_pid = json.loads((home / ".lock").read_text(encoding="utf-8"))["pid"]
+    new_procs: list[subprocess.Popen] = []
+
+    try:
+        # 现在调 _restart_gateway。patch _spawn_gateway 让它真 spawn 一个新 mock。
+        with patch("qmt_gateway.tray._spawn_gateway") as mock_spawn:
+            def real_spawn():
+                p = _spawn_mock_gateway(home, capture_output=True)
+                new_procs.append(p)
+                return True
+
+            mock_spawn.side_effect = real_spawn
+            _restart_gateway(None, None)  # type: ignore[arg-type]
+
+        # 给新 mock 一点时间启动
+        import time
+        time.sleep(0.3)
+
+        # 验证旧进程已死
+        assert old_proc.poll() is not None, "old mock gateway should be killed"
+
+        # 诊断输出
+        for i, p in enumerate([old_proc] + new_procs):
+            print(f"  proc[{i}] pid={p.pid} returncode={p.returncode}")
+            if p.stdout and p.returncode is not None:
+                out = p.stdout.read().decode("utf-8", errors="replace")[:500]
+                err = p.stderr.read().decode("utf-8", errors="replace")[:500]
+                print(f"    stdout={out!r}")
+                print(f"    stderr={err!r}")
+        print(f"  .lock={json.loads((home / '.lock').read_text(encoding='utf-8'))}")
+        port_file = (home / ".port")
+        print(f"  .port file exists={port_file.is_file()}")
+        if port_file.is_file():
+            print(f"  .port={port_file.read_text(encoding='utf-8')}")
+
+        # 验证新进程在监听
+        assert _wait_for_lock_file(home, timeout=5.0)
+        new_lock = json.loads((home / ".lock").read_text(encoding="utf-8"))
+        new_pid = new_lock["pid"]
+        assert new_pid > 0, "new pid must be positive"
+        new_port = int(port_file.read_text(encoding="utf-8").strip())
+        assert _wait_for_port_listening(new_port, timeout=5.0)
+    finally:
+        # 收尾新旧 mock 子进程
+        for p in [old_proc] + new_procs:
+            if p.poll() is None:
+                p.terminate()
+                try:
+                    p.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    p.kill()
