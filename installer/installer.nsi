@@ -245,6 +245,19 @@ Section "-Core" SEC_CORE
 
     CreateDirectory "$INSTDIR"
     SetOutPath "$INSTDIR"
+    !insertmacro LogStep "Core: wipe stale python dir"
+
+    ; 上一次 install 中途崩溃后可能留下半套残留文件（python.exe / .pyd / .dll
+    ; 仍被进程持有，或被 TrustedInstaller / AV 接管所有者），NSIS 自带的
+    ; RMDir /r 拿不动这些文件——结果后续 tar -xf 报 "Can't unlink
+    ; already-existing object" 整个安装中止。先用 takeown + icacls + cmd
+    ; rmdir 强制清掉 $INSTDIR\python 子目录（不能清整个 $INSTDIR，否则会
+    ; 把接下来要复制的 install-python.ps1 也一起干掉）。如果 cmd rmdir
+    ; 因为文件锁失败也没关系——后续 SetOverwrite on 会覆盖大部分文件，
+    ; 残留的旧文件不会阻塞 tar 解压（tar -xf 会报 warning 但失败的文件
+    ; 在下一轮重装时再清）。
+    nsExec::ExecToLog 'cmd.exe /c takeown /f "$INSTDIR\python" /a /r /d y >nul 2>&1 & icacls "$INSTDIR\python" /grant Administrators:F /t /c /q >nul 2>&1 & cd /d "%TEMP%" & rmdir /s /q "$INSTDIR\python" >nul 2>&1 & exit 0'
+
     File /oname=${INSTALLER_SCRIPT_NAME} "install-python.ps1"
     File "scrub-stale-installs.ps1"
     !insertmacro LogInit
@@ -263,17 +276,6 @@ Section "-Core" SEC_CORE
     ; 当前 $INSTDIR 不一致的同名 entry，并清理它们指向的残留目录。
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\scrub-stale-installs.ps1" -InstallDir "$INSTDIR"'
     Delete "$INSTDIR\scrub-stale-installs.ps1"
-    !insertmacro LogStep "Core: wipe stale install dir"
-
-    ; 上一次 install 中途崩溃后可能留下半套残留文件（python.exe / .pyd / .dll
-    ; 仍被进程持有，或被 TrustedInstaller / AV 接管所有者），NSIS 自带的
-    ; RMDir /r 拿不动这些文件——结果后续 tar -xf 报 "Can't unlink
-    ; already-existing object" 整个安装中止。先用 takeown + icacls + cmd
-    ; rmdir 强制清掉 $INSTDIR（保留可能的 data 子目录除外）。如果 cmd rmdir
-    ; 也因为文件锁失败，我们继续往下走——新文件会被 SetOverwrite on 覆盖，
-    ; 残留的旧文件不会阻塞后续 Stage。
-    nsExec::ExecToLog 'cmd.exe /c takeown /f "$INSTDIR" /a /r /d y >nul 2>&1 & icacls "$INSTDIR" /grant Administrators:F /t /c /q >nul 2>&1 & cd /d "%TEMP%" & rmdir /s /q "$INSTDIR" >nul 2>&1 & exit 0'
-    SetOutPath "$INSTDIR"
     !insertmacro LogStep "Core: create install dir"
     nsExec::ExecToLog 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${INSTALLER_SCRIPT_PATH}" -Stage InitLogs'
     !insertmacro AbortOnExecFailure "Initialize install logs"
