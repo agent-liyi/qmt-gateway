@@ -36,7 +36,7 @@ def _restore_sys_path_and_cache():
 
 
 def _make_pkg_layout(root: Path) -> Path:
-    """构造 package 布局：
+    """构造 subdir-package 布局（#120 官方推荐）：
 
         ``<root>/xtquant/__init__.py``
         ``<root>/xtquant/xtdata.py``
@@ -44,10 +44,28 @@ def _make_pkg_layout(root: Path) -> Path:
     """
     root.mkdir(parents=True, exist_ok=True)
     pkg = root / "xtquant"
-    pkg.mkdir()
+    pkg.mkdir(exist_ok=True)
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "xtdata.py").write_text("# stub", encoding="utf-8")
     (pkg / "xttrader.py").write_text("# stub", encoding="utf-8")
+    return root
+
+
+def _make_root_pkg_layout(root: Path) -> Path:
+    """构造 root-package 布局——``xtquant_path`` 本身就是个包::
+
+        ``<root>/__init__.py``
+        ``<root>/xtdata.py``
+        ``<root>/xttrader.py``
+
+    这是用户机器上 ``C:\\apps\\xtquant`` 的真实形态：目录名就叫 ``xtquant``，
+    里面直接有 ``__init__.py``、``xtdata.py``、``xttrader.py`` 等。
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "__init__.py").write_text('__version__ = "xtquant"', encoding="utf-8")
+    (root / "xtdata.py").write_text("# stub", encoding="utf-8")
+    (root / "xttrader.py").write_text("# stub", encoding="utf-8")
+    (root / "xtconstant.py").write_text("# stub", encoding="utf-8")
     return root
 
 
@@ -66,8 +84,18 @@ def _make_flat_layout(root: Path) -> Path:
 
 
 def test_resolve_accepts_package_layout(tmp_path):
-    """package 布局：parent 加进 sys.path。"""
+    """subdir-package 布局：parent 加进 sys.path。"""
     sdk_root = _make_pkg_layout(tmp_path / "xtquant")
+
+    assert _resolve_xtquant_sys_path(str(sdk_root)) == sdk_root.parent
+
+
+def test_resolve_accepts_root_package_layout(tmp_path):
+    """root-package 布局（用户机器的真实形态）：sdk_root 自己的父目录加进 sys.path。
+
+    ``tmp_path/xtquant/__init__.py`` 让该目录本身作为 ``xtquant`` 包被 ``import xtquant`` 命中。
+    """
+    sdk_root = _make_root_pkg_layout(tmp_path / "xtquant")
 
     assert _resolve_xtquant_sys_path(str(sdk_root)) == sdk_root.parent
 
@@ -77,17 +105,6 @@ def test_resolve_accepts_flat_layout(tmp_path):
     sdk_root = _make_flat_layout(tmp_path / "xtquant")
 
     assert _resolve_xtquant_sys_path(str(sdk_root)) == sdk_root
-
-
-def test_resolve_strips_xtquant_subdir_when_user_points_there_in_pkg_layout(tmp_path):
-    """用户填了 ``<root>/xtquant`` 但 SDK 是包布局时，__init__.py 在子目录。
-
-    当前实现在两种情形中只接受 sdk_root（含 __init__.py 时为包、否则 flat），
-    不递归向上推断。``tmp_path/xtquant`` 自己就是包目录视为合法。
-    """
-    sdk_root = _make_pkg_layout(tmp_path / "xtquant")
-
-    assert _resolve_xtquant_sys_path(str(sdk_root)) == sdk_root.parent
 
 
 def test_resolve_rejects_missing_directory(tmp_path):
@@ -102,7 +119,7 @@ def test_resolve_rejects_random_directory_without_xtquant_marker(tmp_path):
     bogus.mkdir()
     (bogus / "random.txt").write_text("hi", encoding="utf-8")
 
-    with pytest.raises(XTQuantNotFoundError, match="xtquant\\.py|xtquant/__init__.py"):
+    with pytest.raises(XTQuantNotFoundError, match="xtquant\\.py|__init__\\.py"):
         _resolve_xtquant_sys_path(str(bogus))
 
 
@@ -114,7 +131,7 @@ def test_resolve_rejects_pkg_layout_without_xtdata(tmp_path):
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     # 故意不放 xtdata.py
 
-    with pytest.raises(XTQuantNotFoundError, match="缺.*xtdata\\.py"):
+    with pytest.raises(XTQuantNotFoundError, match="没有 xtdata\\.py"):
         _resolve_xtquant_sys_path(str(pkg_root))
 
 
@@ -125,7 +142,7 @@ def test_resolve_rejects_flat_layout_without_xtdata(tmp_path):
     (flat_root / "xtquant.py").write_text("# stub", encoding="utf-8")
     (flat_root / "xttrader.py").write_text("# stub", encoding="utf-8")
 
-    with pytest.raises(XTQuantNotFoundError, match="缺.*xtdata\\.py"):
+    with pytest.raises(XTQuantNotFoundError, match="没有 xtdata\\.py"):
         _resolve_xtquant_sys_path(str(flat_root))
 
 
@@ -146,7 +163,7 @@ def test_resolve_returns_none_when_path_is_none_or_empty():
 
 
 def test_add_xtquant_path_injects_only_parent_for_pkg_layout(tmp_path):
-    """add_xtquant_path 对 package 布局只把 parent 加进 sys.path。
+    """add_xtquant_path 对 subdir-package 布局只把 parent 加进 sys.path。
 
     与 fix 的初衷一致：``import xtquant`` 必须通过 parent 才能找到 ``xtquant/`` 包。
     """
@@ -156,6 +173,22 @@ def test_add_xtquant_path_injects_only_parent_for_pkg_layout(tmp_path):
     add_xtquant_path(xtquant_path=str(sdk_root), qmt_path=None)
 
     assert parent.as_posix() in sys.path
+
+
+def test_add_xtquant_path_injects_only_parent_for_root_pkg_layout(tmp_path):
+    """root-package 布局：同样把 parent 加进 sys.path。
+
+    这是用户机器上 C:\\apps\\xtquant 的实际形态。
+    """
+    sdk_root = _make_root_pkg_layout(tmp_path / "xtquant")
+    parent = sdk_root.parent
+
+    add_xtquant_path(xtquant_path=str(sdk_root), qmt_path=None)
+
+    assert parent.as_posix() in sys.path
+    # 关键：sdk_root 自己**不能**进 sys.path，否则 ``import xtdata`` 会因为
+    # 找不到 ``xtquant`` 包而失败（xtquant 需要以 parent 为入口）。
+    assert sdk_root.as_posix() not in sys.path
 
 
 def test_add_xtquant_path_injects_root_for_flat_layout(tmp_path):
@@ -179,3 +212,37 @@ def test_add_xtquant_path_raises_for_invalid_path(tmp_path):
 
     with pytest.raises(XTQuantNotFoundError):
         add_xtquant_path(xtquant_path=str(bogus), qmt_path=None)
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not Path(r"C:\apps\xtquant").exists(),
+    reason="仅在用户本机的真实 SDK 目录下运行，用于回归验证 #120。",
+)
+def test_resolve_accepts_user_actual_xtquant_layout():
+    """#120 回归：用真实 C:\\apps\\xtquant 验证。
+
+    在 CI / 其他机器上无此目录，自动 skip。验证
+    ``_resolve_xtquant_sys_path`` 对真实 SDK 布局返回正确的 sys.path 入口
+    （注意该函数本身只返回值，由 ``add_xtquant_path`` 真正写入 sys.path）。
+    """
+    real_sdk = Path(r"C:\apps\xtquant")
+    result = _resolve_xtquant_sys_path(str(real_sdk))
+
+    # 真实 SDK 是 root-package 布局：直接父目录 C:\\apps 应被加入 sys.path。
+    assert result == real_sdk.parent
+
+
+def test_add_xtquant_path_injects_user_actual_layout():
+    """#120 端到端：真实 SDK 路径走完 ``add_xtquant_path`` 后 sys.path 含 C:\\apps。
+
+    这条不带 skip——若 C:\\apps\\xtquant 不存在，``add_xtquant_path`` 会抛
+    ``XTQuantNotFoundError``，被 except 捕到，按异常路径断言 fail。
+    """
+    real_sdk = Path(r"C:\apps\xtquant")
+    if not real_sdk.exists():
+        pytest.skip("C:\\apps\\xtquant 不存在")
+
+    add_xtquant_path(xtquant_path=str(real_sdk), qmt_path=None)
+
+    # add_xtquant_path 用 as_posix() 形式注入（避免 Windows 反斜杠转义）
+    assert real_sdk.parent.as_posix() in sys.path

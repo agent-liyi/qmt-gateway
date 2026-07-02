@@ -34,9 +34,9 @@ _xtdata_module: Any = None
 def _resolve_xtquant_sys_path(xtquant_path: str | Path | None) -> Path | None:
     """把用户填写的 xtquant 路径归一化，并返回应当加入 sys.path 的目录。
 
-    支持两种目录布局（这是 xtquant SDK 在不同券商处的标准打包方式）：
+    支持三种目录布局（这是 xtquant SDK 在不同券商处的实际打包方式）：
 
-    1. **package 布局**（官方推荐、当前 C:\\apps\\xtquant 的实际形态）::
+    1. **subdir-package 布局**（官方推荐）::
 
            C:\\apps\\xtquant\\
                xtquant\\__init__.py
@@ -44,10 +44,25 @@ def _resolve_xtquant_sys_path(xtquant_path: str | Path | None) -> Path | None:
                xtquant\\xttrader.py
                ...
 
-       用户填 ``C:\\apps\\xtquant``——我们要 import 的是 ``xtquant`` 包，
-       所以把 ``C:\\apps``（``xtquant/`` 的父目录）加进 sys.path。
+       用户填 ``C:\\apps\\xtquant``——把 ``C:\\apps``（``xtquant/`` 的父目录）
+       加进 sys.path，让 ``import xtquant`` 找到 ``xtquant/__init__.py``。
 
-    2. **flat 布局**（少数券商 SDK 把所有模块直接摊开在根下）::
+    2. **root-package 布局**（用户机器上的实际形态）::
+
+           C:\\apps\\xtquant\\
+               __init__.py
+               xtdata.py
+               xttrader.py
+               xtconstant.py
+               ...
+
+       这里的 ``C:\\apps\\xtquant`` 本身就是一个以目录名 ``xtquant`` 命名的
+       Python 包——目录即包。把 ``C:\\apps``（父目录）加进 sys.path，
+       让 ``import xtquant`` 直接命中 ``C:\\apps\\xtquant/__init__.py``。
+
+       这正是 #120 用户机器的实际目录结构。
+
+    3. **flat 布局**（少数券商 SDK 把所有模块直接摊开在一个子目录下）::
 
            C:\\apps\\xtquant\\
                xtquant.py
@@ -58,7 +73,7 @@ def _resolve_xtquant_sys_path(xtquant_path: str | Path | None) -> Path | None:
        用户填 ``C:\\apps\\xtquant``——``xtquant.py`` 就是一个普通模块，
        所以把 ``C:\\apps\\xtquant`` 自己加进 sys.path。
 
-    两种布局都必须能在该目录或其子目录下找到 ``xtdata.py``——
+    所有布局都必须能在该目录或其子目录下找到 ``xtdata.py``——
     因为 ``XtQuantTrader`` 在 C 扩展初始化阶段依赖它。
 
     Args:
@@ -68,9 +83,8 @@ def _resolve_xtquant_sys_path(xtquant_path: str | Path | None) -> Path | None:
         应加入 ``sys.path`` 的目录。
 
     Raises:
-        XTQuantNotFoundError: 路径不存在、或者两种布局都找不到关键的
-            ``xtquant`` 标识文件（``xtquant.py`` 或 ``xtquant/__init__.py``
-            至少有一个），或者找不到 ``xtdata.py``。
+        XTQuantNotFoundError: 路径不存在、或者任何布局标记都不满足，
+            或者缺少 ``xtdata.py``。
     """
     if not xtquant_path:
         return None
@@ -87,35 +101,47 @@ def _resolve_xtquant_sys_path(xtquant_path: str | Path | None) -> Path | None:
             f"xtquant 路径不存在或不是目录: {configured}"
         )
 
-    candidate_modules = configured / "xtquant"
+    subdir_package = configured / "xtquant"
     flat_module_py = configured / "xtquant.py"
-    package_init_py = candidate_modules / "__init__.py"
-    xtdata_py = configured / "xtdata.py"
-    xtdata_py_inside_pkg = candidate_modules / "xtdata.py"
+    root_package_init = configured / "__init__.py"
+    subdir_package_init = subdir_package / "__init__.py"
+    xtdata_at_root = configured / "xtdata.py"
+    xtdata_inside_subdir = subdir_package / "xtdata.py"
 
-    has_flat_layout = flat_module_py.is_file()
-    has_package_layout = package_init_py.is_file()
-    has_xtdata = xtdata_py.is_file() or xtdata_py_inside_pkg.is_file()
+    has_subdir_package = subdir_package_init.is_file()
+    has_root_package = root_package_init.is_file() and not has_subdir_package
+    has_flat_module = flat_module_py.is_file()
+    has_xtdata = xtdata_at_root.is_file() or xtdata_inside_subdir.is_file()
 
-    if not (has_flat_layout or has_package_layout):
+    if not (has_subdir_package or has_root_package or has_flat_module):
         raise XTQuantNotFoundError(
             f"xtquant 路径不正确: {configured}\n"
-            f"该目录下既找不到 xtquant.py，也找不到 xtquant/__init__.py。\n"
-            f"请填写包含 xtquant SDK 的根目录（如 C:\\apps\\xtquant），"
-            f"而不是它的子目录或其父目录。"
+            "该目录下既找不到 xtquant.py，也找不到 __init__.py"
+            "（包形式的 SDK）或 xtquant/__init__.py。"
+            "\n请填写 xtquant SDK 的根目录（如 C:\\apps\\xtquant），"
+            "而不是它的子目录或其父目录。"
         )
     if not has_xtdata:
         raise XTQuantNotFoundError(
             f"xtquant 路径不完整: {configured}\n"
-            f"找到了 xtquant {'包' if has_package_layout else '模块'}，但缺少 xtdata.py——"
-            f"请确认 SDK 文件齐全。"
+            "目录里没有 xtdata.py——请确认 SDK 文件齐全（不是只拷贝了一部分）。"
         )
 
-    sys_path_entry = configured.parent if has_package_layout else configured
+    if has_root_package or has_subdir_package:
+        sys_path_entry = configured.parent
+        layout_label = (
+            "root-package (xtquant/__init__.py 来自该目录本身)"
+            if has_root_package
+            else "subdir-package (xtquant/__init__.py 来自 xtquant/ 子目录)"
+        )
+    else:
+        sys_path_entry = configured
+        layout_label = "flat (xtquant.py 在该目录下)"
+
     logger.info(
         "xtquant 路径验证通过: configured={}, 布局={}, sys.path 条目={}",
         configured,
-        "package (xtquant/__init__.py)" if has_package_layout else "flat (xtquant.py)",
+        layout_label,
         sys_path_entry,
     )
     return sys_path_entry
