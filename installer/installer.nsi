@@ -423,9 +423,19 @@ Section -Post
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "URLInfoAbout" "${PRODUCT_WEB_SITE}"
     WriteRegStr ${PRODUCT_UNINST_ROOT_KEY} "${PRODUCT_UNINST_KEY}" "Publisher" "${PRODUCT_PUBLISHER}"
 
-    DetailPrint "正在启动 QMT Gateway..."
-    Exec 'wscript.exe "$INSTDIR\start-silent.vbs"'
-    !insertmacro LogLine "Gateway launch initiated (non-blocking)"
+    DetailPrint "正在通过计划任务启动 QMT Gateway（用户会话）..."
+    ; 关键：必须用 schtasks /run 触发，而不是 Exec wscript.exe。
+    ;
+    ; Exec wscript.exe 会让父进程（NSIS installer，admin 启动）的 session
+    ; 继承下去——管理员在 Session 0（Services session）启动 NSIS，
+    ; wscript.exe 也会跑在 Session 0，tray 图标在用户桌面看不到。
+    ;
+    ; schtasks /run "QMT Gateway" 会把 LogonTrigger 注册的任务立刻拉起
+    ; 到 **当前活动用户** 的 session（InteractiveToken principal），
+    ; tray 图标就能在右下角正常显示。计划任务的"开机/登录自动启动"
+    ; 行为不变（用户重启后 LogonTrigger 仍会拉起）。
+    nsExec::ExecToLog 'schtasks /run /tn "QMT Gateway"'
+    !insertmacro LogLine "Gateway launch via scheduled task (interactive session)"
 
     DetailPrint "等待服务就绪，即将打开浏览器..."
     ; 通过 install-python.ps1 的 WaitForBrowser stage 完成：它会读
