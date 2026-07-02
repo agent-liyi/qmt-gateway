@@ -327,6 +327,36 @@ def _spawn_tray_process(home: Path) -> None:
         logger.warning(f"托盘进程拉起失败（不影响 gateway 运行）: {exc}")
 
 
+def _tray_watchdog(home: Path) -> None:
+    """监控托盘子进程；死了就拉一个新。
+
+    托盘进程是 ``subprocess.Popen`` + ``DETACHED_PROCESS`` 拉起的独立进程，
+    pystray 的 win32 消息循环退出（菜单 quit、用户从任务管理器结束、
+    偶发崩溃）后不会自动重启。Uvicorn 主进程继续跑，但用户在右下角
+    看不到托盘就无法管理 gateway（启动/停止/重启/退出/打开浏览器）。
+
+    这个 watchdog 跑在 daemon 线程里，每 5 秒查一次；tray 死了就再拉
+    一次。极轻量，对 gateway 主循环无影响。
+    """
+    import threading
+    import time
+
+    def _loop() -> None:
+        while True:
+            time.sleep(5.0)
+            try:
+                if _is_tray_already_running():
+                    continue
+                logger.warning("检测到托盘进程消失，重新拉起")
+                _spawn_tray_process(home)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"托盘 watchdog 异常（将继续下一轮检查）: {exc}")
+
+    t = threading.Thread(target=_loop, name="tray-watchdog", daemon=True)
+    t.start()
+
+
+
 def main():
     """主入口函数"""
     parser = argparse.ArgumentParser(
@@ -414,6 +444,10 @@ def main():
     # 此后再 fork 会出问题。注意托盘是 *可选* 的：如果创建失败（比如
     # 跑在 Linux/macOS 调试环境、或 pystray 不可用），gateway 仍然要正常服务。
     _spawn_tray_process(runtime.home_path)
+    # 托盘 watchdog：托盘进程可能因为 pystray win32 消息循环退出、用户从
+    # 任务管理器结束、或者偶发崩溃而消失。watchdog 每 5 秒检查一次，死了
+    # 就自动再拉一个——保证用户在右下角始终能看到托盘图标管理 gateway。
+    _tray_watchdog(runtime.home_path)
 
     uvicorn.run(
         "qmt_gateway.app:app",
