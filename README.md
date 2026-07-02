@@ -28,6 +28,14 @@
 
 ## 安装
 
+### 前置安装
+
+你需要首先安装 QMT 客户端。目前经过测试的客户端是国金版本的。其它客户端因为本质上都是由迅投开发的 QMT，原则上应该兼容，但因为没有其它家的账户，所以无法测试。
+
+![alt text](docs/xtclient.png)
+
+然后你还需要在[迅投官网](https://dict.thinktrader.net/nativeApi/download_xtquant.html?id=7zqjlm)下载Xtquant SDK，并解压到任意目录。之后在安装设置 qmt-gateway 时，需要提供该目录地址。
+
 ### 一、Windows 安装程序（**唯一受支持的方式**）
 
 从 [Releases](https://github.com/zillionare/qmt-gateway/releases) 页面下载最新的 `QMT-Gateway-Setup-x.y.z-buildNN.exe`，双击运行。
