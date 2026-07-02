@@ -101,17 +101,15 @@ def _restart_and_login_sync(
                 else:
                     logger.info("未发现正在运行的 QMT 进程: image={}", executable.name)
 
-            if service._get_current_session_id() == 0:
-                password_token = service.issue_restart_password_token(qmt_password)
+            # 总是为 helper 生成 token，让 pywinauto 走子进程而不是在
+            # gateway 主进程内直接调用——避免 uiautomationcore.dll 残留
+            # COM 回调在 QMT 客户端退出后引发 0xc0000005 access violation
+            # （gateway 进程被直接干掉）。
+            password_token = service.issue_restart_password_token(qmt_password)
 
             process = service._launch_qmt_process(executable, password_token=password_token)
-            if password_token is None:
-                service._fill_qmt_login_password(process.pid, qmt_password)
-                # 等待登录窗口消失，确保 QMT 已处理完密码提交
-                service._wait_for_login_window_to_close(
-                    process.pid,
-                    timeout_sec=float(service._qmt_login_timeout_sec),
-                )
+            # 旧路径：Session 2 直接调 _fill_qmt_login_password，pywinauto 在主
+            # 进程内工作；该路径已经走 helper 子进程代替，这里不再执行。
 
             if not verify_connection:
                 logger.info("启动+填密码完成，跳过连接验证（verify_connection=False）")
@@ -775,7 +773,78 @@ class TradeService:
             if not password_token:
                 raise RuntimeError("缺少 QMT 重启密码令牌，无法在交互会话中自动填入密码")
             return self._launch_qmt_process_in_interactive_session(executable, before_pids, password_token)
-        return self._launch_qmt_process_locally(executable, before_pids)
+        # Session 2（gateway 与用户在同一个交互会话）：也走 helper 子进程。
+        # 原本这里直接 _launch_qmt_process_locally + _fill_qmt_login_password，
+        # 但 pywinauto 的 Desktop 持有的 uiautomationcore.dll COM 回调会在
+        # QMT 客户端被关闭、uiautomationcore.dll 被卸载后变成野指针，下次
+        # 访问就 0xc0000005 access violation 把整个 gateway 进程干掉。
+        # 把填密码这件事放到独立子进程（helper）里，进程退出时所有
+        # COM 引用随之释放，gateway 主进程完全不用 import pywinauto。
+        return self._launch_qmt_process_via_helper(executable, before_pids, password_token)
+
+    def _launch_qmt_process_via_helper(
+        self,
+        executable: Path,
+        before_pids: set[int],
+        password_token: str | None,
+    ):
+        """在当前会话（Session 2）里拉起一个 helper 子进程来启动 QMT 并填密码。
+
+        helper 启动后通过 HTTP ``/api/trade/restart-qmt/password?token=...`` 拉
+        真实密码（token 由调用方在 ``issue_restart_password_token`` 时存入），
+        不在命令行里出现明文。helper 进程退出后所有 pywinauto / comtypes /
+        uiautomationcore.dll 引用随之释放，gateway 主进程完全不接触。
+        """
+        # 优先用调用方传来的 token（通常是 wizard 路径上预生成的）；如果没有
+        # 重新生成一个——但 helper 需要 gateway 在线才能拉密码，这种情况下
+        # caller 必须确保在 _fill_qmt_login_password 之前 issue token。
+        if not password_token:
+            raise RuntimeError("缺少 QMT 重启密码令牌，无法在交互会话中自动填入密码")
+        helper_python = self._get_helper_python_executable()
+        argument_list = [
+            "-m",
+            "qmt_gateway.qmt_restart_helper",
+            "--base-url",
+            self._build_restart_helper_base_url(),
+            "--token",
+            password_token,
+            "--exe",
+            str(executable),
+            "--launch-timeout",
+            str(self._qmt_launch_probe_timeout_sec),
+            "--login-timeout",
+            str(self._qmt_login_timeout_sec),
+            "--retry-delay",
+            str(self._qmt_login_retry_delay_sec),
+        ]
+        logger.info(
+            "在交互会话中通过 helper 子进程启动 QMT: helper={}, exe={}",
+            helper_python,
+            executable,
+        )
+        result = subprocess.run(  # noqa: S603
+            [str(helper_python), *argument_list],
+            cwd=str(executable.parent),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            timeout=max(
+                float(self._qmt_launch_probe_timeout_sec)
+                + float(self._qmt_login_timeout_sec)
+                + 30.0,
+                60.0,
+            ),
+            check=False,
+        )
+        stdout = self._decode_subprocess_output(result.stdout)
+        stderr = self._decode_subprocess_output(result.stderr)
+        helper_message = (stdout + "\n" + stderr).strip()
+        if result.returncode != 0:
+            raise RuntimeError(
+                helper_message or f"helper 启动 QMT 失败，退出码: {result.returncode}"
+            )
+        return self._wait_for_new_process(executable.name, before_pids)
 
     def _load_pywinauto(self):
         try:
@@ -874,7 +943,7 @@ class TradeService:
 
         active_process_ids = self._collect_qmt_process_ids(process_id, QMT_CLIENT_EXECUTABLE)
         logger.warning(
-            "自动填入 QMT 密码失败，未找到登录窗口: launcher_pid={}, active_pids={}",
+            "自动填入 QMT 密码失败，未找到登录窗口: launcher_pid={}, active_process_ids={}",
             process_id,
             active_process_ids,
         )
