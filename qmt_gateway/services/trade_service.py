@@ -101,15 +101,20 @@ def _restart_and_login_sync(
                 else:
                     logger.info("未发现正在运行的 QMT 进程: image={}", executable.name)
 
-            # 总是为 helper 生成 token，让 pywinauto 走子进程而不是在
-            # gateway 主进程内直接调用——避免 uiautomationcore.dll 残留
-            # COM 回调在 QMT 客户端退出后引发 0xc0000005 access violation
-            # （gateway 进程被直接干掉）。
-            password_token = service.issue_restart_password_token(qmt_password)
+            current_session_id = service._get_current_session_id()
+            password_token: str | None = None
+            if current_session_id == 0:
+                password_token = service.issue_restart_password_token(qmt_password)
 
             process = service._launch_qmt_process(executable, password_token=password_token)
-            # 旧路径：Session 2 直接调 _fill_qmt_login_password，pywinauto 在主
-            # 进程内工作；该路径已经走 helper 子进程代替，这里不再执行。
+            if current_session_id != 0:
+                # Session 2：直接在本进程内填密码
+                service._fill_qmt_login_password(process.pid, qmt_password)
+                # 等待登录窗口消失，确保 QMT 已处理完密码提交
+                service._wait_for_login_window_to_close(
+                    process.pid,
+                    timeout_sec=float(service._qmt_login_timeout_sec),
+                )
 
             if not verify_connection:
                 logger.info("启动+填密码完成，跳过连接验证（verify_connection=False）")
@@ -773,14 +778,10 @@ class TradeService:
             if not password_token:
                 raise RuntimeError("缺少 QMT 重启密码令牌，无法在交互会话中自动填入密码")
             return self._launch_qmt_process_in_interactive_session(executable, before_pids, password_token)
-        # Session 2（gateway 与用户在同一个交互会话）：也走 helper 子进程。
-        # 原本这里直接 _launch_qmt_process_locally + _fill_qmt_login_password，
-        # 但 pywinauto 的 Desktop 持有的 uiautomationcore.dll COM 回调会在
-        # QMT 客户端被关闭、uiautomationcore.dll 被卸载后变成野指针，下次
-        # 访问就 0xc0000005 access violation 把整个 gateway 进程干掉。
-        # 把填密码这件事放到独立子进程（helper）里，进程退出时所有
-        # COM 引用随之释放，gateway 主进程完全不用 import pywinauto。
-        return self._launch_qmt_process_via_helper(executable, before_pids, password_token)
+        # Session 2：直接在本进程内启动 QMT + 填密码。pywinauto 的
+        # uiautomationcore.dll 残留问题暂以 #120 为已知缺陷——使用
+        # Session 0 安装 + ScheduledTask 走 helper 子进程是更稳妥方案。
+        return self._launch_qmt_process_locally(executable, before_pids)
 
     def _launch_qmt_process_via_helper(
         self,

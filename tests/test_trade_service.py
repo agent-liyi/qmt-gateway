@@ -211,8 +211,6 @@ def test_restart_and_login_relaunches_client_and_reconnects(monkeypatch):
     executable = Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe")
     calls = []
 
-    issued_tokens = []
-    monkeypatch.setattr(service, "issue_restart_password_token", lambda password: issued_tokens.append(password) or "test-token")
     monkeypatch.setattr(service, "_get_current_session_id", lambda: 1)
     monkeypatch.setattr(service, "_resolve_qmt_client_path", lambda qmt_path: executable)
     monkeypatch.setattr(service, "disconnect", lambda: calls.append("disconnect"))
@@ -220,16 +218,7 @@ def test_restart_and_login_relaunches_client_and_reconnects(monkeypatch):
     monkeypatch.setattr(service, "_set_connection_state", lambda connected, message: calls.append(("state", connected, message)) or message)
     monkeypatch.setattr(service, "_kill_qmt_process", lambda name: calls.append(("kill", name)) or "terminated")
     monkeypatch.setattr(service, "_launch_qmt_process", lambda path, password_token=None: calls.append(("launch", path, password_token)) or SimpleNamespace(pid=4321))
-    # 关键：填密码被推到 helper 子进程后，gateway 主进程不应该再调
-    # _fill_qmt_login_password。把它 monkeypatch 成抛 AssertionError 来
-    # 防止回归到旧路径。
-    monkeypatch.setattr(
-        service,
-        "_fill_qmt_login_password",
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError("_fill_qmt_login_password 必须在 helper 子进程中执行")
-        ),
-    )
+    monkeypatch.setattr(service, "_fill_qmt_login_password", lambda pid, password: calls.append(("fill", pid, password)))
     monkeypatch.setattr(
         service,
         "connect",
@@ -244,17 +233,16 @@ def test_restart_and_login_relaunches_client_and_reconnects(monkeypatch):
     )
 
     assert result == {"success": True, "message": "QMT 已重启并重新连接交易接口"}
-    # 关键：launch 阶段必须传 token（让 helper 走子进程），不再有
-    # _fill_qmt_login_password 调用。
+    # Session 2 路径：launch 不带 token，主进程内 fill+connect
     assert calls == [
         "disconnect",
         ("state", False, "交易接口连接断开，正在重启 QMT"),
         ("kill", "XtMiniQmt.exe"),
-        ("launch", executable, "test-token"),
+        ("launch", executable, None),
+        ("fill", 4321, "trade-secret"),
         ("connect", "8881457417", r"C:\apps\qmt\userdata_mini"),
-        ("discard", "test-token"),
+        ("discard", None),
     ]
-    assert issued_tokens == ["trade-secret"]
 
 
 def test_restart_and_login_requires_password():
@@ -269,39 +257,26 @@ def test_restart_and_login_requires_password():
     assert result == {"success": False, "error": "请输入交易密码"}
 
 
-def test_restart_and_login_passes_token_to_launch_in_interactive_session(monkeypatch):
-    """#120 回归：填密码必须经 helper 子进程，gateway 主进程不应直接调
-    ``_fill_qmt_login_password``（uiautomationcore.dll 残留 COM 回调会
-    在 QMT 退出后引发 access violation）。
-    """
+def test_restart_and_login_waits_for_login_window_before_connecting(monkeypatch):
+    """填入密码后应等待登录窗口消失，再尝试 connect()。"""
     service = TradeService()
     service._account_id = "8881457417"
     service._qmt_path = r"C:\apps\qmt\userdata_mini"
     executable = Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe")
     calls = []
 
-    monkeypatch.setattr(service, "issue_restart_password_token", lambda password: "tok-XYZ")
     monkeypatch.setattr(service, "_get_current_session_id", lambda: 1)
     monkeypatch.setattr(service, "_resolve_qmt_client_path", lambda qmt_path: executable)
     monkeypatch.setattr(service, "disconnect", lambda: calls.append("disconnect"))
     monkeypatch.setattr(service, "discard_restart_password_token", lambda token: calls.append(("discard", token)))
     monkeypatch.setattr(service, "_set_connection_state", lambda connected, message: calls.append(("state", connected, message)) or message)
     monkeypatch.setattr(service, "_kill_qmt_process", lambda name: "terminated")
-    monkeypatch.setattr(service, "_launch_qmt_process", lambda path, password_token=None: calls.append(("launch", path, password_token)) or SimpleNamespace(pid=4321))
-    # gateway 主进程不应再调 _fill_qmt_login_password / _wait_for_login_window
-    monkeypatch.setattr(
-        service,
-        "_fill_qmt_login_password",
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError("不应在主进程中调 _fill_qmt_login_password")
-        ),
-    )
+    monkeypatch.setattr(service, "_launch_qmt_process", lambda path, password_token=None: SimpleNamespace(pid=4321))
+    monkeypatch.setattr(service, "_fill_qmt_login_password", lambda pid, password: calls.append(("fill", pid, password)))
     monkeypatch.setattr(
         service,
         "_wait_for_login_window_to_close",
-        lambda *a, **k: (_ for _ in ()).throw(
-            AssertionError("不应在主进程中调 _wait_for_login_window_to_close")
-        ),
+        lambda pid, timeout_sec: calls.append(("wait", pid, timeout_sec)) or True,
     )
     monkeypatch.setattr(
         service,
@@ -317,15 +292,12 @@ def test_restart_and_login_passes_token_to_launch_in_interactive_session(monkeyp
     )
 
     assert result["success"] is True
-    # 关键：launch 阶段带 token（让 helper 子进程填密码），connect 紧随其后，
-    # 中间不再有 _fill_qmt_login_password / _wait_for_login_window_to_close。
-    assert calls == [
-        "disconnect",
-        ("state", False, "交易接口连接断开，正在重启 QMT"),
-        ("launch", executable, "tok-XYZ"),
-        ("connect", "8881457417", r"C:\apps\qmt\userdata_mini"),
-        ("discard", "tok-XYZ"),
-    ]
+    # 关键：fill 之后必须 wait，然后才 connect
+    assert ("fill", 4321, "trade-secret") in calls
+    fill_index = calls.index(("fill", 4321, "trade-secret"))
+    wait_index = calls.index(("wait", 4321, 20.0))
+    connect_index = calls.index(("connect", "8881457417", r"C:\apps\qmt\userdata_mini"))
+    assert fill_index < wait_index < connect_index
 
 
 def test_kill_qmt_process_ignores_missing_process_message(monkeypatch):
@@ -393,10 +365,6 @@ def test_fill_qmt_login_password_uses_active_process_ids(monkeypatch):
 
 
 def test_launch_qmt_process_uses_shell_open_and_detects_new_pid(monkeypatch):
-    """#120 回归：Session 2 路径现在也走 helper 子进程，pywinauto 不在主进程内
-    调用。本测试只验证 _launch_qmt_process_locally 的旧行为（在没有 token
-    时仍可独立调用），由 _launch_qmt_process 路由。
-    """
     service = TradeService()
     executable = Path(r"C:\apps\qmt\bin.x64\XtMiniQmt.exe")
     launch_calls = []
@@ -407,7 +375,7 @@ def test_launch_qmt_process_uses_shell_open_and_detects_new_pid(monkeypatch):
     monkeypatch.setattr(trade_service_module.os, "startfile", lambda path, cwd=None: launch_calls.append((path, cwd)))
     monkeypatch.setattr(trade_service_module.time, "sleep", lambda seconds: None)
 
-    process = service._launch_qmt_process_locally(executable, set())
+    process = service._launch_qmt_process(executable)
 
     assert process.pid == 8765
     assert launch_calls == [(str(executable), str(executable.parent))]
