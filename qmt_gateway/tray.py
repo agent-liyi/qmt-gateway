@@ -206,21 +206,6 @@ def _kill_gateway(timeout: float = 5.0) -> bool:
     return False
 
 
-def _wait_for_port_free(port: int, timeout: float = 10.0) -> bool:
-    """等待指定端口空闲。"""
-    import socket
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind(("127.0.0.1", port))
-                return True
-            except OSError:
-                time.sleep(0.3)
-    return False
-
-
 def _spawn_gateway() -> bool:
     """启动一个新的 gateway 进程（用当前 Python 解释器）。"""
     python = sys.executable
@@ -242,7 +227,7 @@ def _spawn_gateway() -> bool:
         err_f = subprocess.DEVNULL
     try:
         subprocess.Popen(
-            [python, "-m", "qmt_gateway"],
+            [python, "-m", "qmt_gateway", "--wait-for-port", "5.0"],
             env=env,
             stdin=subprocess.DEVNULL,
             stdout=out_f,
@@ -252,7 +237,7 @@ def _spawn_gateway() -> bool:
             if sys.platform == "win32"
             else 0,
         )
-        logger.info("新的 gateway 进程已拉起")
+        logger.info("新的 gateway 进程已拉起（启动后会等待 5s 让旧进程释放 8130）")
         return True
     except OSError as exc:
         logger.error(f"启动 gateway 失败: {exc}")
@@ -283,26 +268,27 @@ def _open_browser(icon: pystray.Icon, item: pystray.MenuItem) -> None:
 def _restart_gateway(icon: pystray.Icon, item: pystray.MenuItem) -> None:
     try:
         logger.info("用户触发重启")
-        # 先清过期锁（gateway 已被外部 kill -9 / 任务管理器结束的场景）
         _clear_stale_lock()
-        # "停止"之后 gateway 已死、.lock 已被 atexit 删掉，_read_pid() 返回 None。
-        # 此时 _kill_gateway() 返回 False，旧实现会短路掉 _spawn_gateway()——
-        # 结果用户点"重启"什么也没发生。这里改成：没有正在跑的进程就直接拉起。
-        # 注意不调 _wait_for_port_free：停止后 .port 已被删，_read_port() 退回
-        # 8130，但 8130 可能被别的应用占用——此时等它空闲会误判为"端口占用"。
-        # gateway 内部的 find_available_port 会自己探测可用端口，托盘不需要干预。
         pid = _read_pid()
         if pid is None:
             logger.info("未发现正在运行的 gateway，直接启动新实例")
             if not _spawn_gateway():
                 logger.error("重启失败：spawn 返回 False")
             return
-        port = _read_port()
-        if _kill_gateway() and _wait_for_port_free(port, timeout=10.0):
-            if not _spawn_gateway():
-                logger.error("重启失败：spawn 返回 False")
-        else:
-            logger.warning("重启失败：旧进程未退出或端口仍占用")
+        # 关键：先 spawn 新 gateway，再 kill 旧 gateway。
+        # 新 gateway 启动时调 find_available_port(default=8130, wait_for_default_sec=5)，
+        # 如果旧进程还占着 8130，新 gateway 会每 50ms 试一次 bind 8130；
+        # 旧进程被 kill 后 OS 立即释放，新 gateway 50-200ms 内 bind 成功。
+        # 整个过程浏览器看到 "拒绝访问" 的时间 = kill 时间 + bind 等待 = 几百毫秒，
+        # 远好于旧实现：kill → 等 10s → spawn → 再等 3-5s 才能 bind。
+        if not _spawn_gateway():
+            logger.error("重启失败：spawn 返回 False")
+            return
+        # 给新进程 0.5s 时间进入 find_available_port 循环（确保它已注册端口探测）
+        # 然后再 kill 旧 gateway。
+        time.sleep(0.5)
+        if not _kill_gateway():
+            logger.warning("旧 gateway 未在预期内退出；新 gateway 仍会接管 8130")
     except Exception as exc:
         logger.exception(f"重启失败: {exc}")
 

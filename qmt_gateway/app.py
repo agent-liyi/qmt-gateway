@@ -1153,18 +1153,32 @@ def create_app():
     # 启动服务
     @app.on_event("startup")
     async def startup():
-        """应用启动时执行"""
+        """应用启动时执行。
+
+        #120：port bind 之后用户浏览器立即开始请求；原来在这里 await
+        quote_ws.start_async() / auction_ws.start_async()（订阅 xtdata 全市场
+        股票、get_stock_list_in_sector 等），单是这些就要 2-3s，浏览器一进来
+        就看到「拒绝访问」（或者看到连接但所有行情 endpoint 都被 quote_ws 启动
+        阻塞拖慢）。
+        改成：先把 server 状态变成"接受请求"，再把重活扔到 background task，
+        server 立刻可访问。
+        """
+        scheduler.start()
+
+        async def _deferred_quote_boot():
+            try:
+                quote_ws.start()
+                auction_ws.start()
+                await quote_ws.start_async()
+                await auction_ws.start_async()
+                logger.info("行情服务后台启动完成")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(f"行情服务后台启动失败: {exc}")
+
         if not check_init_required():
-            # 启动定时任务
-            scheduler.start()
-            # 启动行情服务（同步订阅 + 异步 worker）
-            quote_ws.start()
-            # 集合竞价独立 endpoint：订阅 quote_service 的原始 tick
-            auction_ws.start()
-            # 在事件循环中显式 await 一次 worker 启动，避免 schedule 漂移
-            await quote_ws.start_async()
-            await auction_ws.start_async()
-            logger.info("应用启动完成")
+            import asyncio
+            asyncio.create_task(_deferred_quote_boot())
+        logger.info("应用启动完成（行情服务在后台启动）")
 
     @app.on_event("shutdown")
     async def shutdown():

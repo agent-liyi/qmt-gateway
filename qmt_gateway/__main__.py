@@ -388,6 +388,12 @@ def main():
         default=None,
         help="数据主目录 (默认: ~/.qmt-gateway)",
     )
+    parser.add_argument(
+        "--wait-for-port",
+        type=float,
+        default=0.0,
+        help="若默认端口（8130）被占用，最多等这么多秒再放弃。托盘重启时传 5.0。",
+    )
 
     args = parser.parse_args()
 
@@ -405,7 +411,12 @@ def main():
     # 获取端口，若默认端口被占用则自动切换
     port = args.port or config.server_port
     try:
-        port = find_available_port(default=port, max_tries=10, host=args.host)
+        port = find_available_port(
+            default=port,
+            max_tries=10,
+            host=args.host,
+            wait_for_default_sec=float(args.wait_for_port),
+        )
     except RuntimeError as e:
         logger.error(str(e))
         sys.exit(1)
