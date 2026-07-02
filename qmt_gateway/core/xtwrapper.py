@@ -31,34 +31,111 @@ _xt_module: Any = None
 _xtdata_module: Any = None
 
 
+def _resolve_xtquant_sys_path(xtquant_path: str | Path | None) -> Path | None:
+    """把用户填写的 xtquant 路径归一化，并返回应当加入 sys.path 的目录。
+
+    支持两种目录布局（这是 xtquant SDK 在不同券商处的标准打包方式）：
+
+    1. **package 布局**（官方推荐、当前 C:\\apps\\xtquant 的实际形态）::
+
+           C:\\apps\\xtquant\\
+               xtquant\\__init__.py
+               xtquant\\xtdata.py
+               xtquant\\xttrader.py
+               ...
+
+       用户填 ``C:\\apps\\xtquant``——我们要 import 的是 ``xtquant`` 包，
+       所以把 ``C:\\apps``（``xtquant/`` 的父目录）加进 sys.path。
+
+    2. **flat 布局**（少数券商 SDK 把所有模块直接摊开在根下）::
+
+           C:\\apps\\xtquant\\
+               xtquant.py
+               xtdata.py
+               xttrader.py
+               ...
+
+       用户填 ``C:\\apps\\xtquant``——``xtquant.py`` 就是一个普通模块，
+       所以把 ``C:\\apps\\xtquant`` 自己加进 sys.path。
+
+    两种布局都必须能在该目录或其子目录下找到 ``xtdata.py``——
+    因为 ``XtQuantTrader`` 在 C 扩展初始化阶段依赖它。
+
+    Args:
+        xtquant_path: 用户填写的路径，允许为 None/空。
+
+    Returns:
+        应加入 ``sys.path`` 的目录。
+
+    Raises:
+        XTQuantNotFoundError: 路径不存在、或者两种布局都找不到关键的
+            ``xtquant`` 标识文件（``xtquant.py`` 或 ``xtquant/__init__.py``
+            至少有一个），或者找不到 ``xtdata.py``。
+    """
+    if not xtquant_path:
+        return None
+    raw = str(xtquant_path).strip()
+    if not raw:
+        return None
+
+    configured = Path(raw).expanduser().resolve()
+    if not configured.exists() or not configured.is_dir():
+        raise XTQuantNotFoundError(
+            f"xtquant 路径不存在或不是目录: {configured}"
+        )
+
+    candidate_modules = configured / "xtquant"
+    flat_module_py = configured / "xtquant.py"
+    package_init_py = candidate_modules / "__init__.py"
+    xtdata_py = configured / "xtdata.py"
+    xtdata_py_inside_pkg = candidate_modules / "xtdata.py"
+
+    has_flat_layout = flat_module_py.is_file()
+    has_package_layout = package_init_py.is_file()
+    has_xtdata = xtdata_py.is_file() or xtdata_py_inside_pkg.is_file()
+
+    if not (has_flat_layout or has_package_layout):
+        raise XTQuantNotFoundError(
+            f"xtquant 路径不正确: {configured}\n"
+            f"该目录下既找不到 xtquant.py，也找不到 xtquant/__init__.py。\n"
+            f"请填写包含 xtquant SDK 的根目录（如 C:\\apps\\xtquant），"
+            f"而不是它的子目录或其父目录。"
+        )
+    if not has_xtdata:
+        raise XTQuantNotFoundError(
+            f"xtquant 路径不完整: {configured}\n"
+            f"找到了 xtquant {'包' if has_package_layout else '模块'}，但缺少 xtdata.py——"
+            f"请确认 SDK 文件齐全。"
+        )
+
+    sys_path_entry = configured.parent if has_package_layout else configured
+    logger.info(
+        "xtquant 路径验证通过: configured={}, 布局={}, sys.path 条目={}",
+        configured,
+        "package (xtquant/__init__.py)" if has_package_layout else "flat (xtquant.py)",
+        sys_path_entry,
+    )
+    return sys_path_entry
+
+
 def add_xtquant_path(xtquant_path: str | None = None, qmt_path: str | None = None) -> None:
     """添加 xtquant 路径到 sys.path
 
     Args:
-        xtquant_path: xtquant 库的路径
-        qmt_path: QMT 安装路径（作为备选）
+        xtquant_path: xtquant 库的路径（必填"包含 xtquant SDK 的根目录"）。
+        qmt_path: QMT 安装路径（作为备选 DLL 搜索目录）。
+
+    Raises:
+        XTQuantNotFoundError: ``xtquant_path`` 非空但校验失败。
     """
     logger.info(f"add_xtquant_path 被调用: xtquant_path={xtquant_path}, qmt_path={qmt_path}")
-    
-    paths_to_try = []
+
+    paths_to_try: list[Path] = []
 
     if xtquant_path:
-        # 规范化路径：展开用户目录并解析为绝对路径
-        xtquant_path_obj = Path(xtquant_path).expanduser().resolve()
-        logger.info(f"处理 xtquant_path: {xtquant_path} -> {xtquant_path_obj}, exists={xtquant_path_obj.exists()}")
-        if xtquant_path_obj.exists():
-            # 检查 xtquant 是否是一个包目录（包含 __init__.py）
-            init_file = xtquant_path_obj / "__init__.py"
-            if init_file.exists():
-                # 如果是包目录，添加其父目录到 sys.path
-                parent_path = xtquant_path_obj.parent
-                logger.info(f"检测到 xtquant 是包目录，添加父目录: {parent_path}")
-                paths_to_try.append(parent_path)
-            else:
-                # 如果不是包目录，直接添加该路径
-                paths_to_try.append(xtquant_path_obj)
-        else:
-            logger.warning(f"xtquant 路径不存在: {xtquant_path_obj}")
+        sys_path_entry = _resolve_xtquant_sys_path(xtquant_path)
+        if sys_path_entry is not None:
+            paths_to_try.append(sys_path_entry)
 
     if qmt_path:
         # 注意：qmt_path 绝对不能加到 sys.path——QMT 根目录下有 resource /

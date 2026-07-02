@@ -474,7 +474,9 @@ def create_app():
                         original_error="xtquant 路径未填写",
                         recovery_reason="未指定 xtquant 路径",
                         recovery_hint=(
-                            "请填写 xtquant.py 所在的目录（如 C:\\apps\\xtquant）。"
+                            "请填写 xtquant SDK 的根目录（如 C:\\apps\\xtquant）。"
+                            "系统会校验该目录下能否找到 xtquant 包"
+                            "（xtquant\\__init__.py）或 xtquant.py 模块。"
                             "这一项必须显式指定——qmt 路径下推断不到 xtquant。"
                         ),
                     )

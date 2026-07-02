@@ -329,14 +329,16 @@ def Step5_QMT(form_data: dict | None = None):
                         type="text",
                         name="xtquant_path",
                         value=fd.get("xtquant_path", ""),
-                        placeholder=r"包含 xtquant.py 的文件目录，例如: C:\apps\xtquant",
+                        placeholder=r"xtquant SDK 的根目录，例如: C:\apps\xtquant",
                         cls="input input-bordered flex-1",
                         required="required",
                     ),
                     cls="flex items-center gap-3 mt-4",
                 ),
                 P(
-                    "填写包含 xtquant.py 的目录。如果解压到 C:\\apps\\xtquant，则填入 C:\\apps\\xtquant。",
+                    "填写 xtquant SDK 的根目录。系统会自动校验该目录下能否找到 xtquant 包"
+                    "（C:\\apps\\xtquant\\xtquant\\__init__.py 存在）或 xtquant.py 模块，"
+                    "以及 xtdata.py。",
                     cls="text-xs text-gray-500 mt-1 ml-31",
                 ),
             ),
