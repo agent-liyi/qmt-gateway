@@ -75,7 +75,10 @@ def _resolve_xtquant_sys_path(xtquant_path: str | Path | None) -> Path | None:
     if not xtquant_path:
         return None
     raw = str(xtquant_path).strip()
-    if not raw:
+    # 兜底兜空：''、'.'、'./'、'\\'、None、Path('.') 等都会被
+    # ``config.get_expanded_path`` 或未初始化的 DB 字段翻译成 falsy。
+    # 这种"未配置"状态允许被静默跳过——首次启动 wizard 之前不应该报错。
+    if not raw or raw in {".", "./", ".\\", "\\"}:
         return None
 
     configured = Path(raw).expanduser().resolve()

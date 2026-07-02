@@ -134,6 +134,15 @@ def test_resolve_returns_none_when_path_is_none_or_empty():
     assert _resolve_xtquant_sys_path(None) is None
     assert _resolve_xtquant_sys_path("") is None
     assert _resolve_xtquant_sys_path("   ") is None
+    # 关键回归点：未初始化的 DB 字段经 ``config.get_expanded_path`` 会变成
+    # ``Path(".")``（空字符串 expanduser 后是当前工作目录）。如果直接报错，
+    # gateway 首次启动（用户还没填 wizard 之前）就会因 runtime.init() 抛
+    # XTQuantNotFoundError 而崩溃。
+    assert _resolve_xtquant_sys_path(".") is None
+    assert _resolve_xtquant_sys_path("./") is None
+    assert _resolve_xtquant_sys_path(".\\") is None
+    assert _resolve_xtquant_sys_path(Path(".")) is None
+    assert _resolve_xtquant_sys_path(Path(r"C:\apps")) is not None  # 真实路径不能被这条短路
 
 
 def test_add_xtquant_path_injects_only_parent_for_pkg_layout(tmp_path):
