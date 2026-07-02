@@ -349,7 +349,11 @@ def test_recovery_attempts_launch_when_path_valid_but_qmt_not_running(
     assert "hx-swap-oob" in body
     assert "重试" in body
     assert "返回修改配置" in body
-    assert "wizard-auto-retry" in body
+    # 关键：auto-retry 必须真的会在前端定时重发——早期 hidden 按钮方案在
+    # display:none 元素上 HTMX 不挂事件，进度永远卡住。修复后改用 htmx.ajax
+    # 直发；这里断言脚本里包含 htmx.ajax 与目标路径。
+    assert "htmx.ajax" in body
+    assert "/init-wizard/retry-startup" in body
     # 回滚生效
     assert db.get_settings().to_dict() == settings_before
 
@@ -442,7 +446,14 @@ def test_retry_startup_failure_branch_uses_fast_auto_retry(
     assert response.status_code == 200
     body = response.text
     assert "QMT 启动失败，正在重试..." in body
-    assert ",1000);" in body or "1000" in body
+    # 关键：auto-retry 必须真的能在前端 setTimeout 后再触发一次 retry-startup。
+    # 早期实现是 hidden 按钮 + click 触发；HTMX 在 display:none 元素上不挂事件，
+    # 进度永远卡住。修复后用 htmx.ajax 直发——这里断言脚本里包含对 retry-startup
+    # 的调用。
+    assert "htmx.ajax" in body
+    assert "/init-wizard/retry-startup" in body
+    # 间隔应较小（默认 1 秒），但应>0。
+    assert ",1000);" in body or ",1500);" in body
 
 
 def test_retry_startup_success_branch_skips_xtdata_wait(
@@ -484,7 +495,12 @@ def test_retry_startup_success_branch_skips_xtdata_wait(
     assert response.status_code == 200
     body = response.text
     assert "QMT 连接成功，正在完成初始化..." in body
-    assert "wizard-auto-retry" in body
+    # 关键：auto_complete=True 必须真的会在前端 setTimeout 后触发
+    # POST /init-wizard/complete。早期版本是渲染一个 hidden 按钮 + click 触发，
+    # 在 display:none 元素上 HTMX 不挂事件，导致进度卡死。修复后改用
+    # htmx.ajax() 直发——断言脚本里包含 htmx.ajax 调用与目标路径。
+    assert "htmx.ajax" in body
+    assert "/init-wizard/complete" in body
 
 
 def test_recovery_forces_restart_when_qmt_is_running_but_connection_fails(

@@ -894,27 +894,24 @@ def create_app():
             )
         )
 
-        # 自动触发：隐藏按钮 + 自触发脚本
+        # 自动触发：用 inline 脚本直接调 htmx.ajax，绕过"hidden 按钮 + click 触发"
+        # 的老路径（HTMX 在 display:none 元素上不挂 hx-* 事件，老路径下 auto-retry
+        # 永远不触发，进度对话框会卡死）。
         if auto_retry or auto_complete:
-            inner_parts.append(
-                Form(
-                    Button(
-                        "",
-                        id="wizard-auto-retry",
-                        cls="hidden",
-                        hx_post=auto_target,
-                        hx_target="#wizard-form-container",
-                    ),
-                    cls="hidden",
-                )
-            )
             inner_parts.append(
                 NotStr(
                     f'<script>'
-                    f'setTimeout(function(){{'
-                    f'var b=document.getElementById("wizard-auto-retry");'
-                    f'if(b)htmx.trigger("#wizard-auto-retry","click");'
-                    f'}},{auto_delay * 1000});'
+                    f'(function(){{'
+                    f'  var fired=window.__wizardAutoRetryFired;'
+                    f'  if(fired)return;'
+                    f'  window.__wizardAutoRetryFired=true;'
+                    f'  setTimeout(function(){{'
+                    f'    if(window.htmx){{'
+                    f'      htmx.ajax("POST", "{auto_target}", '
+                    f'        {{target:"#wizard-form-container", swap:"outerHTML"}})'
+                    f'    }}'
+                    f'  }},{auto_delay * 1000});'
+                    f'}})();'
                     f'</script>'
                 )
             )
