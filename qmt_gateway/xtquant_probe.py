@@ -153,7 +153,7 @@ def main() -> None:
         args.xtquant_path or config.get("xtquant_path", "")
     )
     qmt_path = _normalize_optional_path(
-        args.qmt_path or config.get("qmt_path", "") or r"C:\apps"
+        args.qmt_path or config.get("qmt_path", "")
     )
     result = run_probe(
         trade_date=trade_date,

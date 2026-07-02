@@ -167,6 +167,31 @@ def test_resolve_qmt_client_path_from_userdata_dir(monkeypatch):
     assert resolved == expected
 
 
+@pytest.mark.parametrize(
+    ("input_path", "expected"),
+    [
+        (r"C:\apps\qmt\userdata_mini", r"C:\apps\qmt\userdata_mini"),
+        (r"C:\apps\qmt\bin.x64", r"C:\apps\qmt\userdata_mini"),
+        (r"C:\apps\qmt\bin.x64\XtMiniQmt.exe", r"C:\apps\qmt\userdata_mini"),
+        (r"C:\apps\qmt", r"C:\apps\qmt\userdata_mini"),
+    ],
+)
+def test_resolve_userdata_path_from_various_qmt_inputs(input_path, expected):
+    service = TradeService()
+
+    assert service._resolve_userdata_path(input_path) == Path(expected)
+
+
+def test_resolve_userdata_path_uses_config_qmt_path(monkeypatch):
+    service = TradeService()
+
+    monkeypatch.setattr(
+        trade_service_module.config,
+        "get",
+        lambda key, default=None: r"C:\broker\qmt\userdata_mini" if key == "qmt_path" else default,
+    )
+
+    assert service._resolve_userdata_path() == Path(r"C:\broker\qmt\userdata_mini")
 def test_restart_and_login_relaunches_client_and_reconnects(monkeypatch):
     service = TradeService()
     service._account_id = "8881457417"

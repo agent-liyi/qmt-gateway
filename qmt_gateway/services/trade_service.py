@@ -445,7 +445,13 @@ class TradeService:
 
             # 创建交易对象
             session_id = self._build_session_id()
-            self._trader = XtQuantTrader(qmt_path, session_id)
+            # XtQuantTrader 的 path 参数要求是 userdata 文件夹路径
+            # （mini 版即 userdata_mini），不是 bin.x64 / QMT 根目录。
+            # 如果用户填的是 bin.x64 / QMT 根目录 / userdata_mini 本身，
+            # 统一解析成 userdata_mini 的绝对路径。
+            userdata_path = self._resolve_userdata_path(qmt_path)
+            logger.info(f"XtQuantTrader 使用 userdata 路径: {userdata_path} (原始 qmt_path={qmt_path})")
+            self._trader = XtQuantTrader(str(userdata_path), session_id)
 
             # 注册回调
             callback = TradeCallback(self)
@@ -516,6 +522,33 @@ class TradeService:
         if not self._qmt_executable_exists(executable):
             raise FileNotFoundError(f"未找到 QMT 客户端: {executable}")
         return executable
+
+    def _resolve_userdata_path(self, qmt_path: str | Path | None = None) -> Path:
+        """把用户填写的 QMT 路径解析成 XtQuantTrader 要求的 userdata_mini 路径。
+
+        XtQuantTrader.__init__ 的 path 参数文档：
+            "mini版迅投极速交易客户端安装路径下，userdata文件夹具体路径"
+
+        支持 four 入口粒度（与 _resolve_qmt_client_path 对齐）：
+          - XtMiniQmt.exe 本体 → 上跳两层到 QMT 根目录 → 拼 userdata_mini
+          - bin.x64 目录 → 上跳一层到 QMT 根目录 → 拼 userdata_mini
+          - userdata_mini 目录 → 直接用
+          - QMT 根目录 → 拼 userdata_mini
+        """
+        raw = str(qmt_path or self._qmt_path or config.qmt_path or "").strip()
+        if not raw:
+            raise ValueError("未配置 QMT 路径")
+
+        configured_path = Path(raw).expanduser()
+        name_lower = configured_path.name.lower()
+        if name_lower == "userdata_mini":
+            return configured_path
+        if name_lower == "xtminiqmt.exe":
+            return configured_path.parent.parent / "userdata_mini"
+        if name_lower == "bin.x64":
+            return configured_path.parent / "userdata_mini"
+        # QMT 根目录
+        return configured_path / "userdata_mini"
 
     def _decode_subprocess_output(self, value: bytes | str | None) -> str:
         if value is None:
@@ -716,9 +749,7 @@ class TradeService:
             f"$principal=New-ScheduledTaskPrincipal -UserId '{username_literal}' -LogonType Interactive; "
             "$task=New-ScheduledTask -Action $action -Principal $principal; "
             "Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null; "
-            "Start-ScheduledTask -TaskName $taskName; "
-            "Start-Sleep -Seconds 1; "
-            "Unregister-ScheduledTask -TaskName $taskName -Confirm:$false"
+            "Start-ScheduledTask -TaskName $taskName"
         )
 
         result = subprocess.run(
