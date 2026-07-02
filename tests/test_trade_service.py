@@ -111,17 +111,23 @@ def test_mark_disconnected_schedules_auto_reconnect_when_enabled(monkeypatch):
     assert scheduled == [True]
 
 
-def test_connect_uses_unique_session_id_and_safe_cleanup(monkeypatch):
+def test_connect_passes_resolved_userdata_path_to_XtQuantTrader(monkeypatch):
+    """XtQuantTrader.__init__ 必须收到 _resolve_userdata_path 转换后的路径。
+
+    旧 bug：直接传 qmt_path（如 bin.x64）导致 connect() 返回 -1。
+    这个测试用 bin.x64 入口，校验最终进 XtQuantTrader 的是 userdata_mini。
+    """
     service = TradeService()
+    trader_paths = []
     session_ids = []
 
     class FakeStockAccount:
         def __init__(self, account_id, account_type):
-            self.account_id = account_id
-            self.account_type = account_type
+            pass
 
     class FakeTrader:
-        def __init__(self, qmt_path, session_id):
+        def __init__(self, trader_path, session_id):
+            trader_paths.append(trader_path)
             session_ids.append(session_id)
 
         def register_callback(self, callback):
@@ -147,13 +153,19 @@ def test_connect_uses_unique_session_id_and_safe_cleanup(monkeypatch):
     monkeypatch.setattr(service, "_prepare_xtquant_env", lambda qmt_path: None)
     monkeypatch.setattr(service, "_build_session_id", lambda: next(generated_ids))
 
-    first = service.connect("8881457417", r"C:\apps\qmt\userdata_mini")
-    second = service.connect("8881457417", r"C:\apps\qmt\userdata_mini")
+    # 传入 bin.x64 —— _resolve_userdata_path 应输出同级的 userdata_mini
+    service.connect("8881457417", r"C:\apps\qmt\bin.x64")
+    assert trader_paths == [r"C:\apps\qmt\userdata_mini"]
+    assert session_ids == [101]
 
-    assert first is False
-    assert second is False
+    # 传入 XtMiniQmt.exe 本体 —— 应上跳两层再拼 userdata_mini
+    service.connect("8881457417", r"C:\apps\qmt\bin.x64\XtMiniQmt.exe")
+    assert trader_paths == [
+        r"C:\apps\qmt\userdata_mini",
+        r"C:\apps\qmt\userdata_mini",
+    ]
     assert session_ids == [101, 202]
-    assert service._trader is None
+    assert service._trader is None  # connect() return -1 → cleanup
 
 
 def test_resolve_qmt_client_path_from_userdata_dir(monkeypatch):
